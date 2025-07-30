@@ -1,11 +1,11 @@
 import argparse
+import multiprocessing
 import os
 import subprocess
 import sys
 import tempfile
 import time
 from pathlib import Path
-from typing import List, Tuple
 
 import cv2
 import numpy as np
@@ -51,6 +51,12 @@ def parse_arguments() -> argparse.Namespace:
         action="store_true",
         help="Use single-scale matching only (faster but less accurate)",
     )
+    parser.add_argument(
+        "--cores",
+        type=int,
+        default=0,
+        help="Number of CPU cores to use for processing (0 = use all cores, default: 0)",
+    )
     return parser.parse_args()
 
 
@@ -65,60 +71,71 @@ def match_template_in_frame_multiscale(
     frame: np.ndarray,
     template: np.ndarray,
     threshold: float,
-    scales: List[float] = [0.5, 0.75, 1.0, 1.25, 1.5],
-) -> Tuple[bool, float, float]:
+    scales: list[float] | None = None,
+) -> tuple[bool, float, float]:
     """
     Multi-scale template matching.
     Returns: (is_match, best_confidence, best_scale)
     """
+    if scales is None:
+        scales = [0.5, 0.75, 1.0, 1.25, 1.5]
+
     template_h, template_w = template.shape[:2]
     frame_h, frame_w = frame.shape[:2]
-    
+
     best_confidence = 0.0
     best_scale = 1.0
-    
+
     for scale in scales:
         # Calculate scaled template dimensions
         new_w = int(template_w * scale)
         new_h = int(template_h * scale)
-        
+
         # Skip if template would be too large for frame
         if new_w > frame_w or new_h > frame_h:
-            debug_log(f"Skipping scale {scale:.2f}x - template too large ({new_w}x{new_h} > {frame_w}x{frame_h})")
+            debug_log(
+                f"Skipping scale {scale:.2f}x - template too large "
+                f"({new_w}x{new_h} > {frame_w}x{frame_h})"
+            )
             continue
-            
+
         # Skip if template would be too small to be meaningful
         if new_w < 10 or new_h < 10:
             debug_log(f"Skipping scale {scale:.2f}x - template too small ({new_w}x{new_h})")
             continue
-        
+
         try:
             # Resize template
             scaled_template = cv2.resize(template, (new_w, new_h))
-            
+
             # Perform template matching
             result = cv2.matchTemplate(frame, scaled_template, cv2.TM_CCOEFF_NORMED)
             _, max_val, _, _ = cv2.minMaxLoc(result)
-            
+
             debug_log(f"Scale {scale:.2f}x: confidence {max_val:.4f}")
-            
+
             # Update best match
             if max_val > best_confidence:
                 best_confidence = max_val
                 best_scale = scale
-                
+
                 # Early termination for very high confidence matches
                 if max_val > 0.95:
-                    debug_log(f"Early termination at scale {scale:.2f}x with confidence {max_val:.4f}")
+                    debug_log(
+                        f"Early termination at scale {scale:.2f}x with confidence {max_val:.4f}"
+                    )
                     break
-                    
+
         except cv2.error as e:
             debug_log(f"OpenCV error at scale {scale:.2f}x: {e}")
             continue
-    
+
     is_match = best_confidence >= threshold
-    debug_log(f"Multi-scale result: best_confidence={best_confidence:.4f}, best_scale={best_scale:.2f}x, is_match={is_match}")
-    
+    debug_log(
+        f"Multi-scale result: best_confidence={best_confidence:.4f}, "
+        f"best_scale={best_scale:.2f}x, is_match={is_match}"
+    )
+
     return is_match, best_confidence, best_scale
 
 
@@ -129,6 +146,66 @@ def match_template_in_frame(frame: np.ndarray, template: np.ndarray, threshold: 
     result = cv2.matchTemplate(frame, template, cv2.TM_CCOEFF_NORMED)
     _, max_val, _, _ = cv2.minMaxLoc(result)
     return max_val >= threshold
+
+
+def process_frame_worker(args: tuple) -> tuple[int, float, bool, float, float]:
+    """
+    Worker functions for multiprocessing frame analysis.
+    Returns: (frame_index, timestamp, is_match, confidence, best_scale)
+    """
+    frame_index, frame_data, template, threshold, scales, use_single_scale, fps = args
+
+    timestamp = frame_index / fps
+
+    if use_single_scale:
+        is_match = match_template_in_frame(frame_data, template, threshold)
+        confidence = 0.0  # Not calculated in single-scale mode
+        best_scale = 1.0
+    else:
+        is_match, confidence, best_scale = match_template_in_frame_multiscale(
+            frame_data, template, threshold, scales
+        )
+
+    return frame_index, timestamp, is_match, confidence, best_scale
+
+
+def process_frame_batch(
+    frame_batch: list[tuple[int, np.ndarray]],
+    template: np.ndarray,
+    threshold: float,
+    scales: list[float] | None,
+    use_single_scale: bool,
+    fps: float,
+    num_cores: int,
+) -> list[tuple[int, float, bool, float, float]]:
+    """
+    Process a batch of frames using multiprocessing.
+    Returns list of (frame_index, timestamp, is_match, confidence, best_scale) tuples.
+    """
+    if num_cores == 1:
+        # Single-threaded processing
+        results = []
+        for frame_index, frame_data in frame_batch:
+            args = (frame_index, frame_data, template, threshold, scales, use_single_scale, fps)
+            results.append(process_frame_worker(args))
+        return sorted(results, key=lambda x: x[0])  # Sort by frame_index
+
+    # Multi-threaded processing
+    if scales is None:
+        scales = [0.5, 0.75, 1.0, 1.25, 1.5]
+
+    # Prepare arguments for worker processes
+    worker_args = [
+        (frame_index, frame_data, template, threshold, scales, use_single_scale, fps)
+        for frame_index, frame_data in frame_batch
+    ]
+
+    # Use multiprocessing pool
+    with multiprocessing.Pool(processes=num_cores) as pool:
+        results = pool.map(process_frame_worker, worker_args)
+
+    # Sort results by frame index to maintain chronological order
+    return sorted(results, key=lambda x: x[0])
 
 
 def is_video_readable(video_path: Path, test_frames: int = 5) -> bool:
@@ -319,8 +396,9 @@ def process_video_in_chunks(
     threshold: float,
     chunk_duration: float = 60.0,
     frame_skip: int = 1,
-    scales: List[float] = None,
+    scales: list[float] | None = None,
     use_single_scale: bool = False,
+    num_cores: int = 0,
 ) -> list[float]:
     """Process video in chunks with progress updates."""
     debug_log(f"Starting chunked processing with {chunk_duration}s chunks")
@@ -331,7 +409,9 @@ def process_video_in_chunks(
 
     if total_duration <= 0:
         debug_log("Could not determine video duration, falling back to direct processing")
-        return detect_image_in_video_direct(video_path, template, threshold, frame_skip, scales, use_single_scale)
+        return detect_image_in_video_direct(
+            video_path, template, threshold, frame_skip, scales, use_single_scale, num_cores
+        )
 
     print(
         f"Processing {total_duration / 60:.1f} minute video in {chunk_duration:.0f}s chunks...",
@@ -367,7 +447,7 @@ def process_video_in_chunks(
             # Process chunk
             debug_log(f"Processing chunk {chunk_index} with OpenCV")
             chunk_detections = detect_image_in_video_direct(
-                chunk_path, template, threshold, frame_skip, scales, use_single_scale
+                chunk_path, template, threshold, frame_skip, scales, use_single_scale, num_cores
             )
 
             # Adjust timestamps to global video time
@@ -400,10 +480,16 @@ def process_video_in_chunks(
 
 
 def detect_image_in_video_direct(
-    video_path: Path, template: np.ndarray, threshold: float, frame_skip: int = 1, scales: List[float] = None, use_single_scale: bool = False
+    video_path: Path,
+    template: np.ndarray,
+    threshold: float,
+    frame_skip: int = 1,
+    scales: list[float] | None = None,
+    use_single_scale: bool = False,
+    num_cores: int = 0,
 ) -> list[float]:
     debug_log(f"Starting direct video processing for {video_path.name}")
-    temp_video_path = None
+    temp_video_path: Path | None = None
 
     try:
         cap = None
@@ -453,6 +539,8 @@ def detect_image_in_video_direct(
                 file=sys.stderr,
             )
             temp_video_path = convert_video_to_h264(video_path)
+            if temp_video_path is None:
+                raise ValueError("Video conversion failed")
             working_path = temp_video_path
 
             # Try backends again with converted video
@@ -491,16 +579,27 @@ def detect_image_in_video_direct(
             fps = 30.0  # Fallback FPS if cannot be determined
 
         debug_log(
-            f"Video properties: FPS={fps:.2f}, Total frames={total_frames}, Duration={total_frames / fps:.1f}s, Frame skip={frame_skip}"
+            f"Video properties: FPS={fps:.2f}, Total frames={total_frames}, "
+            f"Duration={total_frames / fps:.1f}s, Frame skip={frame_skip}"
         )
 
+        # Determine number of cores to use
+        if num_cores <= 0:
+            num_cores = multiprocessing.cpu_count()
+
+        debug_log(f"Using {num_cores} cores for processing")
+
         detection_times: list[float] = []
-        frame_count = 0
+        frame_position = 0  # Actual position in video
         processed_frames = 0
         currently_detected = False
 
         last_progress_time = time.time()
         process_start_time = time.time()
+
+        # Collect frames for batch processing
+        frame_batch = []
+        batch_size = num_cores * 4  # Process frames in batches
 
         while True:
             ret, frame = cap.read()
@@ -509,55 +608,79 @@ def detect_image_in_video_direct(
 
             # Skip invalid frames
             if frame is None or frame.size == 0:
-                frame_count += 1
+                frame_position += 1
                 continue
 
             # Frame skipping logic
-            if frame_count % frame_skip != 0:
-                frame_count += 1
+            if frame_position % frame_skip != 0:
+                frame_position += 1
                 continue
 
+            # Add frame to batch
+            frame_batch.append((frame_position, frame.copy()))
             processed_frames += 1
-            timestamp = frame_count / fps
-            if use_single_scale:
-                is_match = match_template_in_frame(frame, template, threshold)
-                if is_match and not currently_detected:
-                    detection_times.append(timestamp)
-                    currently_detected = True
-                    debug_log(f"Match found at frame {frame_count}, timestamp {timestamp:.2f}s")
-                elif not is_match and currently_detected:
-                    currently_detected = False
-            else:
-                # Use multi-scale matching
-                if scales is None:
-                    scales = [0.5, 0.75, 1.0, 1.25, 1.5]
-                
-                is_match, confidence, best_scale = match_template_in_frame_multiscale(frame, template, threshold, scales)
-                
-                if is_match and not currently_detected:
-                    detection_times.append(timestamp)
-                    currently_detected = True
-                    debug_log(f"Match found at frame {frame_count}, timestamp {timestamp:.2f}s, confidence {confidence:.4f}, scale {best_scale:.2f}x")
-                elif not is_match and currently_detected:
-                    currently_detected = False
+            frame_position += 1
 
-            frame_count += 1
+            # Process batch when it's full or at end of video
+            if len(frame_batch) >= batch_size:
+                # Process this batch
+                batch_results = process_frame_batch(
+                    frame_batch, template, threshold, scales, use_single_scale, fps, num_cores
+                )
+
+                # Apply state tracking to results
+                for frame_idx, timestamp, is_match, confidence, best_scale in batch_results:
+                    if is_match and not currently_detected:
+                        detection_times.append(timestamp)
+                        currently_detected = True
+                        if use_single_scale:
+                            debug_log(
+                                f"Match found at frame {frame_idx}, timestamp {timestamp:.2f}s"
+                            )
+                        else:
+                            debug_log(
+                                f"Match found at frame {frame_idx}, timestamp {timestamp:.2f}s, confidence {confidence:.4f}, scale {best_scale:.2f}x"
+                            )
+                    elif not is_match and currently_detected:
+                        currently_detected = False
+
+                frame_batch = []
 
             # Progress update every 5 seconds for debug mode or every 30 seconds otherwise
             current_time = time.time()
             progress_interval = 5 if DEBUG else 30
             if current_time - last_progress_time > progress_interval and total_frames > 0:
-                progress = frame_count / total_frames * 100
+                progress = frame_position / total_frames * 100
                 elapsed = current_time - process_start_time
                 debug_log(
-                    f"Frame {frame_count}/{total_frames} ({progress:.1f}%), processed {processed_frames} frames, {elapsed:.1f}s elapsed"
+                    f"Frame {frame_position}/{total_frames} ({progress:.1f}%), processed {processed_frames} frames, {elapsed:.1f}s elapsed"
                 )
                 last_progress_time = current_time
+
+        # Process remaining frames in the final batch
+        if frame_batch:
+            batch_results = process_frame_batch(
+                frame_batch, template, threshold, scales, use_single_scale, fps, num_cores
+            )
+
+            # Apply state tracking to results
+            for frame_idx, timestamp, is_match, confidence, best_scale in batch_results:
+                if is_match and not currently_detected:
+                    detection_times.append(timestamp)
+                    currently_detected = True
+                    if use_single_scale:
+                        debug_log(f"Match found at frame {frame_idx}, timestamp {timestamp:.2f}s")
+                    else:
+                        debug_log(
+                            f"Match found at frame {frame_idx}, timestamp {timestamp:.2f}s, confidence {confidence:.4f}, scale {best_scale:.2f}x"
+                        )
+                elif not is_match and currently_detected:
+                    currently_detected = False
 
         cap.release()
         process_time = time.time() - process_start_time
         debug_log(
-            f"Direct processing completed in {process_time:.2f}s, processed {frame_count} frames"
+            f"Direct processing completed in {process_time:.2f}s, processed {frame_position} frames"
         )
         return detection_times
 
@@ -571,8 +694,9 @@ def detect_image_in_video(
     threshold: float,
     chunk_size: int = 60,
     frame_skip: int = 1,
-    scales: List[float] = None,
+    scales: list[float] | None = None,
     use_single_scale: bool = False,
+    num_cores: int = 0,
 ) -> list[float]:
     """Main entry point for video processing with automatic chunking for large videos."""
     debug_log(f"Starting video processing for {video_path.name}")
@@ -583,23 +707,43 @@ def detect_image_in_video(
     if duration > 300:  # 5 minutes
         debug_log(f"Video is {duration / 60:.1f} minutes, using chunked processing")
         try:
-            return process_video_in_chunks(video_path, template, threshold, chunk_size, frame_skip, scales, use_single_scale)
+            return process_video_in_chunks(
+                video_path,
+                template,
+                threshold,
+                chunk_size,
+                frame_skip,
+                scales,
+                use_single_scale,
+                num_cores,
+            )
         except Exception as e:
             debug_log(f"Chunked processing failed: {e}")
             print(f"Chunked processing failed: {e}", file=sys.stderr)
             print("Falling back to direct processing...", file=sys.stderr)
-            return detect_image_in_video_direct(video_path, template, threshold, frame_skip, scales, use_single_scale)
+            return detect_image_in_video_direct(
+                video_path, template, threshold, frame_skip, scales, use_single_scale, num_cores
+            )
     else:
         debug_log(f"Video is {duration / 60:.1f} minutes, using direct processing")
         try:
-            return detect_image_in_video_direct(video_path, template, threshold, frame_skip, scales, use_single_scale)
+            return detect_image_in_video_direct(
+                video_path, template, threshold, frame_skip, scales, use_single_scale, num_cores
+            )
         except Exception as e:
             debug_log(f"Direct processing failed: {e}")
             print(f"Direct processing failed: {e}", file=sys.stderr)
             if duration > 0:
                 print("Attempting chunked processing as fallback...", file=sys.stderr)
                 return process_video_in_chunks(
-                    video_path, template, threshold, chunk_size, frame_skip, scales, use_single_scale
+                    video_path,
+                    template,
+                    threshold,
+                    chunk_size,
+                    frame_skip,
+                    scales,
+                    use_single_scale,
+                    num_cores,
                 )
             else:
                 raise
@@ -615,7 +759,7 @@ def main() -> None:
         if DEBUG:
             print("Debug mode enabled", file=sys.stderr)
             debug_log(
-                f"Arguments: video={args.video_path}, image={args.image_path}, threshold={args.threshold}, chunk_size={args.chunk_size}, scales={args.scales}, single_scale={args.single_scale}"
+                f"Arguments: video={args.video_path}, image={args.image_path}, threshold={args.threshold}, chunk_size={args.chunk_size}, scales={args.scales}, single_scale={args.single_scale}, cores={args.cores}"
             )
 
         if not args.video_path.exists():
@@ -629,15 +773,15 @@ def main() -> None:
         debug_log("Loading template image")
         template = load_template(args.image_path)
         debug_log(f"Template loaded: {template.shape}")
-        
+
         # Parse scales
         try:
-            scales = [float(s.strip()) for s in args.scales.split(',')]
+            scales = [float(s.strip()) for s in args.scales.split(",")]
             debug_log(f"Using scales: {scales}")
         except ValueError as e:
             print(f"Error parsing scales '{args.scales}': {e}", file=sys.stderr)
             sys.exit(1)
-        
+
         use_single_scale = args.single_scale
         if use_single_scale:
             debug_log("Using single-scale matching mode")
@@ -646,7 +790,14 @@ def main() -> None:
 
         debug_log("Starting video processing")
         detection_times = detect_image_in_video(
-            args.video_path, template, args.threshold, args.chunk_size, args.frame_skip, scales, use_single_scale
+            args.video_path,
+            template,
+            args.threshold,
+            args.chunk_size,
+            args.frame_skip,
+            scales,
+            use_single_scale,
+            args.cores,
         )
 
         debug_log(f"Processing complete, found {len(detection_times)} matches")
