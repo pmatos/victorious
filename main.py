@@ -1,6 +1,8 @@
 import argparse
+import contextlib
 import multiprocessing
 import os
+import signal
 import subprocess
 import sys
 import tempfile
@@ -10,14 +12,22 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-# Global debug flag
+# Global flags
 DEBUG = False
+INTERRUPTED = False
 
 
 def debug_log(message: str) -> None:
     """Print debug message if debug mode is enabled."""
     if DEBUG:
         print(f"DEBUG: {message}", file=sys.stderr)
+
+
+def signal_handler(signum: int, frame) -> None:
+    """Handle interrupt signal gracefully."""
+    global INTERRUPTED
+    INTERRUPTED = True
+    print("\nProcessing interrupted by user. Cleaning up...", file=sys.stderr)
 
 
 def parse_arguments() -> argparse.Namespace:
@@ -56,6 +66,11 @@ def parse_arguments() -> argparse.Namespace:
         type=int,
         default=0,
         help="Number of CPU cores to use for processing (0 = use all cores, default: 0)",
+    )
+    parser.add_argument(
+        "--force-chunking",
+        action="store_true",
+        help="Force chunked processing even if direct processing might work",
     )
     return parser.parse_args()
 
@@ -305,20 +320,20 @@ def convert_video_to_h264(input_path: Path) -> Path | None:
         if isinstance(e, FileNotFoundError):
             raise ValueError(
                 "FFmpeg not found. Please install FFmpeg to process this video format."
-            )
+            ) from e
         elif isinstance(e, subprocess.TimeoutExpired):
-            raise ValueError("Video conversion timed out. The video may be too large or complex.")
+            raise ValueError(
+                "Video conversion timed out. The video may be too large or complex."
+            ) from e
         else:
-            raise ValueError(f"Video conversion failed: {e.stderr}")
+            raise ValueError(f"Video conversion failed: {e.stderr}") from e
 
 
 def cleanup_temp_file(temp_path: Path | None) -> None:
     """Clean up temporary file if it exists."""
     if temp_path and temp_path.exists():
-        try:
+        with contextlib.suppress(OSError):
             temp_path.unlink()
-        except OSError:
-            pass
 
 
 def get_video_duration(video_path: Path) -> float:
@@ -340,6 +355,70 @@ def get_video_duration(video_path: Path) -> float:
         return 0
 
 
+def get_video_codec(video_path: Path) -> str:
+    """Get video codec name using ffprobe."""
+    try:
+        cmd = [
+            "ffprobe",
+            "-v",
+            "quiet",
+            "-select_streams",
+            "v:0",
+            "-show_entries",
+            "stream=codec_name",
+            "-of",
+            "default=noprint_wrappers=1:nokey=1",
+            str(video_path),
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+        codec = result.stdout.strip().lower()
+        debug_log(f"Detected video codec: {codec}")
+        return codec
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
+        debug_log("Could not detect video codec, will use re-encoding")
+        return ""
+
+
+def get_video_properties(video_path: Path) -> dict[str, str]:
+    """Get video properties (resolution, fps, codec) using ffprobe."""
+    properties = {"width": "unknown", "height": "unknown", "fps": "unknown", "codec": "unknown"}
+
+    try:
+        # Get resolution and fps
+        cmd = [
+            "ffprobe",
+            "-v",
+            "quiet",
+            "-select_streams",
+            "v:0",
+            "-show_entries",
+            "stream=width,height,r_frame_rate,codec_name",
+            "-of",
+            "json",
+            str(video_path),
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+        if result.returncode == 0:
+            import json
+
+            data = json.loads(result.stdout)
+            if data.get("streams"):
+                stream = data["streams"][0]
+                properties["width"] = str(stream.get("width", "unknown"))
+                properties["height"] = str(stream.get("height", "unknown"))
+                properties["codec"] = stream.get("codec_name", "unknown")
+
+                # Parse frame rate
+                fps_str = stream.get("r_frame_rate", "")
+                if fps_str and "/" in fps_str:
+                    num, denom = fps_str.split("/")
+                    properties["fps"] = f"{int(num) / int(denom):.2f}"
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, json.JSONDecodeError):
+        pass
+
+    return properties
+
+
 def create_video_chunk(
     input_path: Path, start_time: float, duration: float, chunk_index: int
 ) -> Path:
@@ -350,34 +429,62 @@ def create_video_chunk(
     temp_fd, temp_path = tempfile.mkstemp(suffix=f"_chunk_{chunk_index}.mp4", prefix="victorious_")
     os.close(temp_fd)
 
-    # Use stream copy when possible to avoid re-encoding
-    cmd = [
-        "ffmpeg",
-        "-v",
-        "warning",
-        "-ss",
-        str(start_time),
-        "-i",
-        str(input_path),
-        "-t",
-        str(duration),
-        "-c:v",
-        "libx264",  # Still need to transcode for AV1 compatibility
-        "-preset",
-        "ultrafast",
-        "-crf",
-        "28",
-        "-avoid_negative_ts",
-        "make_zero",  # Handle timestamp issues
-        "-f",
-        "mp4",
-        "-y",
-        temp_path,
-    ]
+    # Detect codec to decide between stream copy (fast) and re-encoding (slow)
+    codec = get_video_codec(input_path)
+    compatible_codecs = ["h264", "h265", "hevc", "vp8", "vp9", "mpeg4"]
+
+    # Use stream copy for compatible codecs (400x faster)
+    if codec in compatible_codecs:
+        debug_log(f"Using stream copy for codec {codec} (fast)")
+        cmd = [
+            "ffmpeg",
+            "-v",
+            "warning",
+            "-ss",
+            str(start_time),
+            "-i",
+            str(input_path),
+            "-t",
+            str(duration),
+            "-c",
+            "copy",  # Stream copy - no re-encoding
+            "-avoid_negative_ts",
+            "make_zero",
+            "-f",
+            "mp4",
+            "-y",
+            temp_path,
+        ]
+    else:
+        # Re-encode for problematic codecs (AV1, etc.)
+        debug_log(f"Re-encoding for codec {codec} (slow)")
+        cmd = [
+            "ffmpeg",
+            "-v",
+            "warning",
+            "-ss",
+            str(start_time),
+            "-i",
+            str(input_path),
+            "-t",
+            str(duration),
+            "-c:v",
+            "libx264",
+            "-preset",
+            "ultrafast",
+            "-crf",
+            "28",
+            "-avoid_negative_ts",
+            "make_zero",
+            "-f",
+            "mp4",
+            "-y",
+            temp_path,
+        ]
 
     try:
         debug_log(f"Running FFmpeg command: {' '.join(cmd[:8])}...")
-        result = subprocess.run(cmd, capture_output=True, text=True, check=True, timeout=120)
+        subprocess.run(cmd, capture_output=True, text=True, check=True, timeout=120)
 
         chunk_time = time.time() - start_chunk_time
         debug_log(f"Chunk {chunk_index} created in {chunk_time:.2f}s")
@@ -387,7 +494,7 @@ def create_video_chunk(
         if os.path.exists(temp_path):
             os.unlink(temp_path)
         debug_log(f"Chunk creation failed: {e}")
-        raise ValueError(f"Failed to create video chunk: {e}")
+        raise ValueError(f"Failed to create video chunk: {e}") from e
 
 
 def process_video_in_chunks(
@@ -423,8 +530,19 @@ def process_video_in_chunks(
     num_chunks = int((total_duration + chunk_duration - 1) // chunk_duration)  # Ceiling division
     debug_log(f"Will create {num_chunks} chunks")
 
+    chunk_times = []  # Track time per chunk for estimation
+
     try:
         for chunk_index in range(num_chunks):
+            # Check for interruption
+            if INTERRUPTED:
+                debug_log(f"Processing interrupted at chunk {chunk_index + 1}/{num_chunks}")
+                print(
+                    f"Processed {chunk_index}/{num_chunks} chunks before interruption. Found {len(detection_times)} matches.",
+                    file=sys.stderr,
+                )
+                break
+
             chunk_start_time = time.time()
             start_time = chunk_index * chunk_duration
             remaining_time = total_duration - start_time
@@ -432,10 +550,25 @@ def process_video_in_chunks(
 
             progress = (chunk_index + 1) / num_chunks * 100
             elapsed = time.time() - total_start_time
-            print(
-                f"Processing chunk {chunk_index + 1}/{num_chunks} ({progress:.1f}%) - {elapsed:.1f}s elapsed...",
-                file=sys.stderr,
-            )
+
+            # Calculate time remaining estimate after first chunk
+            if chunk_index > 0:
+                avg_chunk_time = sum(chunk_times) / len(chunk_times)
+                remaining_chunks = num_chunks - (chunk_index + 1)
+                estimated_remaining = remaining_chunks * avg_chunk_time
+                remaining_min = int(estimated_remaining // 60)
+                remaining_sec = int(estimated_remaining % 60)
+
+                print(
+                    f"Processing chunk {chunk_index + 1}/{num_chunks} ({progress:.1f}%) - "
+                    f"{elapsed:.1f}s elapsed, ~{remaining_min}m {remaining_sec}s remaining...",
+                    file=sys.stderr,
+                )
+            else:
+                print(
+                    f"Processing chunk {chunk_index + 1}/{num_chunks} ({progress:.1f}%) - {elapsed:.1f}s elapsed...",
+                    file=sys.stderr,
+                )
 
             # Create chunk
             debug_log(
@@ -455,6 +588,7 @@ def process_video_in_chunks(
             detection_times.extend(adjusted_detections)
 
             chunk_time = time.time() - chunk_start_time
+            chunk_times.append(chunk_time)
             debug_log(f"Chunk {chunk_index + 1} completed in {chunk_time:.2f}s")
 
             if adjusted_detections:
@@ -472,8 +606,13 @@ def process_video_in_chunks(
             cleanup_temp_file(chunk_path)
 
     total_time = time.time() - total_start_time
+
+    # Display performance statistics
+    realtime_factor = total_duration / total_time if total_time > 0 else 0
+    avg_chunk_time = sum(chunk_times) / len(chunk_times) if chunk_times else 0
+
     print(
-        f"Completed processing in {total_time:.1f}s. Found {len(detection_times)} total matches.",
+        f"Completed in {total_time / 60:.1f}m ({realtime_factor:.1f}x realtime, {avg_chunk_time:.1f}s/chunk). Found {len(detection_times)} matches.",
         file=sys.stderr,
     )
     return detection_times
@@ -589,6 +728,27 @@ def detect_image_in_video_direct(
 
         debug_log(f"Using {num_cores} cores for processing")
 
+        # Display performance information
+        props = get_video_properties(working_path)
+        duration_min = (total_frames / fps) / 60
+        scale_mode = "single-scale" if use_single_scale else "multi-scale"
+
+        print(
+            f"Processing {duration_min:.1f} minute video ({props['width']}x{props['height']}, {props['fps']}fps, {props['codec']})",
+            file=sys.stderr,
+        )
+        print(
+            f"Using {num_cores} cores, {scale_mode} matching, processing every {frame_skip} frame(s)",
+            file=sys.stderr,
+        )
+
+        # Suggest optimizations if not already enabled
+        if frame_skip == 1 and not use_single_scale:
+            print(
+                "Tip: Use --frame-skip 5 for ~5x faster processing or --single-scale for ~5x faster matching",
+                file=sys.stderr,
+            )
+
         detection_times: list[float] = []
         frame_position = 0  # Actual position in video
         processed_frames = 0
@@ -602,6 +762,11 @@ def detect_image_in_video_direct(
         batch_size = num_cores * 4  # Process frames in batches
 
         while True:
+            # Check for interruption
+            if INTERRUPTED:
+                debug_log(f"Processing interrupted at frame {frame_position}")
+                break
+
             ret, frame = cap.read()
             if not ret:
                 break
@@ -623,6 +788,16 @@ def detect_image_in_video_direct(
 
             # Process batch when it's full or at end of video
             if len(frame_batch) >= batch_size:
+                # Check for interruption
+                if INTERRUPTED:
+                    debug_log(f"Processing interrupted. Processed {processed_frames} frames.")
+                    if detection_times:
+                        print(
+                            f"Processed {processed_frames}/{total_frames} frames before interruption. Found {len(detection_times)} matches.",
+                            file=sys.stderr,
+                        )
+                    break
+
                 # Process this batch
                 batch_results = process_frame_batch(
                     frame_batch, template, threshold, scales, use_single_scale, fps, num_cores
@@ -652,9 +827,39 @@ def detect_image_in_video_direct(
             if current_time - last_progress_time > progress_interval and total_frames > 0:
                 progress = frame_position / total_frames * 100
                 elapsed = current_time - process_start_time
-                debug_log(
-                    f"Frame {frame_position}/{total_frames} ({progress:.1f}%), processed {processed_frames} frames, {elapsed:.1f}s elapsed"
-                )
+
+                # Calculate time remaining estimate
+                if processed_frames > 100:  # Wait for some frames to get accurate estimate
+                    frames_per_second = processed_frames / elapsed
+                    remaining_frames = total_frames - frame_position
+                    estimated_remaining = remaining_frames / frames_per_second
+                    remaining_min = int(estimated_remaining // 60)
+                    remaining_sec = int(estimated_remaining % 60)
+
+                    if DEBUG:
+                        debug_log(
+                            f"Frame {frame_position}/{total_frames} ({progress:.1f}%), "
+                            f"processed {processed_frames} frames, {elapsed:.1f}s elapsed, "
+                            f"~{remaining_min}m {remaining_sec}s remaining"
+                        )
+                    else:
+                        print(
+                            f"Frame {frame_position}/{total_frames} ({progress:.1f}%) - "
+                            f"{elapsed:.1f}s elapsed, ~{remaining_min}m {remaining_sec}s remaining...",
+                            file=sys.stderr,
+                        )
+                else:
+                    if DEBUG:
+                        debug_log(
+                            f"Frame {frame_position}/{total_frames} ({progress:.1f}%), "
+                            f"processed {processed_frames} frames, {elapsed:.1f}s elapsed"
+                        )
+                    else:
+                        print(
+                            f"Frame {frame_position}/{total_frames} ({progress:.1f}%) - {elapsed:.1f}s elapsed...",
+                            file=sys.stderr,
+                        )
+
                 last_progress_time = current_time
 
         # Process remaining frames in the final batch
@@ -679,6 +884,17 @@ def detect_image_in_video_direct(
 
         cap.release()
         process_time = time.time() - process_start_time
+
+        # Display performance statistics
+        video_duration = total_frames / fps
+        realtime_factor = video_duration / process_time if process_time > 0 else 0
+        frames_per_sec = processed_frames / process_time if process_time > 0 else 0
+
+        print(
+            f"Completed in {process_time / 60:.1f}m ({realtime_factor:.1f}x realtime, {frames_per_sec:.1f} frames/s). Found {len(detection_times)} matches.",
+            file=sys.stderr,
+        )
+
         debug_log(
             f"Direct processing completed in {process_time:.2f}s, processed {frame_position} frames"
         )
@@ -697,16 +913,37 @@ def detect_image_in_video(
     scales: list[float] | None = None,
     use_single_scale: bool = False,
     num_cores: int = 0,
+    force_chunking: bool = False,
 ) -> list[float]:
-    """Main entry point for video processing with automatic chunking for large videos."""
+    """Main entry point for video processing with automatic fallback to chunking if needed."""
     debug_log(f"Starting video processing for {video_path.name}")
     duration = get_video_duration(video_path)
     debug_log(f"Video duration: {duration:.1f}s, chunk size: {chunk_size}s")
 
-    # Use chunked processing for videos longer than 5 minutes or if direct processing fails
-    if duration > 300:  # 5 minutes
-        debug_log(f"Video is {duration / 60:.1f} minutes, using chunked processing")
-        try:
+    if force_chunking:
+        debug_log("Force chunking enabled, using chunked processing")
+        return process_video_in_chunks(
+            video_path,
+            template,
+            threshold,
+            chunk_size,
+            frame_skip,
+            scales,
+            use_single_scale,
+            num_cores,
+        )
+
+    # Always try direct processing first (uses frame-level parallelization)
+    debug_log(f"Video is {duration / 60:.1f} minutes, attempting direct processing")
+    try:
+        return detect_image_in_video_direct(
+            video_path, template, threshold, frame_skip, scales, use_single_scale, num_cores
+        )
+    except Exception as e:
+        debug_log(f"Direct processing failed: {e}")
+        print(f"Direct processing failed: {e}", file=sys.stderr)
+        if duration > 0:
+            print("Attempting chunked processing as fallback...", file=sys.stderr)
             return process_video_in_chunks(
                 video_path,
                 template,
@@ -717,40 +954,15 @@ def detect_image_in_video(
                 use_single_scale,
                 num_cores,
             )
-        except Exception as e:
-            debug_log(f"Chunked processing failed: {e}")
-            print(f"Chunked processing failed: {e}", file=sys.stderr)
-            print("Falling back to direct processing...", file=sys.stderr)
-            return detect_image_in_video_direct(
-                video_path, template, threshold, frame_skip, scales, use_single_scale, num_cores
-            )
-    else:
-        debug_log(f"Video is {duration / 60:.1f} minutes, using direct processing")
-        try:
-            return detect_image_in_video_direct(
-                video_path, template, threshold, frame_skip, scales, use_single_scale, num_cores
-            )
-        except Exception as e:
-            debug_log(f"Direct processing failed: {e}")
-            print(f"Direct processing failed: {e}", file=sys.stderr)
-            if duration > 0:
-                print("Attempting chunked processing as fallback...", file=sys.stderr)
-                return process_video_in_chunks(
-                    video_path,
-                    template,
-                    threshold,
-                    chunk_size,
-                    frame_skip,
-                    scales,
-                    use_single_scale,
-                    num_cores,
-                )
-            else:
-                raise
+        else:
+            raise
 
 
 def main() -> None:
     global DEBUG
+
+    # Register signal handler for graceful interruption
+    signal.signal(signal.SIGINT, signal_handler)
 
     try:
         args = parse_arguments()
@@ -798,6 +1010,7 @@ def main() -> None:
             scales,
             use_single_scale,
             args.cores,
+            args.force_chunking,
         )
 
         debug_log(f"Processing complete, found {len(detection_times)} matches")
@@ -813,8 +1026,9 @@ def main() -> None:
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)
     except KeyboardInterrupt:
-        print("\nOperation cancelled by user", file=sys.stderr)
-        sys.exit(1)
+        if not INTERRUPTED:
+            print("\nOperation cancelled by user", file=sys.stderr)
+        sys.exit(130)
     except Exception as e:
         print(f"Unexpected error: {e}", file=sys.stderr)
         if DEBUG:
