@@ -1,9 +1,16 @@
 line-length = 100
-target-version = "py311"
+target-version = "py313"
 
 [lint]
-select = ["E", "F", "UP", "B", "SIM", "I"]
-ignore = []
+select = ["E", "F", "UP", "B", "SIM", "I", "S", "PTH", "C4", "PIE", "RUF", "PT", "TRY", "LOG"]
+ignore = [
+    "TRY003", # long messages passed to raise; acceptable for this CLI's error strings
+    "S603",   # fires on every subprocess call; all calls use fixed executables and
+              # list-form args (no shell=True). S602/S604-S606 still guard real injection.
+]
+
+[lint.per-file-ignores]
+"tests/**" = ["S101"] # asserts are the point of a test suite
 
 [format]
 quote-style = "double"

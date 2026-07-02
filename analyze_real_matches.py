@@ -7,19 +7,21 @@ Uses TM_CCOEFF_NORMED (the method used in main.py) and applies stricter criteria
 import argparse
 import sys
 from pathlib import Path
-from typing import List, Dict, Any, Tuple
+from typing import Any
 
 import cv2
 import numpy as np
 
 
 def analyze_with_ccoeff_normed(
-    frame_files: List[Path],
+    frame_files: list[Path],
     template: np.ndarray,
     output_dir: Path,
-    scales: List[float] = [0.5, 0.75, 1.0, 1.25, 1.5],
-) -> List[Dict[str, Any]]:
+    scales: list[float] | None = None,
+) -> list[dict[str, Any]]:
     """Analyze frames using TM_CCOEFF_NORMED method like main.py."""
+    if scales is None:
+        scales = [0.5, 0.75, 1.0, 1.25, 1.5]
 
     results = []
     template_h, template_w = template.shape[:2]
@@ -34,7 +36,7 @@ def analyze_with_ccoeff_normed(
 
         frame_results = []
         best_confidence = 0.0
-        best_match = None
+        best_match: dict[str, Any] | None = None
 
         # Test multiple scales
         for scale in scales:
@@ -76,7 +78,7 @@ def analyze_with_ccoeff_normed(
         results.append(frame_analysis)
 
         # Print significant matches only
-        if best_confidence >= 0.7:
+        if best_confidence >= 0.7 and best_match is not None:
             print(
                 f"Frame {i + 1:3d}: Confidence: {best_confidence:.4f}, "
                 f"Scale: {best_match['scale']:.2f}x, "
@@ -89,7 +91,7 @@ def analyze_with_ccoeff_normed(
 def create_enhanced_visualization(
     frame: np.ndarray,
     template: np.ndarray,
-    match_data: Dict[str, Any],
+    match_data: dict[str, Any],
     output_path: Path,
     confidence_threshold: float = 0.7,
 ) -> None:
@@ -143,7 +145,7 @@ def create_enhanced_visualization(
     cv2.imwrite(str(output_path), vis_frame)
 
 
-def identify_real_matches(results: List[Dict[str, Any]]) -> Dict[str, Any]:
+def identify_real_matches(results: list[dict[str, Any]]) -> dict[str, Any]:
     """Identify likely real matches using statistical analysis."""
 
     # Extract all confidences
@@ -151,7 +153,7 @@ def identify_real_matches(results: List[Dict[str, Any]]) -> Dict[str, Any]:
     mean_confidence = np.mean(all_confidences)
     std_confidence = np.std(all_confidences)
 
-    print(f"\nStatistical Analysis:")
+    print("\nStatistical Analysis:")
     print(f"Mean confidence: {mean_confidence:.4f}")
     print(f"Std deviation: {std_confidence:.4f}")
     print(f"Min confidence: {min(all_confidences):.4f}")
@@ -207,7 +209,7 @@ def identify_real_matches(results: List[Dict[str, Any]]) -> Dict[str, Any]:
     }
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(description="Analyze real matches vs false positives")
     parser.add_argument("template_path", type=Path, help="Path to template image")
     parser.add_argument(
@@ -256,12 +258,12 @@ def main():
     # Identify real matches
     analysis = identify_real_matches(results)
 
-    print(f"\nReal Match Analysis:")
+    print("\nReal Match Analysis:")
     print(f"Matches above adaptive threshold: {len(analysis['high_confidence_matches'])}")
     print(f"Grouped consecutive matches: {len(analysis['grouped_matches'])}")
 
     if analysis["grouped_matches"]:
-        print(f"\nLikely real match sequences:")
+        print("\nLikely real match sequences:")
         for i, group in enumerate(analysis["grouped_matches"]):
             print(f"  Group {i + 1}: {len(group)} frames")
             print(f"    Frames: {[r['frame_index'] + 1 for r in group]}")
@@ -276,7 +278,7 @@ def main():
             print()
 
     # Generate recommendations
-    print(f"\nRecommendations for main.py:")
+    print("\nRecommendations for main.py:")
     if analysis["grouped_matches"]:
         best_group = max(
             analysis["grouped_matches"], key=lambda g: np.mean([r["best_confidence"] for r in g])
@@ -296,9 +298,9 @@ def main():
         else:
             print(f"3. Single scale matching at {common_scale:.2f}x should work")
     else:
-        print(f"1. Current threshold of 0.8 might be too high")
+        print("1. Current threshold of 0.8 might be too high")
         print(f"2. Try threshold around {analysis['adaptive_threshold']:.2f}")
-        print(f"3. Consider that the image might not actually appear clearly in the video")
+        print("3. Consider that the image might not actually appear clearly in the video")
 
 
 if __name__ == "__main__":
