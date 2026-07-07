@@ -5,17 +5,17 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
-    "numpy>=2.3.2",
-    "opencv-python>=4.11.0.86",
+    "numpy>=2.5.1",
+    "opencv-python>=5.0.0.93",
 ]
 
 [dependency-groups]
 dev = [
-    "hypothesis>=6.155.7",
-    "mypy>=1.17.0",
+    "hypothesis>=6.156.1",
+    "mypy>=2.1.0",
     "pytest>=9.1.1",
     "pytest-cov>=7.1.0",
-    "ruff>=0.12.7",
+    "ruff>=0.15.20",
 ]
 
 [tool.mypy]
