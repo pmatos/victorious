@@ -5,12 +5,10 @@ Extracts frames and performs comprehensive template matching analysis.
 """
 
 import argparse
-import os
 import subprocess
 import sys
-import tempfile
 from pathlib import Path
-from typing import List, Tuple, Dict, Any
+from typing import Any
 
 import cv2
 import numpy as np
@@ -18,7 +16,7 @@ import numpy as np
 
 def extract_frames_with_ffmpeg(
     video_path: Path, output_dir: Path, frame_skip: int = 60
-) -> List[Path]:
+) -> list[Path]:
     """Extract every Nth frame from video using ffmpeg."""
     print(f"Extracting every {frame_skip}th frame from {video_path.name}...")
 
@@ -97,13 +95,15 @@ def load_template_image(image_path: Path) -> np.ndarray:
 def multi_scale_template_matching(
     frame: np.ndarray,
     template: np.ndarray,
-    scales: List[float] = [0.5, 0.75, 1.0, 1.25, 1.5],
-    methods: List[Tuple[int, str]] = None,
-) -> Dict[str, Any]:
+    scales: list[float] | None = None,
+    methods: list[tuple[int, str]] | None = None,
+) -> dict[str, Any]:
     """
     Perform template matching at multiple scales and with different methods.
     Returns detailed results for analysis.
     """
+    if scales is None:
+        scales = [0.5, 0.75, 1.0, 1.25, 1.5]
 
     if methods is None:
         methods = [
@@ -112,7 +112,7 @@ def multi_scale_template_matching(
             (cv2.TM_SQDIFF_NORMED, "TM_SQDIFF_NORMED"),
         ]
 
-    results = {
+    results: dict[str, Any] = {
         "best_match": None,
         "best_confidence": 0.0,
         "best_location": None,
@@ -180,7 +180,7 @@ def multi_scale_template_matching(
 
 
 def draw_match_visualization(
-    frame: np.ndarray, template: np.ndarray, match_result: Dict[str, Any], output_path: Path
+    frame: np.ndarray, template: np.ndarray, match_result: dict[str, Any], output_path: Path
 ) -> None:
     """Draw bounding box around best match and save visualization."""
 
@@ -224,8 +224,8 @@ def draw_match_visualization(
 
 
 def analyze_frames(
-    frame_files: List[Path], template: np.ndarray, output_dir: Path, min_confidence: float = 0.5
-) -> List[Dict[str, Any]]:
+    frame_files: list[Path], template: np.ndarray, output_dir: Path, min_confidence: float = 0.5
+) -> list[dict[str, Any]]:
     """Analyze all extracted frames for template matches."""
 
     results = []
@@ -275,10 +275,10 @@ def analyze_frames(
     return results
 
 
-def generate_report(results: List[Dict[str, Any]], output_path: Path) -> None:
+def generate_report(results: list[dict[str, Any]], output_path: Path) -> None:
     """Generate detailed analysis report."""
 
-    with open(output_path, "w") as f:
+    with output_path.open("w") as f:
         f.write("Template Matching Analysis Report\n")
         f.write("==================================\n\n")
 
@@ -311,8 +311,8 @@ def generate_report(results: List[Dict[str, Any]], output_path: Path) -> None:
                     f"Location: {best['location']}\n"
                 )
 
-        f.write(f"\nDetailed Results:\n")
-        f.write(f"-----------------\n")
+        f.write("\nDetailed Results:\n")
+        f.write("-----------------\n")
 
         for result in sorted_results:
             if result["best_confidence"] >= 0.5:  # Only report significant matches
@@ -330,7 +330,7 @@ def generate_report(results: List[Dict[str, Any]], output_path: Path) -> None:
                 frame_results = sorted(
                     result["all_results"], key=lambda x: x["confidence"], reverse=True
                 )[:3]
-                f.write(f"  Top matches:\n")
+                f.write("  Top matches:\n")
                 for j, match in enumerate(frame_results):
                     f.write(
                         f"    {j + 1}. {match['confidence']:.4f} @ {match['scale']:.2f}x "
@@ -338,7 +338,7 @@ def generate_report(results: List[Dict[str, Any]], output_path: Path) -> None:
                     )
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(description="Debug template matching in video")
     parser.add_argument("video_path", type=Path, help="Path to video file")
     parser.add_argument("template_path", type=Path, help="Path to template image")
@@ -391,7 +391,7 @@ def main():
         report_path = args.output_dir / "analysis_report.txt"
         generate_report(results, report_path)
 
-        print(f"\nAnalysis complete!")
+        print("\nAnalysis complete!")
         print(f"Results saved to: {args.output_dir}")
         print(f"Report: {report_path}")
         print(f"Visualizations: {args.output_dir}/vis_*.png")

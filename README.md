@@ -79,12 +79,22 @@ uv run ruff format
 uv run ruff check
 
 # Type checking
-uv run mypy main.py
+uv run mypy
+```
+
+### Testing
+
+```bash
+# Run the test suite
+uv run pytest
+
+# Run with coverage
+uv run pytest --cov=. --cov-report=term-missing
 ```
 
 ## Requirements
 
-- Python e 3.13
+- Python >= 3.13
 - OpenCV (opencv-python)
 - NumPy
 

@@ -33,8 +33,14 @@ uv run ruff format
 uv run ruff check
 uv run ruff check --fix
 
-# Type checking
-uv run mypy main.py
+# Type checking (whole project, strict)
+uv run mypy
+
+# Run tests
+uv run pytest
+
+# Run tests with coverage
+uv run pytest --cov=. --cov-report=term-missing
 
 # Run application
 uv run python main.py <video_path> <image_path>
@@ -52,5 +58,5 @@ uv run python main.py video.mkv template.png --threshold 0.8 --fps 2 --max-heigh
 
 ## Configuration
 
-- **Ruff**: 100-character line length, Python 3.11+ target
+- **Ruff**: 100-character line length, Python 3.13 target
 - **Dependencies**: Python >=3.13, OpenCV, NumPy

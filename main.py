@@ -7,7 +7,10 @@ import subprocess
 import sys
 import tempfile
 import time
+from collections.abc import Iterable
 from pathlib import Path
+from types import FrameType
+from typing import Any
 
 import cv2
 import numpy as np
@@ -23,11 +26,44 @@ def debug_log(message: str) -> None:
         print(f"DEBUG: {message}", file=sys.stderr)
 
 
-def signal_handler(signum: int, frame) -> None:
+def signal_handler(signum: int, frame: FrameType | None) -> None:
     """Handle interrupt signal gracefully."""
     global INTERRUPTED
     INTERRUPTED = True
     print("\nProcessing interrupted by user. Cleaning up...", file=sys.stderr)
+
+
+def parse_scales(scales_str: str) -> list[float]:
+    """Parse a comma-separated string of scale factors into a list of floats.
+
+    Empty entries (e.g. trailing commas) are ignored. Raises ValueError if a
+    non-empty entry is not a valid float.
+    """
+    return [float(part) for part in scales_str.split(",") if part.strip()]
+
+
+def frame_index_to_timestamp(frame_index: int, fps: float) -> float:
+    """Convert a zero-based frame index to a timestamp in seconds."""
+    return frame_index / fps
+
+
+def extract_detection_times(matches: Iterable[tuple[bool, float]]) -> list[float]:
+    """Reduce per-frame match results to the start timestamp of each run.
+
+    Given ``(is_match, timestamp)`` pairs in chronological order, emit the
+    timestamp only when a match run begins (a False->True transition, or the
+    first frame if it already matches). Consecutive matches collapse to a single
+    start; a run only restarts after at least one non-matching frame.
+    """
+    detection_times: list[float] = []
+    currently_detected = False
+    for is_match, timestamp in matches:
+        if is_match and not currently_detected:
+            detection_times.append(timestamp)
+            currently_detected = True
+        elif not is_match and currently_detected:
+            currently_detected = False
+    return detection_times
 
 
 def parse_arguments() -> argparse.Namespace:
@@ -202,14 +238,14 @@ def match_template_in_frame(frame: np.ndarray, template: np.ndarray, threshold: 
     return max_val >= threshold
 
 
-def process_frame_worker(args: tuple) -> tuple[int, float, bool, float, float]:
+def process_frame_worker(args: tuple[Any, ...]) -> tuple[int, float, bool, float, float]:
     """
     Worker functions for multiprocessing frame analysis.
     Returns: (frame_index, timestamp, is_match, confidence, best_scale)
     """
     frame_index, frame_data, template, threshold, scales, use_single_scale, fps = args
 
-    timestamp = frame_index / fps
+    timestamp = frame_index_to_timestamp(frame_index, fps)
 
     if use_single_scale:
         is_match = match_template_in_frame(frame_data, template, threshold)
@@ -346,19 +382,21 @@ def convert_video_to_h264(input_path: Path) -> Path | None:
         return Path(temp_path)
 
     except (subprocess.CalledProcessError, FileNotFoundError, subprocess.TimeoutExpired) as e:
-        if "temp_path" in locals() and os.path.exists(temp_path):
-            os.unlink(temp_path)
+        if "temp_path" in locals() and Path(temp_path).exists():
+            Path(temp_path).unlink()
 
+        # isinstance checks dispatch on the caught exception, not on user input,
+        # so ValueError (the caller's contract) is correct here despite TRY004.
         if isinstance(e, FileNotFoundError):
-            raise ValueError(
+            raise ValueError(  # noqa: TRY004
                 "FFmpeg not found. Please install FFmpeg to process this video format."
             ) from e
         elif isinstance(e, subprocess.TimeoutExpired):
-            raise ValueError(
+            raise ValueError(  # noqa: TRY004
                 "Video conversion timed out. The video may be too large or complex."
             ) from e
         else:
-            raise ValueError(f"Video conversion failed: {e.stderr}") from e
+            raise ValueError(f"Video conversion failed: {e.stderr}") from e  # noqa: TRY004
 
 
 def cleanup_temp_file(temp_path: Path | None) -> None:
@@ -435,17 +473,17 @@ def extract_frames_to_dir(
             cleanup_temp_dir(temp_dir)
             raise ValueError("No frames were extracted from the video")
 
-        return temp_dir, num_frames
-
     except subprocess.CalledProcessError as e:
         cleanup_temp_dir(temp_dir)
         raise ValueError(f"Frame extraction failed: {e.stderr}") from e
     except FileNotFoundError as e:
         cleanup_temp_dir(temp_dir)
         raise ValueError("FFmpeg not found. Please install FFmpeg to use fast mode.") from e
+    else:
+        return temp_dir, num_frames
 
 
-def process_frame_file_worker(args: tuple) -> tuple[int, float, bool, float, float]:
+def process_frame_file_worker(args: tuple[Any, ...]) -> tuple[int, float, bool, float, float]:
     """
     Worker function for processing a single frame file from disk.
     Returns: (frame_index, timestamp, is_match, confidence, best_scale)
@@ -454,7 +492,7 @@ def process_frame_file_worker(args: tuple) -> tuple[int, float, bool, float, flo
         args
     )
 
-    timestamp = frame_index / fps
+    timestamp = frame_index_to_timestamp(frame_index, fps)
 
     # Load frame from disk
     if use_grayscale:
@@ -532,7 +570,8 @@ def process_extracted_frames(
                 progress = (i + 1) / num_frames * 100
                 elapsed = current_time - start_time
                 print(
-                    f"Processed {i + 1}/{num_frames} frames ({progress:.1f}%) - {elapsed:.1f}s elapsed",
+                    f"Processed {i + 1}/{num_frames} frames "
+                    f"({progress:.1f}%) - {elapsed:.1f}s elapsed",
                     file=sys.stderr,
                 )
                 last_progress_time = current_time
@@ -568,7 +607,8 @@ def process_extracted_frames(
                         )
                     else:
                         print(
-                            f"Processed {i + 1}/{num_frames} frames ({progress:.1f}%) - {elapsed:.1f}s elapsed",
+                            f"Processed {i + 1}/{num_frames} frames "
+                            f"({progress:.1f}%) - {elapsed:.1f}s elapsed",
                             file=sys.stderr,
                         )
                     last_progress_time = current_time
@@ -577,16 +617,11 @@ def process_extracted_frames(
     results = sorted(results, key=lambda x: x[0])
 
     # Apply state tracking to get detection times
-    detection_times = []
-    currently_detected = False
-
-    for frame_idx, timestamp, is_match, _, _ in results:
-        if is_match and not currently_detected:
-            detection_times.append(timestamp)
-            currently_detected = True
-            debug_log(f"Match found at frame {frame_idx}, timestamp {timestamp:.2f}s")
-        elif not is_match and currently_detected:
-            currently_detected = False
+    detection_times = extract_detection_times(
+        (is_match, timestamp) for _, timestamp, is_match, _, _ in results
+    )
+    for timestamp in detection_times:
+        debug_log(f"Match found at timestamp {timestamp:.2f}s")
 
     process_time = time.time() - start_time
     frames_per_sec = num_frames / process_time if process_time > 0 else 0
@@ -637,10 +672,11 @@ def get_video_codec(video_path: Path) -> str:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
         codec = result.stdout.strip().lower()
         debug_log(f"Detected video codec: {codec}")
-        return codec
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
         debug_log("Could not detect video codec, will use re-encoding")
         return ""
+    else:
+        return codec
 
 
 def get_video_properties(video_path: Path) -> dict[str, str]:
@@ -755,8 +791,8 @@ def create_video_chunk(
 
         return Path(temp_path)
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
-        if os.path.exists(temp_path):
-            os.unlink(temp_path)
+        if Path(temp_path).exists():
+            Path(temp_path).unlink()
         debug_log(f"Chunk creation failed: {e}")
         raise ValueError(f"Failed to create video chunk: {e}") from e
 
@@ -789,12 +825,12 @@ def process_video_in_chunks(
         file=sys.stderr,
     )
 
-    detection_times = []
+    detection_times: list[float] = []
     chunk_paths = []
     num_chunks = int((total_duration + chunk_duration - 1) // chunk_duration)  # Ceiling division
     debug_log(f"Will create {num_chunks} chunks")
 
-    chunk_times = []  # Track time per chunk for estimation
+    chunk_times: list[float] = []  # Track time per chunk for estimation
 
     try:
         for chunk_index in range(num_chunks):
@@ -802,7 +838,8 @@ def process_video_in_chunks(
             if INTERRUPTED:
                 debug_log(f"Processing interrupted at chunk {chunk_index + 1}/{num_chunks}")
                 print(
-                    f"Processed {chunk_index}/{num_chunks} chunks before interruption. Found {len(detection_times)} matches.",
+                    f"Processed {chunk_index}/{num_chunks} chunks before interruption. "
+                    f"Found {len(detection_times)} matches.",
                     file=sys.stderr,
                 )
                 break
@@ -830,13 +867,15 @@ def process_video_in_chunks(
                 )
             else:
                 print(
-                    f"Processing chunk {chunk_index + 1}/{num_chunks} ({progress:.1f}%) - {elapsed:.1f}s elapsed...",
+                    f"Processing chunk {chunk_index + 1}/{num_chunks} "
+                    f"({progress:.1f}%) - {elapsed:.1f}s elapsed...",
                     file=sys.stderr,
                 )
 
             # Create chunk
             debug_log(
-                f"Creating chunk for time range {start_time:.1f}s - {start_time + actual_duration:.1f}s"
+                f"Creating chunk for time range "
+                f"{start_time:.1f}s - {start_time + actual_duration:.1f}s"
             )
             chunk_path = create_video_chunk(video_path, start_time, actual_duration, chunk_index)
             chunk_paths.append(chunk_path)
@@ -857,7 +896,9 @@ def process_video_in_chunks(
 
             if adjusted_detections:
                 print(
-                    f"  Found {len(adjusted_detections)} matches in chunk {chunk_index + 1} at times: {[f'{t:.1f}s' for t in adjusted_detections]}",
+                    f"  Found {len(adjusted_detections)} matches in chunk "
+                    f"{chunk_index + 1} at times: "
+                    f"{[f'{t:.1f}s' for t in adjusted_detections]}",
                     file=sys.stderr,
                 )
             else:
@@ -876,7 +917,9 @@ def process_video_in_chunks(
     avg_chunk_time = sum(chunk_times) / len(chunk_times) if chunk_times else 0
 
     print(
-        f"Completed in {total_time / 60:.1f}m ({realtime_factor:.1f}x realtime, {avg_chunk_time:.1f}s/chunk). Found {len(detection_times)} matches.",
+        f"Completed in {total_time / 60:.1f}m "
+        f"({realtime_factor:.1f}x realtime, {avg_chunk_time:.1f}s/chunk). "
+        f"Found {len(detection_times)} matches.",
         file=sys.stderr,
     )
     return detection_times
@@ -998,18 +1041,21 @@ def detect_image_in_video_direct(
         scale_mode = "single-scale" if use_single_scale else "multi-scale"
 
         print(
-            f"Processing {duration_min:.1f} minute video ({props['width']}x{props['height']}, {props['fps']}fps, {props['codec']})",
+            f"Processing {duration_min:.1f} minute video "
+            f"({props['width']}x{props['height']}, {props['fps']}fps, {props['codec']})",
             file=sys.stderr,
         )
         print(
-            f"Using {num_cores} cores, {scale_mode} matching, processing every {frame_skip} frame(s)",
+            f"Using {num_cores} cores, {scale_mode} matching, "
+            f"processing every {frame_skip} frame(s)",
             file=sys.stderr,
         )
 
         # Suggest optimizations if not already enabled
         if frame_skip == 1 and not use_single_scale:
             print(
-                "Tip: Use --frame-skip 5 for ~5x faster processing or --single-scale for ~5x faster matching",
+                "Tip: Use --frame-skip 5 for ~5x faster processing "
+                "or --single-scale for ~5x faster matching",
                 file=sys.stderr,
             )
 
@@ -1057,7 +1103,8 @@ def detect_image_in_video_direct(
                     debug_log(f"Processing interrupted. Processed {processed_frames} frames.")
                     if detection_times:
                         print(
-                            f"Processed {processed_frames}/{total_frames} frames before interruption. Found {len(detection_times)} matches.",
+                            f"Processed {processed_frames}/{total_frames} frames "
+                            f"before interruption. Found {len(detection_times)} matches.",
                             file=sys.stderr,
                         )
                     break
@@ -1078,7 +1125,8 @@ def detect_image_in_video_direct(
                             )
                         else:
                             debug_log(
-                                f"Match found at frame {frame_idx}, timestamp {timestamp:.2f}s, confidence {confidence:.4f}, scale {best_scale:.2f}x"
+                                f"Match found at frame {frame_idx}, timestamp {timestamp:.2f}s, "
+                                f"confidence {confidence:.4f}, scale {best_scale:.2f}x"
                             )
                     elif not is_match and currently_detected:
                         currently_detected = False
@@ -1109,7 +1157,8 @@ def detect_image_in_video_direct(
                     else:
                         print(
                             f"Frame {frame_position}/{total_frames} ({progress:.1f}%) - "
-                            f"{elapsed:.1f}s elapsed, ~{remaining_min}m {remaining_sec}s remaining...",
+                            f"{elapsed:.1f}s elapsed, "
+                            f"~{remaining_min}m {remaining_sec}s remaining...",
                             file=sys.stderr,
                         )
                 else:
@@ -1120,7 +1169,8 @@ def detect_image_in_video_direct(
                         )
                     else:
                         print(
-                            f"Frame {frame_position}/{total_frames} ({progress:.1f}%) - {elapsed:.1f}s elapsed...",
+                            f"Frame {frame_position}/{total_frames} "
+                            f"({progress:.1f}%) - {elapsed:.1f}s elapsed...",
                             file=sys.stderr,
                         )
 
@@ -1141,7 +1191,8 @@ def detect_image_in_video_direct(
                         debug_log(f"Match found at frame {frame_idx}, timestamp {timestamp:.2f}s")
                     else:
                         debug_log(
-                            f"Match found at frame {frame_idx}, timestamp {timestamp:.2f}s, confidence {confidence:.4f}, scale {best_scale:.2f}x"
+                            f"Match found at frame {frame_idx}, timestamp {timestamp:.2f}s, "
+                            f"confidence {confidence:.4f}, scale {best_scale:.2f}x"
                         )
                 elif not is_match and currently_detected:
                     currently_detected = False
@@ -1155,7 +1206,9 @@ def detect_image_in_video_direct(
         frames_per_sec = processed_frames / process_time if process_time > 0 else 0
 
         print(
-            f"Completed in {process_time / 60:.1f}m ({realtime_factor:.1f}x realtime, {frames_per_sec:.1f} frames/s). Found {len(detection_times)} matches.",
+            f"Completed in {process_time / 60:.1f}m "
+            f"({realtime_factor:.1f}x realtime, {frames_per_sec:.1f} frames/s). "
+            f"Found {len(detection_times)} matches.",
             file=sys.stderr,
         )
 
@@ -1208,7 +1261,8 @@ def detect_image_in_video_fast(
 
         video_duration = num_frames / fps
         print(
-            f"Extracted {num_frames} frames ({video_duration / 60:.1f} minutes of video at {fps} fps)",
+            f"Extracted {num_frames} frames "
+            f"({video_duration / 60:.1f} minutes of video at {fps} fps)",
             file=sys.stderr,
         )
 
@@ -1340,7 +1394,7 @@ def main() -> None:
 
         # Parse scales
         try:
-            scales = [float(s.strip()) for s in args.scales.split(",")]
+            scales = parse_scales(args.scales)
             debug_log(f"Using scales: {scales}")
         except ValueError as e:
             print(f"Error parsing scales '{args.scales}': {e}", file=sys.stderr)
