@@ -24,6 +24,10 @@ WHITE_LOW = (0, 0, 230)
 WHITE_HIGH = (180, 40, 255)
 DIGIT_BAND = 0.25
 COUNTER_MARGIN = 0.1
+COUNTER_BANDS = (
+    ((0, 0, 235), (180, 12, 255)),
+    ((0, 0, 225), (180, 16, 255)),
+)
 
 
 @dataclass(frozen=True)
@@ -68,9 +72,13 @@ def _white(region: np.ndarray) -> np.ndarray:
     return np.asarray(cv2.inRange(hsv, WHITE_LOW, WHITE_HIGH))
 
 
-def counter_mask(frame: np.ndarray, rect: Rect) -> np.ndarray:
-    """The white digits of one HUD counter as a binary mask, ready for `read_digits`."""
-    return _white(_crop(frame, rect, COUNTER_MARGIN))
+def counter_masks(frame: np.ndarray, rect: Rect) -> list[np.ndarray]:
+    """One HUD counter's white digits as binary masks, tightest white band first.
+
+    The tight band keeps digits apart from pale sky and cloud; the loose one keeps thin strokes.
+    """
+    hsv = cv2.cvtColor(_crop(frame, rect, COUNTER_MARGIN), cv2.COLOR_BGR2HSV)
+    return [np.asarray(cv2.inRange(hsv, low, high)) for low, high in COUNTER_BANDS]
 
 
 def _digits_right_of_hash(

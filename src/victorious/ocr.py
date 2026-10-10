@@ -8,6 +8,7 @@ independent settings and the digits vote by confidence.
 
 import shutil
 import subprocess
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 
 import cv2
@@ -27,6 +28,7 @@ class _Pass:
 
 
 PASSES = (_Pass(8, 96, True), _Pass(8, 80, True), _Pass(10, 64, False))
+_PASS_POOL = ThreadPoolExecutor(max_workers=len(PASSES))
 
 
 class OcrError(Exception):
@@ -93,9 +95,11 @@ def _recognise(image: np.ndarray, tesseract: str, settings: _Pass) -> tuple[str,
 
 
 def _read_glyph(glyph: np.ndarray, tesseract: str) -> tuple[str, float] | None:
+    def run(settings: _Pass) -> tuple[str, float] | None:
+        return _recognise(_glyph_image(glyph, settings.glyph_height), tesseract, settings)
+
     votes: dict[str, float] = {}
-    for settings in PASSES:
-        reading = _recognise(_glyph_image(glyph, settings.glyph_height), tesseract, settings)
+    for reading in _PASS_POOL.map(run, PASSES):
         if reading is not None:
             votes[reading[0]] = votes.get(reading[0], 0.0) + reading[1]
     if not votes:

@@ -1,17 +1,19 @@
 """Reading the HUD counters and turning their readings into Events."""
 
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from typing import get_args
 
 import numpy as np
 
 from victorious.layout import Layout, Rect
-from victorious.ocr import read_digits
+from victorious.ocr import DigitReading, read_digits
 from victorious.schema import CounterElement, Event
-from victorious.screens import counter_mask
+from victorious.screens import counter_masks
 
 COUNTER_ELEMENTS: tuple[CounterElement, ...] = get_args(CounterElement)
 MIN_COUNTER_CONFIDENCE = 0.05
+RETRY_CONFIDENCE = 0.5
 MAX_COUNTER_DIGITS = 3
 UNREADABLE_SECONDS = 10.0
 REUSE_MISMATCH = 0.04
@@ -52,11 +54,23 @@ def _accept(text: str, confidence: float) -> CounterReading | None:
     return CounterReading(int(text), confidence)
 
 
+def _best_reading(masks: list[np.ndarray]) -> DigitReading | None:
+    best: DigitReading | None = None
+    for mask in masks:
+        reading = read_digits(mask)
+        if reading is not None and (best is None or reading.confidence > best.confidence):
+            best = reading
+        if best is not None and best.confidence >= RETRY_CONFIDENCE:
+            break
+    return best
+
+
 class CounterReader:
     """Reads each counter once per frame, skipping Tesseract when its pixels did not change."""
 
     def __init__(self) -> None:
         self._seen: dict[CounterElement, tuple[np.ndarray, CounterReading | None]] = {}
+        self._pool = ThreadPoolExecutor(max_workers=len(COUNTER_ELEMENTS))
 
     def reset(self) -> None:
         self._seen.clear()
@@ -65,18 +79,23 @@ class CounterReader:
         self, frame: np.ndarray, layout: Layout
     ) -> dict[CounterElement, CounterReading | None]:
         readings: dict[CounterElement, CounterReading | None] = {}
+        fresh: dict[CounterElement, tuple[np.ndarray, list[np.ndarray]]] = {}
         for element in COUNTER_ELEMENTS:
             rect = _rect(layout, element)
             if rect is None:
                 continue
-            mask = counter_mask(frame, rect)
+            masks = counter_masks(frame, rect)
             seen = self._seen.get(element)
-            if seen is not None and _same_pixels(seen[0], mask):
+            if seen is not None and _same_pixels(seen[0], masks[0]):
                 readings[element] = seen[1]
-                continue
-            digits = read_digits(mask)
+            else:
+                fresh[element] = (masks[0], masks)
+        elements = list(fresh)
+        for element, digits in zip(
+            elements, self._pool.map(_best_reading, [fresh[e][1] for e in elements]), strict=True
+        ):
             reading = _accept(digits.text, digits.confidence) if digits is not None else None
-            self._seen[element] = (mask, reading)
+            self._seen[element] = (fresh[element][0], reading)
             readings[element] = reading
         return readings
 
