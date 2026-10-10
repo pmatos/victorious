@@ -4,7 +4,7 @@ import pytest
 from hypothesis import given
 from hypothesis import strategies as st
 
-from main import extract_detection_times, frame_index_to_timestamp, parse_scales
+from victorious.matcher import extract_detection_times, frame_index_to_timestamp, parse_scales
 
 finite_floats = st.floats(allow_nan=False, allow_infinity=False)
 

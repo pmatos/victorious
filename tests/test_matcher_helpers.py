@@ -1,8 +1,8 @@
-"""Unit tests for the pure helpers extracted from main.py."""
+"""Unit tests for the pure helpers of the multi-scale matcher."""
 
 import pytest
 
-from main import extract_detection_times, frame_index_to_timestamp, parse_scales
+from victorious.matcher import extract_detection_times, frame_index_to_timestamp, parse_scales
 
 
 class TestParseScales:

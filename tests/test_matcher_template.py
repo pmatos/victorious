@@ -3,7 +3,7 @@
 import cv2
 import numpy as np
 
-from main import match_template_in_frame, match_template_in_frame_multiscale
+from victorious.matcher import match_template_in_frame, match_template_in_frame_multiscale
 
 
 def make_template() -> np.ndarray:

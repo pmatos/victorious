@@ -3,10 +3,10 @@ revision = 3
 requires-python = ">=3.13"
 resolution-markers = [
     "python_full_version >= '3.15' and sys_platform == 'darwin'",
-    "python_full_version < '3.15' and sys_platform == 'darwin'",
     "python_full_version >= '3.15' and platform_machine == 'aarch64' and sys_platform == 'linux'",
-    "python_full_version < '3.15' and platform_machine == 'aarch64' and sys_platform == 'linux'",
     "(python_full_version >= '3.15' and platform_machine != 'aarch64' and sys_platform == 'linux') or (python_full_version >= '3.15' and sys_platform != 'darwin' and sys_platform != 'linux')",
+    "python_full_version < '3.15' and sys_platform == 'darwin'",
+    "python_full_version < '3.15' and platform_machine == 'aarch64' and sys_platform == 'linux'",
     "(python_full_version < '3.15' and platform_machine != 'aarch64' and sys_platform == 'linux') or (python_full_version < '3.15' and sys_platform != 'darwin' and sys_platform != 'linux')",
 ]
 
@@ -487,7 +487,7 @@ wheels = [
 [[package]]
 name = "victorious"
 version = "0.1.0"
-source = { virtual = "." }
+source = { editable = "." }
 dependencies = [
     { name = "numpy" },
     { name = "opencv-python" },
