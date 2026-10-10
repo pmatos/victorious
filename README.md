@@ -21,7 +21,7 @@ uv run victorious --help
 | Subcommand | Purpose | Status |
 |------------|---------|--------|
 | `setup` | Produce a Layout from a Recording | placeholder |
-| `analyse` | Turn a Recording and a Layout into Matches with Events | working (Matches, Win, final placement) |
+| `analyse` | Turn a Recording and a Layout into Matches with Events | working (Matches, Win, final placement, HUD counters) |
 | `review` | Inspect the Events found in a Recording | placeholder |
 | `schema` | Print the JSON schema of the Analysis output | working |
 
@@ -36,7 +36,14 @@ One Recording is analysed per invocation; JSON goes to stdout unless `-o` is giv
 
 A Match starts when the in-match HUD appears and ends at its results screen; being eliminated, or losing the HUD while spectating, does not end it. A Match still running when the Recording ends is reported with `win: false` and `placement: null`. A results screen whose placement cannot be read also gives `placement: null`. `analyse` refuses a Recording whose aspect ratio differs (beyond 2%) from the Layout's `aspect_ratio`.
 
-The output carries `schema_version` and, per Match, `start`, `end`, `win`, `placement` and its Events (`match_start`, `win`, `final_placement`, `match_end`), each with `time`, `source` and `confidence`.
+The output carries `schema_version` and, per Match, `start`, `end`, `win`, `placement`, `personal_eliminations` and its Events. Every Event has `kind`, `time`, `source`, `confidence`, `value`, `end` and `element`.
+
+- `match_start`, `win`, `final_placement` (`value` is the placement) and `match_end` come from the Match boundaries and the results screen.
+- `personal_eliminations`, `team_eliminations` and `players_left` are HUD counters, read with Tesseract once per sampled second. An Event is emitted only when the value changes, with the new count in `value` and the first second it was read. A value is committed only after it is read in two consecutive readable seconds, so one misread frame never becomes an Event, and the first value read in a Match is a silent baseline, not an Event. A jump of more than one is one Event. Values are never interpolated.
+- `unreadable` marks a counter (`element`) with no usable reading for more than 10 s, from `time` to `end` (a span of exactly 10 s is not reported). It has `confidence: 0` and `value: null`.
+- `Match.personal_eliminations` is the last committed personal eliminations count, or `null` when it was never read or the Layout has no `personal_eliminations` rect. A counter missing from the Layout is not read at all, so it produces neither Events nor `unreadable`.
+
+Counter digits are about 17 px tall at 2560x1440 and Tesseract reads them reliably from 1920x1080 up; at 720p they are unreliable.
 
 ### Layout file
 
