@@ -6,7 +6,7 @@ from pathlib import Path
 
 from victorious.layout import Layout
 from victorious.ocr import find_tesseract
-from victorious.schema import AnalysisOutput, Event, Match, RecordingInfo
+from victorious.schema import AnalysisOutput, Event, EventKind, Match, RecordingInfo
 from victorious.screens import (
     HUD_THRESHOLD,
     RESULTS_THRESHOLD,
@@ -52,75 +52,36 @@ def _vote(readings: list[ResultsReading]) -> tuple[int, float] | None:
     return placement, sum(confidences) / len(confidences)
 
 
+def _event(kind: EventKind, time: float, confidence: float, value: int | None = None) -> Event:
+    return Event(kind=kind, time=time, source="frame", confidence=_clamp(confidence), value=value)
+
+
 def _finish(index: int, match: _OpenMatch) -> Match:
+    start = float(match.start)
+    events = [_event("match_start", start, match.start_confidence)]
     if match.results_start is None:
         end = float(match.last_hud)
-        events = [
-            Event(
-                kind="match_start",
-                time=float(match.start),
-                source="frame",
-                confidence=_clamp(match.start_confidence),
-                value=None,
-            ),
-            Event(kind="match_end", time=end, source="frame", confidence=0.0, value=None),
-        ]
-        return Match(
-            index=index,
-            start=float(match.start),
-            end=end,
-            win=False,
-            placement=None,
-            events=events,
-        )
+        events.append(_event("match_end", end, 0.0))
+        return Match(index=index, start=start, end=end, win=False, placement=None, events=events)
 
     end = float(match.results_start)
     banner = max(reading.banner for reading in match.readings)
     voted = _vote(match.readings)
     if banner >= RESULTS_THRESHOLD:
-        win, placement, placement_confidence = True, 1, _clamp(banner)
+        win, placement, placement_confidence = True, 1, banner
     elif voted is not None:
         placement, placement_confidence = voted
         win = placement == 1
     else:
         win, placement, placement_confidence = False, None, 0.0
 
-    results_confidence = _clamp(max(max(r.banner, r.hash) for r in match.readings))
-    events = [
-        Event(
-            kind="match_start",
-            time=float(match.start),
-            source="frame",
-            confidence=_clamp(match.start_confidence),
-            value=None,
-        )
-    ]
     if win:
-        events.append(
-            Event(
-                kind="win",
-                time=end,
-                source="frame",
-                confidence=_clamp(banner if banner >= RESULTS_THRESHOLD else placement_confidence),
-                value=None,
-            )
-        )
+        events.append(_event("win", end, placement_confidence))
     if placement is not None:
-        events.append(
-            Event(
-                kind="final_placement",
-                time=end,
-                source="frame",
-                confidence=_clamp(placement_confidence),
-                value=placement,
-            )
-        )
-    events.append(
-        Event(kind="match_end", time=end, source="frame", confidence=results_confidence, value=None)
-    )
-    return Match(
-        index=index, start=float(match.start), end=end, win=win, placement=placement, events=events
-    )
+        events.append(_event("final_placement", end, placement_confidence, placement))
+    results_confidence = max(max(r.banner, r.hash) for r in match.readings)
+    events.append(_event("match_end", end, results_confidence))
+    return Match(index=index, start=start, end=end, win=win, placement=placement, events=events)
 
 
 def _wants_digits(current: _OpenMatch | None) -> bool:

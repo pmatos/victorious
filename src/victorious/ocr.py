@@ -77,13 +77,16 @@ def _recognise(image: np.ndarray, tesseract: str, settings: _Pass) -> tuple[str,
         raise OcrError(f"tesseract failed: {result.stderr.decode(errors='replace').strip()}")
     for line in result.stdout.decode(errors="replace").splitlines()[1:]:
         fields = line.split("\t")
-        if len(fields) != 12 or len(fields[11].strip()) != 1:
+        if len(fields) != 12:
+            continue
+        glyph = fields[11].strip()
+        if len(glyph) != 1:
             continue
         try:
             confidence = float(fields[10])
         except ValueError:
             continue
-        digit = LOOKALIKES.get(fields[11].strip(), fields[11].strip())
+        digit = LOOKALIKES.get(glyph, glyph)
         if confidence >= 0 and digit.isdigit():
             return digit, confidence / 100
     return None
