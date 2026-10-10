@@ -37,6 +37,11 @@ class TestParseScales:
         with pytest.raises(ValueError, match="could not convert string to float"):
             parse_scales("0.5,abc,0.7")
 
+    @pytest.mark.parametrize("text", ["nan", "inf", "-inf", "0", "-0.5", "0.5,0", "1e400"])
+    def test_non_finite_or_non_positive_scale_raises_value_error(self, text: str) -> None:
+        with pytest.raises(ValueError, match="scale"):
+            parse_scales(text)
+
 
 class TestFrameIndexToTimestamp:
     def test_zero_frame_is_zero_seconds(self) -> None:
@@ -47,6 +52,11 @@ class TestFrameIndexToTimestamp:
 
     def test_fractional_fps(self) -> None:
         assert frame_index_to_timestamp(3, 1.5) == 2.0
+
+    @pytest.mark.parametrize("fps", [0.0, -30.0, float("nan"), float("inf")])
+    def test_non_positive_or_non_finite_fps_raises_value_error(self, fps: float) -> None:
+        with pytest.raises(ValueError, match="fps"):
+            frame_index_to_timestamp(10, fps)
 
     @pytest.mark.parametrize(
         ("frame_index", "fps", "expected"),

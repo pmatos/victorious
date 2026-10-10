@@ -53,6 +53,13 @@ def test_missing_subcommand_is_a_usage_error() -> None:
     assert result.stdout == ""
 
 
+def test_unknown_top_level_option_is_a_usage_error() -> None:
+    result = run_cli("--bogus", "analyse")
+
+    assert result.returncode == 2
+    assert "--bogus" in result.stderr
+
+
 def test_unknown_subcommand_is_a_usage_error() -> None:
     result = run_cli("frobnicate")
 

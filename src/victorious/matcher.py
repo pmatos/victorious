@@ -4,7 +4,8 @@ Used for reference-image matching such as the Victory Royale banner.
 """
 
 import logging
-from collections.abc import Iterable
+import math
+from collections.abc import Iterable, Sequence
 from pathlib import Path
 
 import cv2
@@ -12,20 +13,29 @@ import numpy as np
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_SCALES = [0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2]
+DEFAULT_SCALES: tuple[float, ...] = (0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2)
 
 
 def parse_scales(scales_str: str) -> list[float]:
     """Parse a comma-separated string of scale factors into a list of floats.
 
     Empty entries (e.g. trailing commas) are ignored. Raises ValueError if a
-    non-empty entry is not a valid float.
+    non-empty entry is not a valid float, or is not finite and greater than zero.
     """
-    return [float(part) for part in scales_str.split(",") if part.strip()]
+    scales = [float(part) for part in scales_str.split(",") if part.strip()]
+    for scale in scales:
+        if not math.isfinite(scale) or scale <= 0:
+            raise ValueError(f"scale must be a finite number greater than zero: {scale}")
+    return scales
 
 
 def frame_index_to_timestamp(frame_index: int, fps: float) -> float:
-    """Convert a zero-based frame index to a timestamp in seconds."""
+    """Convert a zero-based frame index to a timestamp in seconds.
+
+    Raises ValueError if ``fps`` is not a finite number greater than zero.
+    """
+    if not math.isfinite(fps) or fps <= 0:
+        raise ValueError(f"fps must be a finite number greater than zero: {fps}")
     return frame_index / fps
 
 
@@ -62,11 +72,15 @@ def match_template_in_frame_multiscale(
     frame: np.ndarray,
     template: np.ndarray,
     threshold: float,
-    scales: list[float] | None = None,
+    scales: Sequence[float] | None = None,
 ) -> tuple[bool, float, float]:
     """
     Multi-scale template matching.
     Returns: (is_match, best_confidence, best_scale)
+
+    Raises cv2.error if OpenCV rejected every scale that was attempted (for
+    example a colour frame matched against a grayscale template), since that is
+    a misuse rather than a genuine absence of a match.
     """
     if scales is None:
         scales = DEFAULT_SCALES
@@ -76,6 +90,9 @@ def match_template_in_frame_multiscale(
 
     best_confidence = 0.0
     best_scale = 1.0
+    attempted = 0
+    failed = 0
+    last_error: cv2.error | None = None
 
     for scale in scales:
         new_w = int(template_w * scale)
@@ -96,6 +113,7 @@ def match_template_in_frame_multiscale(
             logger.debug("Skipping scale %.2fx - template too small (%dx%d)", scale, new_w, new_h)
             continue
 
+        attempted += 1
         try:
             scaled_template = cv2.resize(template, (new_w, new_h))
 
@@ -116,7 +134,12 @@ def match_template_in_frame_multiscale(
 
         except cv2.error as e:
             logger.debug("OpenCV error at scale %.2fx: %s", scale, e)
+            failed += 1
+            last_error = e
             continue
+
+    if last_error is not None and failed == attempted:
+        raise last_error
 
     is_match = best_confidence >= threshold
     logger.debug(
@@ -127,12 +150,3 @@ def match_template_in_frame_multiscale(
     )
 
     return is_match, best_confidence, best_scale
-
-
-def match_template_in_frame(frame: np.ndarray, template: np.ndarray, threshold: float) -> bool:
-    """
-    Backward compatibility wrapper for single-scale template matching.
-    """
-    result = cv2.matchTemplate(frame, template, cv2.TM_CCOEFF_NORMED)
-    _, max_val, _, _ = cv2.minMaxLoc(result)
-    return max_val >= threshold
