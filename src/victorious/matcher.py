@@ -16,6 +16,11 @@ logger = logging.getLogger(__name__)
 DEFAULT_SCALES: tuple[float, ...] = (0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2)
 
 
+def _require_positive_finite(value: float, name: str) -> None:
+    if not math.isfinite(value) or value <= 0:
+        raise ValueError(f"{name} must be a finite number greater than zero: {value}")
+
+
 def parse_scales(scales_str: str) -> list[float]:
     """Parse a comma-separated string of scale factors into a list of floats.
 
@@ -24,8 +29,7 @@ def parse_scales(scales_str: str) -> list[float]:
     """
     scales = [float(part) for part in scales_str.split(",") if part.strip()]
     for scale in scales:
-        if not math.isfinite(scale) or scale <= 0:
-            raise ValueError(f"scale must be a finite number greater than zero: {scale}")
+        _require_positive_finite(scale, "scale")
     return scales
 
 
@@ -34,8 +38,7 @@ def frame_index_to_timestamp(frame_index: int, fps: float) -> float:
 
     Raises ValueError if ``fps`` is not a finite number greater than zero.
     """
-    if not math.isfinite(fps) or fps <= 0:
-        raise ValueError(f"fps must be a finite number greater than zero: {fps}")
+    _require_positive_finite(fps, "fps")
     return frame_index / fps
 
 
@@ -52,17 +55,13 @@ def extract_detection_times(matches: Iterable[tuple[bool, float]]) -> list[float
     for is_match, timestamp in matches:
         if is_match and not currently_detected:
             detection_times.append(timestamp)
-            currently_detected = True
-        elif not is_match and currently_detected:
-            currently_detected = False
+        currently_detected = is_match
     return detection_times
 
 
 def load_template(image_path: Path, grayscale: bool = False) -> np.ndarray:
-    if grayscale:
-        template = cv2.imread(str(image_path), cv2.IMREAD_GRAYSCALE)
-    else:
-        template = cv2.imread(str(image_path), cv2.IMREAD_COLOR)
+    flag = cv2.IMREAD_GRAYSCALE if grayscale else cv2.IMREAD_COLOR
+    template = cv2.imread(str(image_path), flag)
     if template is None:
         raise ValueError(f"Could not load image: {image_path}")
     return template
@@ -91,8 +90,7 @@ def match_template_in_frame_multiscale(
     best_confidence = 0.0
     best_scale = 1.0
     attempted = 0
-    failed = 0
-    last_error: cv2.error | None = None
+    errors: list[cv2.error] = []
 
     for scale in scales:
         new_w = int(template_w * scale)
@@ -134,12 +132,10 @@ def match_template_in_frame_multiscale(
 
         except cv2.error as e:
             logger.debug("OpenCV error at scale %.2fx: %s", scale, e)
-            failed += 1
-            last_error = e
-            continue
+            errors.append(e)
 
-    if last_error is not None and failed == attempted:
-        raise last_error
+    if errors and len(errors) == attempted:
+        raise errors[-1]
 
     is_match = best_confidence >= threshold
     logger.debug(
