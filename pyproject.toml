@@ -1,13 +1,23 @@
 [project]
 name = "victorious"
 version = "0.1.0"
-description = "Add your description here"
+description = "Find Matches, Wins and speech in long Fortnite gameplay Recordings"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
     "numpy>=2.5.1",
     "opencv-python>=5.0.0.93",
 ]
+
+[project.scripts]
+victorious = "victorious.cli:main"
+
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/victorious"]
 
 [dependency-groups]
 dev = [
@@ -28,7 +38,6 @@ ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-pythonpath = ["."]
 addopts = "-q"
 
 [tool.coverage.run]

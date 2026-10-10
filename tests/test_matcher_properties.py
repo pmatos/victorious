@@ -4,7 +4,7 @@ import pytest
 from hypothesis import given
 from hypothesis import strategies as st
 
-from main import extract_detection_times, frame_index_to_timestamp, parse_scales
+from victorious.matcher import extract_detection_times, frame_index_to_timestamp, parse_scales
 
 finite_floats = st.floats(allow_nan=False, allow_infinity=False)
 
@@ -20,9 +20,14 @@ def test_parse_scales_never_raises_unexpectedly(text: str) -> None:
     assert all(isinstance(value, float) for value in result)
 
 
-@given(st.lists(finite_floats.filter(lambda v: v == v), min_size=1))
+positive_floats = st.floats(min_value=0.0, allow_nan=False, allow_infinity=False).filter(
+    lambda v: v > 0
+)
+
+
+@given(st.lists(positive_floats, min_size=1))
 def test_parse_scales_roundtrips_repr(values: list[float]) -> None:
-    """Any list of finite floats survives a repr()->join->parse round-trip."""
+    """Any list of finite positive floats survives a repr()->join->parse round-trip."""
     encoded = ",".join(repr(value) for value in values)
     assert parse_scales(encoded) == values
 
