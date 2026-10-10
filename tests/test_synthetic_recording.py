@@ -1,7 +1,6 @@
 """Behaviour of the synthetic Recording helper, observed through ffprobe and decoded frames."""
 
 import json
-import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -154,19 +153,17 @@ def sine_clip(path: Path, seconds: float) -> Path:
     return path
 
 
-def silences(path: Path) -> list[tuple[float, float | None]]:
+def loudness(path: Path, start: float, end: float) -> float:
+    rate = 8000
     result = subprocess.run(
-        [
-            FFMPEG, "-v", "info", "-i", str(path), "-af", "silencedetect=noise=-40dB:d=0.3",
-            "-vn", "-f", "null", "-",
-        ],
+        [FFMPEG, "-v", "error", "-i", str(path), "-vn", "-ac", "1", "-ar", str(rate),
+         "-f", "s16le", "-"],
         capture_output=True,
-        text=True,
         check=True,
     )  # fmt: skip
-    starts = [float(m) for m in re.findall(r"silence_start: ([\d.]+)", result.stderr)]
-    ends = [float(m) for m in re.findall(r"silence_end: ([\d.]+)", result.stderr)]
-    return [(s, ends[i] if i < len(ends) else None) for i, s in enumerate(starts)]
+    samples = np.frombuffer(result.stdout, np.int16).astype(np.float64)
+    window = samples[int(start * rate) : int(end * rate)]
+    return float(np.sqrt(np.mean(window**2)))
 
 
 def test_recording_has_requested_duration_and_frame_rate(tmp_path: Path) -> None:
@@ -194,10 +191,9 @@ def test_clip_is_mixed_in_at_requested_offset(tmp_path: Path) -> None:
 
     recording = build_recording(spec, tmp_path / "out.mkv")
 
-    quiet = silences(recording)
-    assert quiet[0][0] == pytest.approx(0.0, abs=0.1)
-    assert quiet[0][1] == pytest.approx(3.0, abs=0.15)
-    assert quiet[1][0] == pytest.approx(5.0, abs=0.15)
+    assert loudness(recording, 0.2, 2.8) < 50
+    assert loudness(recording, 3.2, 4.8) > 1000
+    assert loudness(recording, 5.4, 7.8) < 50
 
 
 def test_results_screen_shows_victory_banner_for_a_win_and_placement_otherwise(
