@@ -9,6 +9,7 @@ import cv2
 import jsonschema
 import pytest
 
+from tests.analyse_helpers import FPS, STEADY, analyse, small
 from tests.cli_runner import run_cli
 from tests.synthetic import (
     Hud,
@@ -28,22 +29,6 @@ from victorious.layout import load_layout
 from victorious.ocr import OcrError
 
 pytestmark = pytest.mark.usefixtures("require_ffmpeg", "require_tesseract")
-
-FPS = 5.0
-STEADY = ((0.0, 0, 0, 99),)
-
-
-def small(duration: float, shots: tuple[Shot, ...]) -> RecordingSpec:
-    return RecordingSpec(duration=duration, shots=shots, fps=FPS, keyframe_interval=2)
-
-
-def analyse(tmp_path: Path, spec: RecordingSpec) -> dict[str, Any]:
-    recording = build_recording(spec, tmp_path / "recording.mkv")
-    layout = write_layout(tmp_path / "layout.yaml")
-    result = run_cli("analyse", str(recording), "--layout", str(layout))
-    assert result.returncode == 0, result.stderr
-    output: dict[str, Any] = json.loads(result.stdout)
-    return output
 
 
 def summary(output: dict[str, Any]) -> list[tuple[float, float, bool, int | None]]:
@@ -357,7 +342,7 @@ def test_layout_for_another_aspect_ratio_is_rejected(tmp_path: Path) -> None:
 
     assert result.returncode == 1
     assert "21:9" in result.stderr
-    assert "1280x720" in result.stderr
+    assert "1920x1080" in result.stderr
     assert result.stdout == ""
 
 
