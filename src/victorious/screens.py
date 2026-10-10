@@ -26,7 +26,6 @@ class ResultsReading:
     banner: float
     hash: float
     digits: DigitReading | None
-    attempted: bool
 
 
 def _crop(frame: np.ndarray, rect: Rect, margin: float) -> np.ndarray:
@@ -61,7 +60,9 @@ def _gold(region: np.ndarray) -> np.ndarray:
 
 def _digits_right_of_hash(mask: np.ndarray, scale: float) -> DigitReading | None:
     template = load_reference("hash", False)
-    size = (round(template.shape[1] * scale), round(template.shape[0] * scale))
+    size = (max(1, int(template.shape[1] * scale)), max(1, int(template.shape[0] * scale)))
+    if size[0] > mask.shape[1] or size[1] > mask.shape[0]:
+        return None
     resized = cv2.resize(template, size, interpolation=cv2.INTER_AREA)
     scores = cv2.matchTemplate(mask, resized, cv2.TM_CCOEFF_NORMED)
     _, _, _, (x, y) = cv2.minMaxLoc(scores)
@@ -77,6 +78,6 @@ def results_reading(frame: np.ndarray, layout: Layout, read_placement: bool) -> 
     placement_region = _crop(frame, layout.screens.results.placement, RESULTS_MARGIN)
     mask = _gold(placement_region)
     hash_score, scale = _score(mask, "hash", False, height)
-    attempted = read_placement and banner < RESULTS_THRESHOLD and hash_score >= RESULTS_THRESHOLD
-    digits = _digits_right_of_hash(mask, scale) if attempted else None
-    return ResultsReading(banner=banner, hash=hash_score, digits=digits, attempted=attempted)
+    wanted = read_placement and banner < RESULTS_THRESHOLD and hash_score >= RESULTS_THRESHOLD
+    digits = _digits_right_of_hash(mask, scale) if wanted else None
+    return ResultsReading(banner=banner, hash=hash_score, digits=digits)

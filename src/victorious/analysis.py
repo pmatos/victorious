@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from victorious.layout import Layout
+from victorious.ocr import find_tesseract
 from victorious.schema import AnalysisOutput, Event, Match, RecordingInfo
 from victorious.screens import (
     HUD_THRESHOLD,
@@ -17,6 +18,7 @@ from victorious.video import probe, sample_frames
 
 PLACEMENT_READINGS_PER_RUN = 5
 MAX_PLACEMENT = 100
+MAX_PLACEMENT_ATTEMPTS = 15
 
 
 def _clamp(value: float) -> float:
@@ -24,11 +26,7 @@ def _clamp(value: float) -> float:
 
 
 def _is_results(reading: ResultsReading) -> bool:
-    if reading.banner >= RESULTS_THRESHOLD:
-        return True
-    if reading.hash < RESULTS_THRESHOLD:
-        return False
-    return reading.digits is not None or not reading.attempted
+    return reading.banner >= RESULTS_THRESHOLD or reading.hash >= RESULTS_THRESHOLD
 
 
 @dataclass
@@ -127,19 +125,21 @@ def _finish(index: int, match: _OpenMatch) -> Match:
 
 def _wants_digits(current: _OpenMatch | None) -> bool:
     if current is None:
-        return True
-    return sum(r.digits is not None for r in current.readings) < PLACEMENT_READINGS_PER_RUN
+        return False
+    read = sum(r.digits is not None for r in current.readings)
+    return read < PLACEMENT_READINGS_PER_RUN and len(current.readings) < MAX_PLACEMENT_ATTEMPTS
 
 
 def analyse(path: Path, layout: Layout) -> AnalysisOutput:
     info = probe(path)
+    layout.require_aspect_ratio(info.width, info.height)
+    find_tesseract()
     matches: list[Match] = []
     current: _OpenMatch | None = None
     in_results = False
     quiet_seen = True
 
     for second, frame in sample_frames(path, info):
-        hud = hud_score(frame, layout)
         reading = results_reading(frame, layout, read_placement=_wants_digits(current))
         if _is_results(reading):
             if current is not None:
@@ -155,6 +155,7 @@ def analyse(path: Path, layout: Layout) -> AnalysisOutput:
                 matches.append(_finish(len(matches), current))
                 current = None
             quiet_seen = False
+        hud = hud_score(frame, layout)
         if hud >= HUD_THRESHOLD:
             if current is not None:
                 current.last_hud = second

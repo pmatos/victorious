@@ -34,7 +34,7 @@ uv run victorious schema -o analysis.schema.json
 
 One Recording is analysed per invocation; JSON goes to stdout unless `-o` is given, and the file is only written when the whole run succeeded. The Recording is sampled once per second, so every time is in whole seconds from the start of the Recording.
 
-A Match starts when the in-match HUD appears and ends at its results screen; being eliminated, or losing the HUD while spectating, does not end it. A Match still running when the Recording ends is reported with `win: false` and `placement: null`.
+A Match starts when the in-match HUD appears and ends at its results screen; being eliminated, or losing the HUD while spectating, does not end it. A Match still running when the Recording ends is reported with `win: false` and `placement: null`. A results screen whose placement cannot be read also gives `placement: null`. `analyse` refuses a Recording whose aspect ratio differs (beyond 2%) from the Layout's `aspect_ratio`.
 
 The output carries `schema_version` and, per Match, `start`, `end`, `win`, `placement` and its Events (`match_start`, `win`, `final_placement`, `match_end`), each with `time`, `source` and `confidence`.
 

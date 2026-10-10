@@ -1,12 +1,13 @@
 import argparse
 import json
 import os
+import secrets
 import sys
-import tempfile
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
+import cv2
 from pydantic import ValidationError
 
 from victorious.analysis import analyse
@@ -62,14 +63,20 @@ def _emit(text: str, output: Path | None) -> None:
     if output is None:
         sys.stdout.write(text)
         return
-    descriptor, temporary = tempfile.mkstemp(dir=output.parent, prefix=f".{output.name}.")
+    temporary = output.parent / f".{output.name}.{secrets.token_hex(4)}"
+    descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o666)
     try:
         with os.fdopen(descriptor, "w") as handle:
             handle.write(text)
-        Path(temporary).replace(output)
+        temporary.replace(output)
     except BaseException:
-        Path(temporary).unlink(missing_ok=True)
+        temporary.unlink(missing_ok=True)
         raise
+
+
+def _require_writable_directory(output: Path | None) -> None:
+    if output is not None and not output.parent.is_dir():
+        raise FileNotFoundError(f"output directory does not exist: {output.parent}")
 
 
 def _run_analyse(args: argparse.Namespace) -> str:
@@ -83,12 +90,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"victorious {args.command}: not implemented yet", file=sys.stderr)
         return 1
     try:
+        _require_writable_directory(args.output)
         if args.command == "schema":
             text = json.dumps(json_schema(), indent=2) + "\n"
         else:
             text = _run_analyse(args)
         _emit(text, args.output)
-    except (LayoutError, RecordingError, OcrError, ValidationError, OSError) as error:
+    except (LayoutError, RecordingError, OcrError, ValidationError, OSError, cv2.error) as error:
         print(f"victorious {args.command}: {error}", file=sys.stderr)
         return 1
     return 0

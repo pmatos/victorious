@@ -15,6 +15,7 @@ import numpy as np
 
 GLYPH_PADDING = 16
 MIN_GLYPH_AREA = 12
+MIN_GLYPH_HEIGHT_RATIO = 0.5
 LOOKALIKES = {"O": "0", "o": "0"}
 
 
@@ -38,7 +39,7 @@ class DigitReading:
     confidence: float  # 0..1, the weakest glyph
 
 
-def _tesseract() -> str:
+def find_tesseract() -> str:
     path = shutil.which("tesseract")
     if path is None:
         raise OcrError("tesseract not found on PATH; install tesseract-ocr")
@@ -52,7 +53,10 @@ def _glyph_boxes(mask: np.ndarray) -> list[tuple[int, int, int, int]]:
         for x, y, w, h, area in (stats[i] for i in range(1, count))
         if area >= MIN_GLYPH_AREA
     ]
-    return sorted(boxes)
+    if not boxes:
+        return []
+    tallest = max(h for _, _, _, h in boxes)
+    return sorted(box for box in boxes if box[3] >= MIN_GLYPH_HEIGHT_RATIO * tallest)
 
 
 def _glyph_image(glyph: np.ndarray, height: int) -> np.ndarray:
@@ -73,11 +77,15 @@ def _recognise(image: np.ndarray, tesseract: str, settings: _Pass) -> tuple[str,
         raise OcrError(f"tesseract failed: {result.stderr.decode(errors='replace').strip()}")
     for line in result.stdout.decode(errors="replace").splitlines()[1:]:
         fields = line.split("\t")
-        if len(fields) != 12 or len(fields[11].strip()) != 1 or float(fields[10]) < 0:
+        if len(fields) != 12 or len(fields[11].strip()) != 1:
+            continue
+        try:
+            confidence = float(fields[10])
+        except ValueError:
             continue
         digit = LOOKALIKES.get(fields[11].strip(), fields[11].strip())
-        if digit.isdigit():
-            return digit, float(fields[10]) / 100
+        if confidence >= 0 and digit.isdigit():
+            return digit, confidence / 100
     return None
 
 
@@ -95,7 +103,9 @@ def _read_glyph(glyph: np.ndarray, tesseract: str) -> tuple[str, float] | None:
 
 def read_digits(mask: np.ndarray) -> DigitReading | None:
     """The digits in `mask` (white glyphs on black), or None when nothing readable is there."""
-    tesseract = _tesseract()
+    if mask.size == 0:
+        return None
+    tesseract = find_tesseract()
     boxes = _glyph_boxes(mask)
     if not boxes:
         return None

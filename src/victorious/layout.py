@@ -4,9 +4,10 @@ import re
 from pathlib import Path
 
 import yaml
-from pydantic import BaseModel, ConfigDict, ValidationError, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
 EPSILON = 1e-9
+ASPECT_RATIO_TOLERANCE = 0.02
 
 
 class LayoutError(Exception):
@@ -18,10 +19,10 @@ class _Model(BaseModel):
 
 
 class Rect(_Model):
-    x: float
-    y: float
-    w: float
-    h: float
+    x: float = Field(allow_inf_nan=False)
+    y: float = Field(allow_inf_nan=False)
+    w: float = Field(allow_inf_nan=False)
+    h: float = Field(allow_inf_nan=False)
 
     @model_validator(mode="after")
     def _inside_the_frame(self) -> "Rect":
@@ -58,6 +59,15 @@ class Layout(_Model):
         if not re.fullmatch(r"[1-9]\d*:[1-9]\d*", value):
             raise ValueError("must look like 16:9")
         return value
+
+    def require_aspect_ratio(self, width: int, height: int) -> None:
+        wide, high = (int(part) for part in self.aspect_ratio.split(":"))
+        expected = wide / high
+        if abs(width / height - expected) > ASPECT_RATIO_TOLERANCE * expected:
+            raise LayoutError(
+                f"Layout is for aspect ratio {self.aspect_ratio} "
+                f"but the Recording is {width}x{height}"
+            )
 
 
 def load_layout(path: Path) -> Layout:

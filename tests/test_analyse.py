@@ -1,9 +1,11 @@
 """Behaviour of `victorious analyse`, observed through its JSON output."""
 
 import json
+import shutil
 from pathlib import Path
 from typing import Any
 
+import cv2
 import jsonschema
 import pytest
 
@@ -19,6 +21,11 @@ from tests.synthetic import (
     match_shots,
     write_layout,
 )
+from victorious import analysis as analysis_module
+from victorious import cli, screens
+from victorious.analysis import analyse as analyse_recording
+from victorious.layout import load_layout
+from victorious.ocr import OcrError
 
 pytestmark = pytest.mark.usefixtures("require_ffmpeg", "require_tesseract")
 
@@ -256,3 +263,84 @@ def test_missing_layout_file_fails_cleanly(tmp_path: Path) -> None:
 
     assert result.returncode == 1
     assert str(missing) in result.stderr
+
+
+def test_results_screens_with_unreadable_digits_still_end_each_match(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(screens, "read_digits", lambda mask: None)
+    shots = (
+        *match_shots(5, STEADY, results_at=25, placement=7),
+        *match_shots(45, STEADY, results_at=70, placement=4),
+    )
+    recording = build_recording(small(80, shots), tmp_path / "recording.mkv")
+    layout = load_layout(write_layout(tmp_path / "layout.yaml"))
+
+    output = analyse_recording(recording, layout)
+
+    assert [(m.start, m.end, m.win, m.placement) for m in output.matches] == [
+        (5.0, 25.0, False, None),
+        (45.0, 70.0, False, None),
+    ]
+
+
+def test_missing_tesseract_fails_before_any_frame_is_decoded(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    recording = build_recording(small(10, ()), tmp_path / "recording.mkv")
+    layout = load_layout(write_layout(tmp_path / "layout.yaml"))
+    real_which = shutil.which
+    monkeypatch.setattr(
+        shutil, "which", lambda name: None if name == "tesseract" else real_which(name)
+    )
+
+    def no_decoding(*args: Any) -> None:
+        raise AssertionError("frames were decoded")
+
+    monkeypatch.setattr(analysis_module, "sample_frames", no_decoding)
+
+    with pytest.raises(OcrError, match="tesseract"):
+        analyse_recording(recording, layout)
+
+
+def test_layout_for_another_aspect_ratio_is_rejected(tmp_path: Path) -> None:
+    recording = build_recording(small(5, ()), tmp_path / "recording.mkv")
+    document = layout_document()
+    document["aspect_ratio"] = "21:9"
+    layout = write_layout(tmp_path / "layout.yaml", document)
+
+    result = run_cli("analyse", str(recording), "--layout", str(layout))
+
+    assert result.returncode == 1
+    assert "21:9" in result.stderr
+    assert "1280x720" in result.stderr
+    assert result.stdout == ""
+
+
+def test_layout_rect_with_nan_is_rejected(tmp_path: Path) -> None:
+    recording = build_recording(small(5, ()), tmp_path / "recording.mkv")
+    document = layout_document()
+    document["screens"]["hud"]["hud_anchor"]["x"] = float("nan")  # type: ignore[index]
+    layout = write_layout(tmp_path / "layout.yaml", document)
+
+    result = run_cli("analyse", str(recording), "--layout", str(layout))
+
+    assert result.returncode == 1
+    assert "hud_anchor" in result.stderr
+    assert "Traceback" not in result.stderr
+
+
+def test_opencv_failure_is_reported_as_a_clean_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    layout = write_layout(tmp_path / "layout.yaml")
+
+    def broken(*args: Any) -> None:
+        raise cv2.error("template larger than image")
+
+    monkeypatch.setattr(cli, "analyse", broken)
+
+    status = cli.main(["analyse", str(tmp_path / "r.mkv"), "--layout", str(layout)])
+
+    assert status == 1
+    assert "victorious analyse:" in capsys.readouterr().err
