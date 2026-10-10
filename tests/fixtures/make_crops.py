@@ -1,36 +1,51 @@
 """Re-cut the committed HUD crops from the author's own Recordings.
 
-Run by hand when a crop needs refreshing; CI never runs it. Sources are local
-and gitignored, so the script prints what it wrote instead of failing silently:
+Run by hand from the repository root when a crop needs refreshing; CI never
+runs it. Sources are local and gitignored; point the script at them with
+VICTORIOUS_HUD_RECORDING (a native 2560x1440 Recording showing the in-match HUD)
+and VICTORIOUS_WIN_RECORDING (one showing the Victory Royale results screen):
 
-    uv run python tests/fixtures/make_crops.py
+    uv run python -m tests.fixtures.make_crops
 """
 
+import os
 import shutil
 import subprocess
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
 import cv2
 import numpy as np
 
+from tests.synthetic.render import (
+    BANNER_CROP_SCALE,
+    DIGIT_HEIGHT_NATIVE,
+    ICON_CENTRE_X,
+    ICON_NATIVE_SIZE,
+    NATIVE_HEIGHT,
+    NATIVE_WIDTH,
+)
+
 FFMPEG = shutil.which("ffmpeg") or "ffmpeg"
 HERE = Path(__file__).parent
 CROPS = HERE / "crops"
 REPO = HERE.parent.parent
 
-HUD_RECORDING = Path("/mnt/windows/Videos/2026-10-09_11-59-53.mkv")
-WIN_RECORDING = REPO / "assets" / "videos" / "test-video-last-minute.mkv"
-
-NATIVE_WIDTH = 2560
-NATIVE_HEIGHT = 1440
+HUD_RECORDING = Path(
+    os.environ.get("VICTORIOUS_HUD_RECORDING", "/mnt/windows/Videos/2026-10-09_11-59-53.mkv")
+)
+WIN_RECORDING = Path(
+    os.environ.get(
+        "VICTORIOUS_WIN_RECORDING", str(REPO / "assets" / "videos" / "test-video-last-minute.mkv")
+    )
+)
 
 COUNTER_NUMBERS_X = (2060, 2178)
-ICON_CENTRE_X = 2199
-ICON_HALF = 18
+ICON_HALF = ICON_NATIVE_SIZE // 2
 ROW_CENTRE_Y = {"personal_eliminations": 61, "team_eliminations": 102, "players_left": 151}
 ROW_HALF_HEIGHT = 17
-DIGIT_HEIGHT = 17
+DIGIT_HEIGHT = DIGIT_HEIGHT_NATIVE
 
 BANNER_BOX = (1105, 110, 1485, 300)
 HASH_BOX = (918, 182, 996, 292)
@@ -120,7 +135,13 @@ def cut_icons() -> dict[str, np.ndarray]:
 def cut_win() -> dict[str, np.ndarray]:
     frame = extract_frame(WIN_RECORDING, BANNER_TIMESTAMP)
     x0, y0, x1, y1 = BANNER_BOX
-    banner = cv2.resize(frame[y0:y1, x0:x1], None, fx=0.25, fy=0.25, interpolation=cv2.INTER_AREA)
+    banner = cv2.resize(
+        frame[y0:y1, x0:x1],
+        None,
+        fx=1 / BANNER_CROP_SCALE,
+        fy=1 / BANNER_CROP_SCALE,
+        interpolation=cv2.INTER_AREA,
+    )
     banner = (banner // 8) * 8
 
     hx0, hy0, hx1, hy1 = HASH_BOX
@@ -139,6 +160,13 @@ def cut_win() -> dict[str, np.ndarray]:
 
 
 def main() -> None:
+    missing = [p for p in (HUD_RECORDING, WIN_RECORDING) if not p.is_file()]
+    if missing:
+        sys.exit(
+            "missing source Recording(s): "
+            + ", ".join(str(p) for p in missing)
+            + "\nset VICTORIOUS_HUD_RECORDING / VICTORIOUS_WIN_RECORDING to local files"
+        )
     CROPS.mkdir(parents=True, exist_ok=True)
     written: dict[str, np.ndarray] = {}
     written.update({f"digit_{c}": g for c, g in cut_digits().items()})

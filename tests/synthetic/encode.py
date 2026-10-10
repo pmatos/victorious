@@ -2,6 +2,7 @@
 
 import shutil
 import subprocess
+import tempfile
 from pathlib import Path
 
 import cv2
@@ -37,6 +38,10 @@ def _timeline(spec: RecordingSpec) -> list[tuple[Scene, int]]:
     return runs
 
 
+def _concat_file(path: Path) -> str:
+    return "file '" + str(path).replace("'", "'\\''") + "'"
+
+
 def _write_frames(spec: RecordingSpec, workdir: Path) -> Path:
     listing = workdir / "frames.txt"
     lines: list[str] = []
@@ -48,11 +53,11 @@ def _write_frames(spec: RecordingSpec, workdir: Path) -> Path:
             image = workdir / f"scene_{index}.png"
             cv2.imwrite(str(image), render_scene(scene, spec.width, spec.height))
             rendered[scene] = image
-        lines.append(f"file '{image}'")
+        lines.append(_concat_file(image))
         lines.append(f"duration {frames / spec.fps!r}")
         last_image = image
     if last_image is not None:
-        lines.append(f"file '{last_image}'")
+        lines.append(_concat_file(last_image))
     listing.write_text("\n".join(lines) + "\n")
     return listing
 
@@ -79,10 +84,8 @@ def _audio_args(spec: RecordingSpec) -> list[str]:
 def build_recording(spec: RecordingSpec, out_path: Path) -> Path:
     """Encode `spec` to `out_path` (mkv) and return it."""
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    workdir = out_path.parent / f".{out_path.stem}-frames"
-    workdir.mkdir(exist_ok=True)
-    try:
-        listing = _write_frames(spec, workdir)
+    with tempfile.TemporaryDirectory(prefix="victorious-frames-") as scratch:
+        listing = _write_frames(spec, Path(scratch))
         keyframes = str(max(1, round(spec.keyframe_interval * spec.fps)))
         command = [
             _ffmpeg(), "-v", "error", "-y",
@@ -97,6 +100,4 @@ def build_recording(spec: RecordingSpec, out_path: Path) -> Path:
         result = subprocess.run(command, capture_output=True, text=True, check=False)
         if result.returncode != 0:
             raise RuntimeError(f"ffmpeg failed ({result.returncode}): {result.stderr.strip()}")
-    finally:
-        shutil.rmtree(workdir, ignore_errors=True)
     return out_path

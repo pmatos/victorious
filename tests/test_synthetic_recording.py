@@ -21,17 +21,20 @@ from tests.synthetic import (
     build_recording,
     match_shots,
 )
+from tests.synthetic.render import (
+    BANNER_CROP_SCALE,
+    CROPS,
+    NATIVE_HEIGHT,
+    NATIVE_WIDTH,
+    render_scene,
+)
 
-pytestmark = pytest.mark.usefixtures("require_ffmpeg")
+needs_ffmpeg = pytest.mark.usefixtures("require_ffmpeg")
 
 FFMPEG = shutil.which("ffmpeg") or "ffmpeg"
 FFPROBE = shutil.which("ffprobe") or "ffprobe"
 TESTS_DIR = Path(__file__).parent
-CROPS = TESTS_DIR / "fixtures" / "crops"
 WIDTH, HEIGHT = 1280, 720
-NATIVE_HEIGHT = 1440
-BANNER_CROP_DOWNSCALE = 4
-NATIVE_WIDTH = 2560
 NATIVE_FPS = 5.0
 
 
@@ -106,7 +109,7 @@ def banner_confidence(frame: np.ndarray) -> float:
     return confidence(
         region(frame, "results_banner", margin=0.2),
         "victory_royale",
-        BANNER_CROP_DOWNSCALE * hud_scale(frame),
+        BANNER_CROP_SCALE * hud_scale(frame),
         color=True,
     )
 
@@ -123,22 +126,21 @@ def placement_digit_scale(frame: np.ndarray) -> float:
 
 def read_digits(frame: np.ndarray, element: str, scale: float | None = None) -> str:
     scale = hud_scale(frame) if scale is None else scale
-    image = region(frame, element, margin=0.5)
-    found = [
-        (_best_x(image, digit, scale), digit)
-        for digit in "0123456789"
-        if confidence(image, f"digit_{digit}", scale) > 0.9
-    ]
+    gray = cv2.cvtColor(region(frame, element, margin=0.5), cv2.COLOR_BGR2GRAY)
+    found: list[tuple[int, str]] = []
+    for digit in "0123456789":
+        template = cv2.resize(
+            load_crop(f"digit_{digit}"), None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA
+        )
+        if template.shape[0] > gray.shape[0] or template.shape[1] > gray.shape[1]:
+            continue
+        scores = cv2.matchTemplate(gray, template, cv2.TM_CCOEFF_NORMED)
+        half_width = max(1, template.shape[1] // 2)
+        while float(scores.max()) > 0.9:
+            x = int(np.unravel_index(int(scores.argmax()), scores.shape)[1])
+            found.append((x, digit))
+            scores[:, max(0, x - half_width) : x + half_width + 1] = -1.0
     return "".join(digit for _, digit in sorted(found))
-
-
-def _best_x(image: np.ndarray, digit: str, scale: float) -> int:
-    template = cv2.resize(
-        load_crop(f"digit_{digit}"), None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA
-    )
-    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-    scores = cv2.matchTemplate(gray, template, cv2.TM_CCOEFF_NORMED)
-    return int(np.unravel_index(int(scores.argmax()), scores.shape)[1])
 
 
 def sine_clip(path: Path, seconds: float) -> Path:
@@ -166,6 +168,7 @@ def loudness(path: Path, start: float, end: float) -> float:
     return float(np.sqrt(np.mean(window**2)))
 
 
+@needs_ffmpeg
 def test_recording_has_requested_duration_and_frame_rate(tmp_path: Path) -> None:
     spec = RecordingSpec(duration=10.0, shots=(Shot(Hud(), 2.0, 8.0),), fps=30.0)
 
@@ -185,6 +188,7 @@ def test_recording_has_requested_duration_and_frame_rate(tmp_path: Path) -> None
     )
 
 
+@needs_ffmpeg
 def test_clip_is_mixed_in_at_requested_offset(tmp_path: Path) -> None:
     clip = sine_clip(tmp_path / "tone.wav", seconds=2.0)
     spec = RecordingSpec(duration=8.0, shots=(), audio=(AudioClip(clip, at=3.0),))
@@ -196,6 +200,7 @@ def test_clip_is_mixed_in_at_requested_offset(tmp_path: Path) -> None:
     assert loudness(recording, 5.4, 7.8) < 50
 
 
+@needs_ffmpeg
 def test_results_screen_shows_victory_banner_for_a_win_and_placement_otherwise(
     tmp_path: Path,
 ) -> None:
@@ -223,11 +228,12 @@ def test_results_screen_shows_victory_banner_for_a_win_and_placement_otherwise(
     assert hash_confidence(lobby) < 0.5
 
 
+@needs_ffmpeg
 def test_hud_counters_show_requested_values_and_none_hides_a_counter(tmp_path: Path) -> None:
     spec = RecordingSpec(
         duration=6.0,
         shots=(
-            Shot(Hud(personal_eliminations=3, team_eliminations=14, players_left=82), 0.0, 3.0),
+            Shot(Hud(personal_eliminations=3, team_eliminations=14, players_left=44), 0.0, 3.0),
             Shot(Hud(personal_eliminations=None, team_eliminations=5, players_left=67), 3.0, 6.0),
         ),
         width=NATIVE_WIDTH,
@@ -240,17 +246,18 @@ def test_hud_counters_show_requested_values_and_none_hides_a_counter(tmp_path: P
     first, second = frame_at(recording, 1.5), frame_at(recording, 4.5)
     assert read_digits(first, "personal_eliminations") == "3"
     assert read_digits(first, "team_eliminations") == "14"
-    assert read_digits(first, "players_left") == "82"
+    assert read_digits(first, "players_left") == "44"
     assert read_digits(second, "personal_eliminations") == ""
     assert read_digits(second, "team_eliminations") == "5"
     assert read_digits(second, "players_left") == "67"
     assert hud_anchor_confidence(second) > 0.8
 
 
+@needs_ffmpeg
 def test_one_match_with_results_screen(tmp_path: Path) -> None:
     shots = match_shots(
         start=5.0,
-        hud_steps=[(0.0, 0, 0, 98), (10.0, 2, 3, 47), (15.0, 2, 4, 25)],
+        hud_steps=[(0.0, 0, 0, 99), (10.0, 2, 3, 47), (15.0, 2, 4, 25)],
         results_at=25.0,
         results_duration=5.0,
         placement=1,
@@ -265,7 +272,7 @@ def test_one_match_with_results_screen(tmp_path: Path) -> None:
     assert hud_anchor_confidence(frame_at(recording, 32.0)) < 0.5
     assert banner_confidence(frame_at(recording, 27.0)) > 0.8
     readings = {t: read_digits(frame_at(recording, t), "players_left") for t in (7.0, 17.0, 22.0)}
-    assert readings == {7.0: "98", 17.0: "47", 22.0: "25"}
+    assert readings == {7.0: "99", 17.0: "47", 22.0: "25"}
     assert hud_anchor_confidence(frame_at(recording, 7.0)) > 0.8
 
 
@@ -282,6 +289,60 @@ def test_one_match_with_results_screen(tmp_path: Path) -> None:
 def test_overlapping_or_out_of_range_shots_are_rejected(shots: tuple[Shot, ...]) -> None:
     with pytest.raises(ValueError, match="shot"):
         RecordingSpec(duration=10.0, shots=shots)
+
+
+def test_duration_must_cover_at_least_one_frame() -> None:
+    with pytest.raises(ValueError, match="no frames"):
+        RecordingSpec(duration=0.01, fps=30.0)
+
+
+def test_audio_clip_must_exist_and_start_inside_the_recording(tmp_path: Path) -> None:
+    clip = tmp_path / "tone.wav"
+    clip.write_bytes(b"")
+
+    with pytest.raises(ValueError, match="after the Recording duration"):
+        RecordingSpec(duration=2.0, audio=(AudioClip(clip, at=5.0),))
+    with pytest.raises(ValueError, match="does not exist"):
+        RecordingSpec(duration=2.0, audio=(AudioClip(tmp_path / "missing.wav"),))
+    with pytest.raises(ValueError, match="finite"):
+        RecordingSpec(duration=2.0, audio=(AudioClip(clip, at=float("inf")),))
+
+
+def test_shots_are_frozen_into_a_tuple() -> None:
+    shots = [Shot(Hud(), 0.0, 2.0)]
+
+    spec = RecordingSpec(duration=4.0, shots=shots)
+    shots.append(Shot(Results(placement=1), 1.0, 3.0))
+
+    assert spec.shots == (Shot(Hud(), 0.0, 2.0),)
+    hash(spec)
+
+
+@pytest.mark.parametrize("size", [(1000, 720), (1440, 1080), (640, 1280), (64, 36)])
+@pytest.mark.parametrize("scene", [Lobby(), Hud(44, 11, 99), Results(placement=1)])
+def test_scenes_render_at_any_frame_size(
+    scene: Lobby | Hud | Results, size: tuple[int, int]
+) -> None:
+    width, height = size
+
+    frame = render_scene(scene, width, height)
+
+    assert frame.shape == (height, width, 3)
+
+
+@needs_ffmpeg
+def test_relative_output_path_and_same_stem_outputs_do_not_collide(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    spec = RecordingSpec(duration=1.0, shots=(Shot(Hud(), 0.0, 1.0),), fps=5.0)
+
+    first = build_recording(spec, Path("it's/out.mkv"))
+    second = build_recording(spec, Path("it's/out.mp4"))
+
+    assert first.is_file()
+    assert second.is_file()
+    assert {p.name for p in Path("it's").iterdir()} == {"out.mkv", "out.mp4"}
 
 
 def test_committed_crops_are_small_and_no_video_is_committed() -> None:

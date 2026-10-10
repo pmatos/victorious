@@ -67,10 +67,17 @@ class RecordingSpec:
     crf: int = 18
 
     def __post_init__(self) -> None:
+        object.__setattr__(self, "shots", tuple(self.shots))
+        object.__setattr__(self, "audio", tuple(self.audio))
         for name in ("duration", "fps", "keyframe_interval"):
             value = getattr(self, name)
             if not isfinite(value) or value <= 0:
                 raise ValueError(f"{name} must be a positive finite number, got {value}")
+        if round(self.duration * self.fps) < 1:
+            raise ValueError(
+                f"duration {self.duration}s at {self.fps} fps yields no frames; "
+                "make it at least one frame long"
+            )
         if self.width <= 0 or self.height <= 0 or self.width % 2 or self.height % 2:
             raise ValueError(
                 f"width and height must be positive and even, got {self.width}x{self.height}"
@@ -86,8 +93,17 @@ class RecordingSpec:
                 raise ValueError(f"{label}: ends after the Recording duration {self.duration}")
             previous_end = shot.end
         for clip in self.audio:
-            if clip.at < 0 or not isfinite(clip.at):
-                raise ValueError(f"audio clip {clip.path.name}: offset must be non-negative")
+            if not isfinite(clip.at) or clip.at < 0:
+                raise ValueError(
+                    f"audio clip {clip.path.name}: offset must be finite and non-negative"
+                )
+            if clip.at >= self.duration:
+                raise ValueError(
+                    f"audio clip {clip.path.name}: starts at {clip.at}s, "
+                    f"after the Recording duration {self.duration}"
+                )
+            if not clip.path.is_file():
+                raise ValueError(f"audio clip {clip.path}: file does not exist")
 
 
 def match_shots(
