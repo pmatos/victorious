@@ -53,9 +53,10 @@ screens:
   results:
     results_banner: {x: 0.432, y: 0.076, w: 0.148, h: 0.132}
     placement: {x: 0.359, y: 0.104, w: 0.109, h: 0.097}
+    elimination_placement: {x: 0.504, y: 0.104, w: 0.125, h: 0.111}
 ```
 
-`hud_anchor` must cover the three icons (skull, squad, person) stacked in the HUD column; `results_banner` and `placement` locate the Victory Royale banner and the `#N` placement. The three counters are optional and read by later tickets.
+`hud_anchor` must cover the three icons (skull, squad, person) stacked in the HUD column; `results_banner` and `placement` locate the Victory Royale banner (blue or orange) and the gold `#N` that goes with it. `elimination_placement`, which is optional, locates the white `YOU PLACED #N` shown when the player is eliminated; it is centred on the frame, so it spans the whole width the `#` can land in. Without it, only Wins end a Match. The three counters are optional and read by later tickets.
 
 See [GLOSSARY.md](GLOSSARY.md) for the terms used above and [docs/adr](docs/adr) for design decisions.
 

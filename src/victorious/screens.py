@@ -1,5 +1,6 @@
 """Pure per-frame detection of the in-match HUD and the results screen."""
 
+from collections.abc import Callable
 from dataclasses import dataclass
 
 import cv2
@@ -13,11 +14,14 @@ from victorious.references import load_reference, reference_scale
 HUD_THRESHOLD = 0.7
 RESULTS_THRESHOLD = 0.7
 ICON_NAMES = ("icon_skull", "icon_squad", "icon_person")
+BANNER_NAMES = ("victory_royale", "victory_royale_orange")
 SCALE_SWEEP = (0.9, 1.0, 1.1)
 ANCHOR_MARGIN = 0.1
 RESULTS_MARGIN = 0.2
 GOLD_LOW = (15, 90, 200)
 GOLD_HIGH = (35, 255, 255)
+WHITE_LOW = (0, 0, 230)
+WHITE_HIGH = (180, 40, 255)
 DIGIT_BAND = 0.25
 
 
@@ -58,8 +62,14 @@ def _gold(region: np.ndarray) -> np.ndarray:
     return np.asarray(cv2.inRange(hsv, GOLD_LOW, GOLD_HIGH))
 
 
-def _digits_right_of_hash(mask: np.ndarray, scale: float) -> DigitReading | None:
-    template = load_reference("hash", False)
+def _white(region: np.ndarray) -> np.ndarray:
+    hsv = cv2.cvtColor(region, cv2.COLOR_BGR2HSV)
+    return np.asarray(cv2.inRange(hsv, WHITE_LOW, WHITE_HIGH))
+
+
+def _digits_right_of_hash(
+    mask: np.ndarray, template: np.ndarray, scale: float
+) -> DigitReading | None:
     size = (max(1, int(template.shape[1] * scale)), max(1, int(template.shape[0] * scale)))
     if size[0] > mask.shape[1] or size[1] > mask.shape[0]:
         return None
@@ -70,14 +80,36 @@ def _digits_right_of_hash(mask: np.ndarray, scale: float) -> DigitReading | None
     return read_digits(mask[max(0, y - band) : y + size[1] + band, x + size[0] :])
 
 
+@dataclass(frozen=True)
+class _HashStyle:
+    template: str
+    rect: Callable[[Layout], Rect | None]
+    mask: Callable[[np.ndarray], np.ndarray]
+
+
+HASH_STYLES = (
+    _HashStyle("hash", lambda layout: layout.screens.results.placement, _gold),
+    _HashStyle("hash_white", lambda layout: layout.screens.results.elimination_placement, _white),
+)
+
+
 def results_reading(frame: np.ndarray, layout: Layout, read_placement: bool) -> ResultsReading:
     """The Victory Royale banner and "#" scores, and the placement digits when asked for."""
     height = frame.shape[0]
     banner_region = _crop(frame, layout.screens.results.results_banner, RESULTS_MARGIN)
-    banner, _ = _score(banner_region, "victory_royale", True, height)
-    placement_region = _crop(frame, layout.screens.results.placement, RESULTS_MARGIN)
-    mask = _gold(placement_region)
-    hash_score, scale = _score(mask, "hash", False, height)
+    banner = max(_score(banner_region, name, True, height)[0] for name in BANNER_NAMES)
+    best: tuple[float, np.ndarray, float, str] | None = None
+    for style in HASH_STYLES:
+        rect = style.rect(layout)
+        if rect is None:
+            continue
+        mask = style.mask(_crop(frame, rect, RESULTS_MARGIN))
+        score, scale = _score(mask, style.template, False, height)
+        if best is None or score > best[0]:
+            best = (score, mask, scale, style.template)
+    if best is None:
+        return ResultsReading(banner=banner, hash=0.0, digits=None)
+    hash_score, mask, scale, template = best
     wanted = read_placement and banner < RESULTS_THRESHOLD and hash_score >= RESULTS_THRESHOLD
-    digits = _digits_right_of_hash(mask, scale) if wanted else None
+    digits = _digits_right_of_hash(mask, load_reference(template, False), scale) if wanted else None
     return ResultsReading(banner=banner, hash=hash_score, digits=digits)

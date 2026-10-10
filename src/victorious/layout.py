@@ -42,6 +42,7 @@ class HudScreen(_Model):
 class ResultsScreen(_Model):
     results_banner: Rect
     placement: Rect
+    elimination_placement: Rect | None = None
 
 
 class Screens(_Model):

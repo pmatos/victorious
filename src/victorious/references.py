@@ -9,7 +9,7 @@ import numpy as np
 NATIVE_HEIGHT = 1440
 BANNER_CROP_SCALE = 4.0
 
-_CROP_SCALE = {"victory_royale": BANNER_CROP_SCALE}
+_CROP_SCALE = {"victory_royale": BANNER_CROP_SCALE, "victory_royale_orange": BANNER_CROP_SCALE}
 
 
 @cache

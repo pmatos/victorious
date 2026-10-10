@@ -4,6 +4,9 @@ from collections.abc import Sequence
 from dataclasses import dataclass, fields
 from math import isfinite
 from pathlib import Path
+from typing import Literal
+
+ResultsStyle = Literal["classic", "orange", "placed"]
 
 
 @dataclass(frozen=True)
@@ -28,13 +31,20 @@ class Hud:
 
 @dataclass(frozen=True)
 class Results:
-    """The results screen; placement 1 is a Win and carries the Victory Royale banner."""
+    """The results screen; placement 1 is a Win and carries the Victory Royale banner.
+
+    `style` is "classic" (blue banner, gold "#N"), "orange" (the orange banner skin, a Win)
+    or "placed" (white "YOU PLACED #N" shown once eliminated).
+    """
 
     placement: int
+    style: ResultsStyle = "classic"
 
     def __post_init__(self) -> None:
         if not 1 <= self.placement <= 100:
             raise ValueError(f"placement must be between 1 and 100, got {self.placement}")
+        if self.style == "orange" and self.placement != 1:
+            raise ValueError("the orange banner is a Win, so its placement must be 1")
 
 
 Scene = Lobby | Hud | Results
@@ -112,6 +122,7 @@ def match_shots(
     results_at: float,
     results_duration: float = 5.0,
     placement: int = 1,
+    results_style: ResultsStyle = "classic",
 ) -> tuple[Shot, ...]:
     """Expand counter steps into consecutive HUD shots followed by one results shot.
 
@@ -125,5 +136,5 @@ def match_shots(
         Shot(Hud(personal, team, left), boundaries[i], boundaries[i + 1])
         for i, (_, personal, team, left) in enumerate(hud_steps)
     ]
-    shots.append(Shot(Results(placement), results_at, results_at + results_duration))
+    shots.append(Shot(Results(placement, results_style), results_at, results_at + results_duration))
     return tuple(shots)

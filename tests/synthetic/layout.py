@@ -7,7 +7,7 @@ import yaml
 from tests.synthetic.render import ELEMENT_RECTS
 
 HUD_ELEMENTS = ("hud_anchor", "personal_eliminations", "team_eliminations", "players_left")
-RESULTS_ELEMENTS = ("results_banner", "placement")
+RESULTS_ELEMENTS = ("results_banner", "placement", "elimination_placement")
 
 
 def _rect(name: str) -> dict[str, float]:

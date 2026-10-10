@@ -65,6 +65,50 @@ def test_two_matches_one_win_one_loss(tmp_path: Path, size: tuple[int, int]) -> 
     assert summary(output) == [(5.0, 25.0, True, 1), (45.0, 70.0, False, 7)]
 
 
+def test_eliminated_results_screens_end_each_match_and_give_the_placement(tmp_path: Path) -> None:
+    shots = (
+        *match_shots(5, STEADY, results_at=25, placement=2, results_style="placed"),
+        *match_shots(45, STEADY, results_at=70, placement=13, results_style="placed"),
+        *match_shots(90, STEADY, results_at=110, placement=1),
+    )
+
+    output = analyse(tmp_path, small(120, shots))
+
+    assert summary(output) == [
+        (5.0, 25.0, False, 2),
+        (45.0, 70.0, False, 13),
+        (90.0, 110.0, True, 1),
+    ]
+
+
+def test_orange_victory_royale_banner_is_a_win(tmp_path: Path) -> None:
+    shots = (
+        *match_shots(5, STEADY, results_at=25, placement=1, results_style="orange"),
+        *match_shots(45, STEADY, results_at=70, placement=5),
+    )
+
+    output = analyse(tmp_path, small(80, shots))
+
+    assert summary(output) == [(5.0, 25.0, True, 1), (45.0, 70.0, False, 5)]
+    assert "win" in [event["kind"] for event in output["matches"][0]["events"]]
+
+
+def test_layout_without_an_elimination_placement_still_reads_classic_results(
+    tmp_path: Path,
+) -> None:
+    document = layout_document()
+    document["screens"]["results"].pop("elimination_placement")  # type: ignore[index]
+    recording = build_recording(
+        small(80, (*match_shots(5, STEADY, results_at=25, placement=7),)), tmp_path / "r.mkv"
+    )
+    layout = write_layout(tmp_path / "layout.yaml", document)
+
+    result = run_cli("analyse", str(recording), "--layout", str(layout))
+
+    assert result.returncode == 0, result.stderr
+    assert summary(json.loads(result.stdout)) == [(5.0, 25.0, False, 7)]
+
+
 def test_match_without_a_hud_for_a_while_is_still_one_match(tmp_path: Path) -> None:
     shots = (
         Shot(Hud(), 5, 15),
