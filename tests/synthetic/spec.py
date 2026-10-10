@@ -1,7 +1,7 @@
 """Declarative description of what is on screen when in a synthetic Recording."""
 
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from math import isfinite
 from pathlib import Path
 
@@ -20,10 +20,10 @@ class Hud:
     players_left: int | None = 100
 
     def __post_init__(self) -> None:
-        for name in ("personal_eliminations", "team_eliminations", "players_left"):
-            value = getattr(self, name)
+        for counter in fields(self):
+            value = getattr(self, counter.name)
             if value is not None and not 0 <= value <= 999:
-                raise ValueError(f"{name} must be between 0 and 999, got {value}")
+                raise ValueError(f"{counter.name} must be between 0 and 999, got {value}")
 
 
 @dataclass(frozen=True)

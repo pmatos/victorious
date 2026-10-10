@@ -9,8 +9,6 @@ and VICTORIOUS_WIN_RECORDING (one showing the Victory Royale results screen):
 """
 
 import os
-import shutil
-import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -18,16 +16,18 @@ from pathlib import Path
 import cv2
 import numpy as np
 
+from tests.synthetic.encode import decode_frame
 from tests.synthetic.render import (
     BANNER_CROP_SCALE,
     DIGIT_HEIGHT_NATIVE,
     ICON_CENTRE_X,
     ICON_NATIVE_SIZE,
+    ICONS,
     NATIVE_HEIGHT,
+    NATIVE_RECTS,
     NATIVE_WIDTH,
 )
 
-FFMPEG = shutil.which("ffmpeg") or "ffmpeg"
 HERE = Path(__file__).parent
 CROPS = HERE / "crops"
 REPO = HERE.parent.parent
@@ -43,11 +43,8 @@ WIN_RECORDING = Path(
 
 COUNTER_NUMBERS_X = (2060, 2178)
 ICON_HALF = ICON_NATIVE_SIZE // 2
-ROW_CENTRE_Y = {"personal_eliminations": 61, "team_eliminations": 102, "players_left": 151}
 ROW_HALF_HEIGHT = 17
-DIGIT_HEIGHT = DIGIT_HEIGHT_NATIVE
 
-BANNER_BOX = (1105, 110, 1485, 300)
 HASH_BOX = (918, 182, 996, 292)
 
 
@@ -74,22 +71,18 @@ BANNER_TIMESTAMP = 38
 
 
 def extract_frame(video: Path, timestamp: float) -> np.ndarray:
-    result = subprocess.run(
-        [
-            FFMPEG, "-v", "error", "-ss", str(timestamp), "-i", str(video),
-            "-frames:v", "1", "-f", "image2pipe", "-vcodec", "png", "-",
-        ],
-        capture_output=True,
-        check=True,
-    )  # fmt: skip
-    frame = cv2.imdecode(np.frombuffer(result.stdout, np.uint8), cv2.IMREAD_COLOR)
-    assert frame is not None
+    frame = decode_frame(video, timestamp)
     assert frame.shape[:2] == (NATIVE_HEIGHT, NATIVE_WIDTH)
-    return np.asarray(frame)
+    return frame
+
+
+def row_centre_y(row: str) -> int:
+    _, y, _, h = NATIVE_RECTS[row]
+    return y + h // 2
 
 
 def row_glyphs(frame: np.ndarray, row: str, text: str) -> list[np.ndarray]:
-    cy = ROW_CENTRE_Y[row]
+    cy = row_centre_y(row)
     x0, x1 = COUNTER_NUMBERS_X
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
     strip = gray[cy - ROW_HALF_HEIGHT : cy + ROW_HALF_HEIGHT, x0:x1]
@@ -105,7 +98,10 @@ def row_glyphs(frame: np.ndarray, row: str, text: str) -> list[np.ndarray]:
     bottom = max(b[1] + b[3] for b in boxes)
     soft = np.clip((strip.astype(np.float32) - 90.0) / 150.0, 0.0, 1.0)
     glyphs = [(soft[top:bottom, x : x + w] * 255).astype(np.uint8) for x, _, w, _ in boxes]
-    return [cv2.resize(g, (g.shape[1], DIGIT_HEIGHT), interpolation=cv2.INTER_AREA) for g in glyphs]
+    return [
+        cv2.resize(g, (g.shape[1], DIGIT_HEIGHT_NATIVE), interpolation=cv2.INTER_AREA)
+        for g in glyphs
+    ]
 
 
 def cut_digits() -> dict[str, np.ndarray]:
@@ -122,21 +118,20 @@ def cut_digits() -> dict[str, np.ndarray]:
 
 def cut_icons() -> dict[str, np.ndarray]:
     frame = extract_frame(HUD_RECORDING, ICON_SOURCE_TIMESTAMP)
-    names = {"personal_eliminations": "icon_skull", "team_eliminations": "icon_squad",
-             "players_left": "icon_person"}  # fmt: skip
-    return {
-        names[row]: frame[
+    icons: dict[str, np.ndarray] = {}
+    for icon, row in ICONS.items():
+        cy = row_centre_y(row)
+        icons[icon] = frame[
             cy - ICON_HALF : cy + ICON_HALF, ICON_CENTRE_X - ICON_HALF : ICON_CENTRE_X + ICON_HALF
         ]
-        for row, cy in ROW_CENTRE_Y.items()
-    }
+    return icons
 
 
 def cut_win() -> dict[str, np.ndarray]:
     frame = extract_frame(WIN_RECORDING, BANNER_TIMESTAMP)
-    x0, y0, x1, y1 = BANNER_BOX
+    x, y, w, h = NATIVE_RECTS["results_banner"]
     banner = cv2.resize(
-        frame[y0:y1, x0:x1],
+        frame[y : y + h, x : x + w],
         None,
         fx=1 / BANNER_CROP_SCALE,
         fy=1 / BANNER_CROP_SCALE,
@@ -168,10 +163,11 @@ def main() -> None:
             + "\nset VICTORIOUS_HUD_RECORDING / VICTORIOUS_WIN_RECORDING to local files"
         )
     CROPS.mkdir(parents=True, exist_ok=True)
-    written: dict[str, np.ndarray] = {}
-    written.update({f"digit_{c}": g for c, g in cut_digits().items()})
-    written.update(cut_icons())
-    written.update(cut_win())
+    written = {
+        **{f"digit_{c}": g for c, g in cut_digits().items()},
+        **cut_icons(),
+        **cut_win(),
+    }
     for name, image in written.items():
         path = CROPS / f"{name}.png"
         cv2.imwrite(str(path), image, [cv2.IMWRITE_PNG_COMPRESSION, 9])

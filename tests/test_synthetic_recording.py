@@ -19,6 +19,7 @@ from tests.synthetic import (
     Results,
     Shot,
     build_recording,
+    decode_frame,
     match_shots,
 )
 from tests.synthetic.render import (
@@ -26,6 +27,7 @@ from tests.synthetic.render import (
     CROPS,
     NATIVE_HEIGHT,
     NATIVE_WIDTH,
+    load_crop,
     render_scene,
 )
 
@@ -52,20 +54,6 @@ def ffprobe(path: Path) -> dict[str, Any]:
     return info
 
 
-def frame_at(path: Path, seconds: float) -> np.ndarray:
-    result = subprocess.run(
-        [
-            FFMPEG, "-v", "error", "-ss", str(seconds), "-i", str(path),
-            "-frames:v", "1", "-f", "image2pipe", "-vcodec", "png", "-",
-        ],
-        capture_output=True,
-        check=True,
-    )  # fmt: skip
-    frame = cv2.imdecode(np.frombuffer(result.stdout, np.uint8), cv2.IMREAD_COLOR)
-    assert frame is not None
-    return frame
-
-
 def region(frame: np.ndarray, element: str, margin: float = 0.0) -> np.ndarray:
     x, y, w, h = ELEMENT_RECTS[element]
     height, width = frame.shape[:2]
@@ -73,13 +61,6 @@ def region(frame: np.ndarray, element: str, margin: float = 0.0) -> np.ndarray:
     x0, x1 = int(x * width - pad_x), int((x + w) * width + pad_x)
     y0, y1 = int(y * height - pad_y), int((y + h) * height + pad_y)
     return frame[max(y0, 0) : y1, max(x0, 0) : x1]
-
-
-def load_crop(name: str, color: bool = False) -> np.ndarray:
-    flag = cv2.IMREAD_COLOR if color else cv2.IMREAD_GRAYSCALE
-    image = cv2.imread(str(CROPS / f"{name}.png"), flag)
-    assert image is not None
-    return image
 
 
 def hud_scale(frame: np.ndarray) -> float:
@@ -218,7 +199,7 @@ def test_results_screen_shows_victory_banner_for_a_win_and_placement_otherwise(
 
     recording = build_recording(spec, tmp_path / "out.mkv")
 
-    lobby, hud, win, placed = (frame_at(recording, t) for t in (1.0, 3.0, 5.0, 7.0))
+    lobby, hud, win, placed = (decode_frame(recording, t) for t in (1.0, 3.0, 5.0, 7.0))
     assert banner_confidence(win) > 0.8
     for frame in (lobby, hud, placed):
         assert banner_confidence(frame) < 0.5
@@ -243,7 +224,7 @@ def test_hud_counters_show_requested_values_and_none_hides_a_counter(tmp_path: P
 
     recording = build_recording(spec, tmp_path / "out.mkv")
 
-    first, second = frame_at(recording, 1.5), frame_at(recording, 4.5)
+    first, second = decode_frame(recording, 1.5), decode_frame(recording, 4.5)
     assert read_digits(first, "personal_eliminations") == "3"
     assert read_digits(first, "team_eliminations") == "14"
     assert read_digits(first, "players_left") == "44"
@@ -268,12 +249,14 @@ def test_one_match_with_results_screen(tmp_path: Path) -> None:
 
     recording = build_recording(spec, tmp_path / "out.mkv")
 
-    assert hud_anchor_confidence(frame_at(recording, 2.0)) < 0.5
-    assert hud_anchor_confidence(frame_at(recording, 32.0)) < 0.5
-    assert banner_confidence(frame_at(recording, 27.0)) > 0.8
-    readings = {t: read_digits(frame_at(recording, t), "players_left") for t in (7.0, 17.0, 22.0)}
+    assert hud_anchor_confidence(decode_frame(recording, 2.0)) < 0.5
+    assert hud_anchor_confidence(decode_frame(recording, 32.0)) < 0.5
+    assert banner_confidence(decode_frame(recording, 27.0)) > 0.8
+    readings = {
+        t: read_digits(decode_frame(recording, t), "players_left") for t in (7.0, 17.0, 22.0)
+    }
     assert readings == {7.0: "99", 17.0: "47", 22.0: "25"}
-    assert hud_anchor_confidence(frame_at(recording, 7.0)) > 0.8
+    assert hud_anchor_confidence(decode_frame(recording, 7.0)) > 0.8
 
 
 @pytest.mark.parametrize(

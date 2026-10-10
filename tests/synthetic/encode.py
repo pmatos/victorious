@@ -6,6 +6,7 @@ import tempfile
 from pathlib import Path
 
 import cv2
+import numpy as np
 
 from tests.synthetic.render import render_scene
 from tests.synthetic.spec import Lobby, RecordingSpec, Scene
@@ -101,3 +102,19 @@ def build_recording(spec: RecordingSpec, out_path: Path) -> Path:
         if result.returncode != 0:
             raise RuntimeError(f"ffmpeg failed ({result.returncode}): {result.stderr.strip()}")
     return out_path
+
+
+def decode_frame(path: Path, seconds: float) -> np.ndarray:
+    """The BGR frame ffmpeg decodes from `path` at `seconds`."""
+    result = subprocess.run(
+        [
+            _ffmpeg(), "-v", "error", "-ss", str(seconds), "-i", str(path),
+            "-frames:v", "1", "-f", "image2pipe", "-vcodec", "png", "-",
+        ],
+        capture_output=True,
+        check=True,
+    )  # fmt: skip
+    frame = cv2.imdecode(np.frombuffer(result.stdout, np.uint8), cv2.IMREAD_COLOR)
+    if frame is None:
+        raise RuntimeError(f"no frame decoded from {path} at {seconds}s")
+    return np.asarray(frame)
