@@ -170,12 +170,12 @@ def test_two_recordings_in_one_invocation_is_a_usage_error(tmp_path: Path) -> No
 
 
 def test_placements_with_repeated_and_similar_digits_are_read(tmp_path: Path) -> None:
-    placements = [2, 11, 23, 58, 100, 7]
+    placements = [2, 11, 23, 40, 58, 69, 94, 100, 7]
     shots: list[Shot] = []
     for index, placement in enumerate(placements):
-        start = 5 + index * 20
-        shots += match_shots(start, STEADY, results_at=start + 8, placement=placement)
-    spec = small(5 + len(placements) * 20, tuple(shots))
+        start = 5 + index * 12
+        shots += match_shots(start, STEADY, results_at=start + 4, placement=placement)
+    spec = small(5 + len(placements) * 12, tuple(shots))
 
     output = analyse(tmp_path, spec)
 

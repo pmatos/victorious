@@ -1,7 +1,9 @@
 """Reading digits from a binary mask with Tesseract, one glyph at a time.
 
 Line mode confuses adjacent identical digits (11 reads as 1), so each connected
-component is recognised on its own.
+component is recognised on its own. Tesseract's fast models drop some glyphs
+(a 0 under a digit whitelist, a 4 at one size), so every glyph is read with a few
+independent settings and the digits vote by confidence.
 """
 
 import shutil
@@ -11,9 +13,19 @@ from dataclasses import dataclass
 import cv2
 import numpy as np
 
-GLYPH_HEIGHT = 48
 GLYPH_PADDING = 16
 MIN_GLYPH_AREA = 12
+LOOKALIKES = {"O": "0", "o": "0"}
+
+
+@dataclass(frozen=True)
+class _Pass:
+    page_segmentation_mode: int
+    glyph_height: int
+    whitelist: bool
+
+
+PASSES = (_Pass(8, 96, True), _Pass(8, 80, True), _Pass(10, 64, False))
 
 
 class OcrError(Exception):
@@ -33,50 +45,64 @@ def _tesseract() -> str:
     return path
 
 
-def _glyph_images(mask: np.ndarray) -> list[np.ndarray]:
+def _glyph_boxes(mask: np.ndarray) -> list[tuple[int, int, int, int]]:
     count, _, stats, _ = cv2.connectedComponentsWithStats(mask, connectivity=8)
-    boxes = [tuple(int(v) for v in stats[i]) for i in range(1, count)]
-    boxes = [b for b in boxes if b[4] >= MIN_GLYPH_AREA]
-    images: list[np.ndarray] = []
-    for x, y, w, h, _ in sorted(boxes):
-        glyph = mask[y : y + h, x : x + w]
-        scale = GLYPH_HEIGHT / h
-        glyph = cv2.resize(
-            glyph, (max(1, round(w * scale)), GLYPH_HEIGHT), interpolation=cv2.INTER_CUBIC
-        )
-        glyph = cv2.copyMakeBorder(
-            255 - glyph, *(GLYPH_PADDING,) * 4, cv2.BORDER_CONSTANT, value=255
-        )
-        images.append(glyph)
-    return images
+    boxes = [
+        (int(x), int(y), int(w), int(h))
+        for x, y, w, h, area in (stats[i] for i in range(1, count))
+        if area >= MIN_GLYPH_AREA
+    ]
+    return sorted(boxes)
 
 
-def _read_glyph(image: np.ndarray, tesseract: str) -> tuple[str, float] | None:
+def _glyph_image(glyph: np.ndarray, height: int) -> np.ndarray:
+    scale = height / glyph.shape[0]
+    resized = cv2.resize(
+        glyph, (max(1, round(glyph.shape[1] * scale)), height), interpolation=cv2.INTER_CUBIC
+    )
+    return cv2.copyMakeBorder(255 - resized, *(GLYPH_PADDING,) * 4, cv2.BORDER_CONSTANT, value=255)
+
+
+def _recognise(image: np.ndarray, tesseract: str, settings: _Pass) -> tuple[str, float] | None:
     encoded = cv2.imencode(".png", image)[1].tobytes()
-    command = [
-        tesseract, "stdin", "stdout", "--psm", "10",
-        "-c", "tessedit_char_whitelist=0123456789", "tsv",
-    ]  # fmt: skip
-    result = subprocess.run(command, input=encoded, capture_output=True, check=False)
+    command = [tesseract, "stdin", "stdout", "--psm", str(settings.page_segmentation_mode)]
+    if settings.whitelist:
+        command += ["-c", "tessedit_char_whitelist=0123456789"]
+    result = subprocess.run([*command, "tsv"], input=encoded, capture_output=True, check=False)
     if result.returncode != 0:
         raise OcrError(f"tesseract failed: {result.stderr.decode(errors='replace').strip()}")
     for line in result.stdout.decode(errors="replace").splitlines()[1:]:
         fields = line.split("\t")
-        if len(fields) == 12 and fields[11].strip().isdigit() and float(fields[10]) >= 0:
-            return fields[11].strip(), float(fields[10]) / 100
+        if len(fields) != 12 or len(fields[11].strip()) != 1 or float(fields[10]) < 0:
+            continue
+        digit = LOOKALIKES.get(fields[11].strip(), fields[11].strip())
+        if digit.isdigit():
+            return digit, float(fields[10]) / 100
     return None
+
+
+def _read_glyph(glyph: np.ndarray, tesseract: str) -> tuple[str, float] | None:
+    votes: dict[str, float] = {}
+    for settings in PASSES:
+        reading = _recognise(_glyph_image(glyph, settings.glyph_height), tesseract, settings)
+        if reading is not None:
+            votes[reading[0]] = votes.get(reading[0], 0.0) + reading[1]
+    if not votes:
+        return None
+    digit, total = max(votes.items(), key=lambda item: item[1])
+    return digit, total / len(PASSES)
 
 
 def read_digits(mask: np.ndarray) -> DigitReading | None:
     """The digits in `mask` (white glyphs on black), or None when nothing readable is there."""
     tesseract = _tesseract()
-    glyphs = _glyph_images(mask)
-    if not glyphs:
+    boxes = _glyph_boxes(mask)
+    if not boxes:
         return None
-    readings = [_read_glyph(image, tesseract) for image in glyphs]
-    if any(reading is None for reading in readings):
-        return None
+    readings = [_read_glyph(mask[y : y + h, x : x + w], tesseract) for x, y, w, h in boxes]
     found = [reading for reading in readings if reading is not None]
+    if len(found) != len(readings):
+        return None
     return DigitReading(
         text="".join(text for text, _ in found),
         confidence=min(confidence for _, confidence in found),
