@@ -23,6 +23,7 @@ GOLD_HIGH = (35, 255, 255)
 WHITE_LOW = (0, 0, 230)
 WHITE_HIGH = (180, 40, 255)
 DIGIT_BAND = 0.25
+COUNTER_MARGIN = 0.1
 
 
 @dataclass(frozen=True)
@@ -65,6 +66,11 @@ def _gold(region: np.ndarray) -> np.ndarray:
 def _white(region: np.ndarray) -> np.ndarray:
     hsv = cv2.cvtColor(region, cv2.COLOR_BGR2HSV)
     return np.asarray(cv2.inRange(hsv, WHITE_LOW, WHITE_HIGH))
+
+
+def counter_mask(frame: np.ndarray, rect: Rect) -> np.ndarray:
+    """The white digits of one HUD counter as a binary mask, ready for `read_digits`."""
+    return _white(_crop(frame, rect, COUNTER_MARGIN))
 
 
 def _digits_right_of_hash(

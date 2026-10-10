@@ -16,14 +16,20 @@ class Lobby:
 
 @dataclass(frozen=True)
 class Hud:
-    """The in-match HUD; a counter set to None is not drawn while the HUD anchors stay."""
+    """The in-match HUD; a counter set to None is not drawn while the HUD anchors stay.
+
+    `corrupt` replaces the three counter regions with noise, the anchors stay.
+    """
 
     personal_eliminations: int | None = 0
     team_eliminations: int | None = 0
     players_left: int | None = 100
+    corrupt: bool = False
 
     def __post_init__(self) -> None:
         for counter in fields(self):
+            if counter.name == "corrupt":
+                continue
             value = getattr(self, counter.name)
             if value is not None and not 0 <= value <= 999:
                 raise ValueError(f"{counter.name} must be between 0 and 999, got {value}")

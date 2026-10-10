@@ -1,0 +1,267 @@
+"""Behaviour of the HUD counters in `victorious analyse`, observed through its JSON output."""
+
+from pathlib import Path
+from typing import Any
+
+import pytest
+
+from tests.analyse_helpers import STEADY, analyse, small
+from tests.synthetic import Hud, Results, Shot, layout_document, match_shots
+
+pytestmark = pytest.mark.usefixtures("require_ffmpeg", "require_tesseract")
+
+COUNTERS = ("personal_eliminations", "team_eliminations", "players_left")
+
+
+def counter_events(match: dict[str, Any], kind: str | None = None) -> list[dict[str, Any]]:
+    kinds = (kind,) if kind else (*COUNTERS, "unreadable")
+    return [event for event in match["events"] if event["kind"] in kinds]
+
+
+def changes(match: dict[str, Any], kind: str) -> list[tuple[float, int]]:
+    return [(event["time"], event["value"]) for event in counter_events(match, kind)]
+
+
+def test_counter_changes_are_events_at_the_second_they_change(tmp_path: Path) -> None:
+    steps = (
+        (0.0, 0, 0, 100),
+        (10.0, 1, 0, 100),
+        (14.0, 1, 1, 99),
+        (20.0, 2, 1, 99),
+    )
+    shots = match_shots(5, steps, results_at=40, placement=3)
+
+    output = analyse(tmp_path, small(50, shots))
+
+    (match,) = output["matches"]
+    assert changes(match, "personal_eliminations") == [(15.0, 1), (25.0, 2)]
+    assert changes(match, "team_eliminations") == [(19.0, 1)]
+    assert changes(match, "players_left") == [(19.0, 99)]
+    for event in counter_events(match):
+        assert event["source"] == "frame"
+        assert 0.0 < event["confidence"] <= 1.0
+        assert event["end"] is None
+        assert event["element"] is None
+
+
+def test_unchanged_counters_produce_no_events(tmp_path: Path) -> None:
+    shots = match_shots(5, STEADY, results_at=35, placement=3)
+
+    output = analyse(tmp_path, small(45, shots))
+
+    (match,) = output["matches"]
+    assert counter_events(match) == []
+
+
+def test_a_counter_that_changes_once_is_reported_once(tmp_path: Path) -> None:
+    steps = ((0.0, 0, 0, 99), (12.0, 0, 0, 98))
+    shots = match_shots(5, steps, results_at=35, placement=3)
+
+    output = analyse(tmp_path, small(45, shots))
+
+    (match,) = output["matches"]
+    assert changes(match, "players_left") == [(17.0, 98)]
+    assert counter_events(match, "personal_eliminations") == []
+    assert counter_events(match, "team_eliminations") == []
+
+
+def test_counter_events_sit_between_match_start_and_match_end_in_time_order(
+    tmp_path: Path,
+) -> None:
+    steps = ((0.0, 0, 0, 99), (12.0, 1, 0, 98))
+    shots = match_shots(5, steps, results_at=35, placement=3)
+
+    output = analyse(tmp_path, small(45, shots))
+
+    (match,) = output["matches"]
+    kinds = [event["kind"] for event in match["events"]]
+    assert kinds[0] == "match_start"
+    assert kinds[-1] == "match_end"
+    times = [event["time"] for event in match["events"]]
+    assert times == sorted(times)
+
+
+def test_one_corrupted_frame_is_skipped_without_an_event(tmp_path: Path) -> None:
+    shots = (
+        Shot(Hud(0, 0, 99), 5, 15),
+        Shot(Hud(corrupt=True), 15, 16),
+        Shot(Hud(0, 0, 99), 16, 35),
+        Shot(Results(placement=3), 35, 40),
+    )
+
+    output = analyse(tmp_path, small(45, shots))
+
+    (match,) = output["matches"]
+    assert counter_events(match) == []
+
+
+def test_a_change_survives_a_corrupted_frame_on_either_side(tmp_path: Path) -> None:
+    shots = (
+        Shot(Hud(0, 0, 99), 5, 19),
+        Shot(Hud(corrupt=True), 19, 20),
+        Shot(Hud(1, 0, 99), 20, 21),
+        Shot(Hud(corrupt=True), 21, 22),
+        Shot(Hud(1, 0, 99), 22, 35),
+        Shot(Results(placement=3), 35, 40),
+    )
+
+    output = analyse(tmp_path, small(45, shots))
+
+    (match,) = output["matches"]
+    assert changes(match, "personal_eliminations") == [(20.0, 1)]
+    assert counter_events(match, "unreadable") == []
+
+
+def test_one_wrong_but_plausible_reading_is_not_an_event(tmp_path: Path) -> None:
+    shots = (
+        Shot(Hud(7, 0, 99), 5, 6),
+        Shot(Hud(0, 0, 99), 6, 15),
+        Shot(Hud(5, 0, 99), 15, 16),
+        Shot(Hud(0, 0, 99), 16, 35),
+        Shot(Results(placement=3), 35, 40),
+    )
+
+    output = analyse(tmp_path, small(45, shots))
+
+    (match,) = output["matches"]
+    assert counter_events(match) == []
+    assert match["personal_eliminations"] == 0
+
+
+def test_a_counter_missing_for_over_ten_seconds_is_one_unreadable_event_with_its_span(
+    tmp_path: Path,
+) -> None:
+    shots = (
+        Shot(Hud(0, 0, 99), 5, 10),
+        Shot(Hud(None, 0, 99), 10, 22),
+        Shot(Hud(0, 0, 99), 22, 35),
+        Shot(Results(placement=3), 35, 40),
+    )
+
+    output = analyse(tmp_path, small(45, shots))
+
+    (match,) = output["matches"]
+    (event,) = counter_events(match)
+    assert event["kind"] == "unreadable"
+    assert event["element"] == "personal_eliminations"
+    assert (event["time"], event["end"]) == (10.0, 22.0)
+    assert event["value"] is None
+    assert event["confidence"] == 0.0
+    assert event["source"] == "frame"
+
+
+@pytest.mark.parametrize(("seconds", "expected"), [(8, 0), (10, 0), (11, 1)])
+def test_only_spans_longer_than_ten_seconds_are_unreadable(
+    tmp_path: Path, seconds: int, expected: int
+) -> None:
+    shots = (
+        Shot(Hud(0, 0, 99), 5, 10),
+        Shot(Hud(None, 0, 99), 10, 10 + seconds),
+        Shot(Hud(0, 0, 99), 10 + seconds, 35),
+        Shot(Results(placement=3), 35, 40),
+    )
+
+    output = analyse(tmp_path, small(45, shots))
+
+    (match,) = output["matches"]
+    assert len(counter_events(match, "unreadable")) == expected
+
+
+def test_all_counters_corrupted_for_over_ten_seconds_gives_one_unreadable_each(
+    tmp_path: Path,
+) -> None:
+    shots = (
+        Shot(Hud(0, 0, 99), 5, 10),
+        Shot(Hud(corrupt=True), 10, 22),
+        Shot(Hud(0, 0, 99), 22, 35),
+        Shot(Results(placement=3), 35, 40),
+    )
+
+    output = analyse(tmp_path, small(45, shots))
+
+    (match,) = output["matches"]
+    unreadable = counter_events(match, "unreadable")
+    assert sorted(e["element"] for e in unreadable) == sorted(COUNTERS)
+    assert all((e["time"], e["end"]) == (10.0, 22.0) for e in unreadable)
+    assert [e["kind"] for e in counter_events(match) if e["kind"] != "unreadable"] == []
+
+
+def test_a_change_across_an_unreadable_span_is_reported_at_the_first_reading_after_it(
+    tmp_path: Path,
+) -> None:
+    shots = (
+        Shot(Hud(0, 0, 99), 5, 10),
+        Shot(Hud(None, 0, 99), 10, 22),
+        Shot(Hud(2, 0, 99), 22, 35),
+        Shot(Results(placement=3), 35, 40),
+    )
+
+    output = analyse(tmp_path, small(45, shots))
+
+    (match,) = output["matches"]
+    assert changes(match, "personal_eliminations") == [(22.0, 2)]
+    assert len(counter_events(match, "unreadable")) == 1
+
+
+def test_a_span_still_open_when_the_match_ends_is_unreadable_up_to_the_end(
+    tmp_path: Path,
+) -> None:
+    shots = (
+        Shot(Hud(0, 0, 99), 5, 10),
+        Shot(Hud(None, 0, 99), 10, 35),
+        Shot(Results(placement=3), 35, 40),
+    )
+
+    output = analyse(tmp_path, small(45, shots))
+
+    (match,) = output["matches"]
+    (event,) = counter_events(match)
+    assert (event["time"], event["end"]) == (10.0, 35.0)
+
+
+def test_final_personal_eliminations_are_reported_per_match(tmp_path: Path) -> None:
+    first = ((0.0, 0, 0, 99), (8.0, 1, 0, 80), (14.0, 3, 1, 50))
+    second = ((0.0, 0, 0, 99), (9.0, 1, 0, 90))
+    shots = (
+        *match_shots(5, first, results_at=30, placement=2),
+        *match_shots(50, second, results_at=75, placement=9),
+    )
+
+    output = analyse(tmp_path, small(85, shots))
+
+    first_match, second_match = output["matches"]
+    assert first_match["personal_eliminations"] == 3
+    assert second_match["personal_eliminations"] == 1
+    assert changes(second_match, "personal_eliminations") == [(59.0, 1)]
+    assert [e["time"] for e in counter_events(second_match)] == [59.0, 59.0]
+
+
+def test_match_without_a_personal_eliminations_rect_reports_null(tmp_path: Path) -> None:
+    document = layout_document()
+    del document["screens"]["hud"]["personal_eliminations"]  # type: ignore[index]
+    steps = ((0.0, 0, 0, 99), (8.0, 1, 0, 80))
+    shots = match_shots(5, steps, results_at=30, placement=2)
+
+    output = analyse(tmp_path, small(40, shots), document)
+
+    (match,) = output["matches"]
+    assert match["personal_eliminations"] is None
+    assert counter_events(match, "personal_eliminations") == []
+    assert changes(match, "players_left") == [(13.0, 80)]
+
+
+def test_counters_not_in_the_layout_are_never_unreadable(tmp_path: Path) -> None:
+    document = layout_document()
+    for name in COUNTERS:
+        del document["screens"]["hud"][name]  # type: ignore[index]
+    shots = (
+        Shot(Hud(0, 0, 99), 5, 10),
+        Shot(Hud(corrupt=True), 10, 25),
+        Shot(Results(placement=3), 25, 30),
+    )
+
+    output = analyse(tmp_path, small(35, shots), document)
+
+    (match,) = output["matches"]
+    assert counter_events(match) == []
+    assert match["personal_eliminations"] is None

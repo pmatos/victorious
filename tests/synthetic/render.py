@@ -160,7 +160,11 @@ def _draw_hud(frame: np.ndarray, hud: Hud) -> None:
         tile = cv2.resize(load_crop(icon, True), (icon_px, icon_px), interpolation=cv2.INTER_AREA)
         _paste(frame, tile, centre_x - icon_px // 2, cy - icon_px // 2)
         value = getattr(hud, counter)
-        if value is not None:
+        if hud.corrupt:
+            x, y, w, h = rect
+            noise = np.random.default_rng(y).integers(0, 256, (h, w, 3), dtype=np.uint8)
+            frame[y : y + h, x : x + w] = noise
+        elif value is not None:
             _draw_text(frame, _digits(value), rect, height=rect[3], align="right", color=WHITE)
 
 
