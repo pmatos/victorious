@@ -21,8 +21,10 @@ jobs:
         with:
           enable-cache: true
           python-version: ${{ matrix.python-version }}
-      - name: Install ffmpeg
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
+      - name: Install ffmpeg and tesseract
+        run: >-
+          sudo apt-get update &&
+          sudo apt-get install -y --no-install-recommends ffmpeg tesseract-ocr
       - run: uv sync --locked --group dev
       - run: uv run ruff check --output-format=github
       - run: uv run ruff format --check
