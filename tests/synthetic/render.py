@@ -7,6 +7,7 @@ import cv2
 import numpy as np
 
 from tests.synthetic.spec import Hud, Lobby, Results, Scene
+from victorious.references import load_reference
 
 CROPS = Path(__file__).parent.parent / "fixtures" / "crops"
 
@@ -28,6 +29,7 @@ NATIVE_RECTS: dict[str, tuple[int, int, int, int]] = {
     "players_left": (2104, 143, 68, DIGIT_HEIGHT_NATIVE),
     "results_banner": (1105, 110, 380, 190),
     "placement": (918, 150, 280, 140),
+    "elimination_placement": (1290, 150, 320, 160),
 }
 ELEMENT_RECTS: dict[str, tuple[float, float, float, float]] = {
     name: (x / NATIVE_WIDTH, y / NATIVE_HEIGHT, w / NATIVE_WIDTH, h / NATIVE_HEIGHT)
@@ -43,10 +45,12 @@ ICONS = {
 
 @cache
 def load_crop(name: str, color: bool = False) -> np.ndarray:
+    if not name.startswith("digit_"):
+        return load_reference(name, color)
     flag = cv2.IMREAD_COLOR if color else cv2.IMREAD_GRAYSCALE
     image = cv2.imread(str(CROPS / f"{name}.png"), flag)
     if image is None:
-        raise FileNotFoundError(f"missing HUD crop {name}.png in {CROPS}")
+        raise FileNotFoundError(f"missing digit crop {name}.png in {CROPS}")
     return image
 
 
@@ -162,14 +166,18 @@ def _draw_hud(frame: np.ndarray, hud: Hud) -> None:
 
 def _draw_results(frame: np.ndarray, results: Results) -> None:
     height, width = frame.shape[:2]
-    if results.placement == 1:
-        banner = load_crop("victory_royale", True)
-        x, y, _, _ = _pixel_rect("results_banner", width, height)
-        scale = height / NATIVE_HEIGHT * BANNER_CROP_SCALE
-        size = (round(banner.shape[1] * scale), round(banner.shape[0] * scale))
-        _paste(frame, cv2.resize(banner, size, interpolation=cv2.INTER_LINEAR), x, y)
-    hash_mask = load_crop("hash")
+    if results.style == "placed":
+        hash_mask, rect_name, color = load_crop("hash_white"), "elimination_placement", WHITE
+    else:
+        hash_mask, rect_name, color = load_crop("hash"), "placement", GOLD
+        if results.placement == 1:
+            banner_name = "victory_royale_orange" if results.style == "orange" else "victory_royale"
+            banner = load_crop(banner_name, True)
+            x, y, _, _ = _pixel_rect("results_banner", width, height)
+            scale = height / NATIVE_HEIGHT * BANNER_CROP_SCALE
+            size = (round(banner.shape[1] * scale), round(banner.shape[0] * scale))
+            _paste(frame, cv2.resize(banner, size, interpolation=cv2.INTER_LINEAR), x, y)
     glyphs = [hash_mask, *_digits(results.placement)]
-    rect = _pixel_rect("placement", width, height)
+    rect = _pixel_rect(rect_name, width, height)
     glyph_height = round(hash_mask.shape[0] * height / NATIVE_HEIGHT)
-    _draw_text(frame, glyphs, rect, height=glyph_height, align="left", color=GOLD)
+    _draw_text(frame, glyphs, rect, height=glyph_height, align="left", color=color)

@@ -12,3 +12,13 @@ def require_ffmpeg() -> None:
             "(the product's fast path needs it too). Install it, e.g. `apt install ffmpeg`.",
             pytrace=False,
         )
+
+
+@pytest.fixture(scope="session")
+def require_tesseract() -> None:
+    if shutil.which("tesseract") is None:
+        pytest.fail(
+            "tesseract not found on PATH: reading placement digits needs it. "
+            "Install it, e.g. `apt install tesseract-ocr`.",
+            pytrace=False,
+        )

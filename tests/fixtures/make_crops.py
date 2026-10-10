@@ -27,10 +27,12 @@ from tests.synthetic.render import (
     NATIVE_RECTS,
     NATIVE_WIDTH,
 )
+from victorious.screens import WHITE_HIGH, WHITE_LOW
 
 HERE = Path(__file__).parent
 CROPS = HERE / "crops"
 REPO = HERE.parent.parent
+REFERENCES = REPO / "src" / "victorious" / "data"
 
 HUD_RECORDING = Path(
     os.environ.get("VICTORIOUS_HUD_RECORDING", "/mnt/windows/Videos/2026-10-09_11-59-53.mkv")
@@ -46,6 +48,11 @@ ICON_HALF = ICON_NATIVE_SIZE // 2
 ROW_HALF_HEIGHT = 17
 
 HASH_BOX = (918, 182, 996, 292)
+ORANGE_BANNER_TIMESTAMP = 2386
+ORANGE_BANNER_BOX = (1158, 92, 256, 122)
+PLACED_TIMESTAMP = 3630
+PLACED_BOX = (1280, 158, 1600, 302)
+PLACED_HASH_MIN_HEIGHT = 60
 
 
 @dataclass(frozen=True)
@@ -154,6 +161,35 @@ def cut_win() -> dict[str, np.ndarray]:
     return {"victory_royale": banner, "hash": hash_mask}
 
 
+def cut_variants() -> dict[str, np.ndarray]:
+    """The orange Victory Royale banner and the white "#" of the "YOU PLACED #N" screen."""
+    frame = extract_frame(HUD_RECORDING, ORANGE_BANNER_TIMESTAMP)
+    x, y, w, h = ORANGE_BANNER_BOX
+    orange = cv2.resize(
+        frame[y : y + h, x : x + w],
+        None,
+        fx=1 / BANNER_CROP_SCALE,
+        fy=1 / BANNER_CROP_SCALE,
+        interpolation=cv2.INTER_AREA,
+    )
+
+    frame = extract_frame(HUD_RECORDING, PLACED_TIMESTAMP)
+    x0, y0, x1, y1 = PLACED_BOX
+    hsv = cv2.cvtColor(frame[y0:y1, x0:x1], cv2.COLOR_BGR2HSV)
+    white = cv2.inRange(hsv, WHITE_LOW, WHITE_HIGH)
+    _, labels, stats, _ = cv2.connectedComponentsWithStats(white, connectivity=8)
+    glyphs = sorted(
+        (int(s[cv2.CC_STAT_LEFT]), i)
+        for i, s in enumerate(stats)
+        if i > 0 and s[cv2.CC_STAT_HEIGHT] >= PLACED_HASH_MIN_HEIGHT
+    )
+    _, label = glyphs[0]
+    left, top, width, height = (int(stats[label][k]) for k in range(4))
+    isolated = np.where(labels[top : top + height, left : left + width] == label, 255, 0)
+    hash_mask = cv2.GaussianBlur(isolated.astype(np.uint8), (3, 3), 0)
+    return {"victory_royale_orange": (orange // 8) * 8, "hash_white": hash_mask}
+
+
 def main() -> None:
     missing = [p for p in (HUD_RECORDING, WIN_RECORDING) if not p.is_file()]
     if missing:
@@ -167,9 +203,10 @@ def main() -> None:
         **{f"digit_{c}": g for c, g in cut_digits().items()},
         **cut_icons(),
         **cut_win(),
+        **cut_variants(),
     }
     for name, image in written.items():
-        path = CROPS / f"{name}.png"
+        path = (CROPS if name.startswith("digit_") else REFERENCES) / f"{name}.png"
         cv2.imwrite(str(path), image, [cv2.IMWRITE_PNG_COMPRESSION, 9])
         print(f"{path.name:22s} {image.shape[1]}x{image.shape[0]} {path.stat().st_size} B")
 
