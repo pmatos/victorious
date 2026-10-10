@@ -1,0 +1,113 @@
+"""Declarative description of what is on screen when in a synthetic Recording."""
+
+from collections.abc import Sequence
+from dataclasses import dataclass
+from math import isfinite
+from pathlib import Path
+
+
+@dataclass(frozen=True)
+class Lobby:
+    """Anything that is not a Match: no HUD, no results."""
+
+
+@dataclass(frozen=True)
+class Hud:
+    """The in-match HUD; a counter set to None is not drawn while the HUD anchors stay."""
+
+    personal_eliminations: int | None = 0
+    team_eliminations: int | None = 0
+    players_left: int | None = 100
+
+    def __post_init__(self) -> None:
+        for name in ("personal_eliminations", "team_eliminations", "players_left"):
+            value = getattr(self, name)
+            if value is not None and not 0 <= value <= 999:
+                raise ValueError(f"{name} must be between 0 and 999, got {value}")
+
+
+@dataclass(frozen=True)
+class Results:
+    """The results screen; placement 1 is a Win and carries the Victory Royale banner."""
+
+    placement: int
+
+    def __post_init__(self) -> None:
+        if not 1 <= self.placement <= 100:
+            raise ValueError(f"placement must be between 1 and 100, got {self.placement}")
+
+
+Scene = Lobby | Hud | Results
+
+
+@dataclass(frozen=True)
+class Shot:
+    scene: Scene
+    start: float
+    end: float
+
+
+@dataclass(frozen=True)
+class AudioClip:
+    path: Path
+    at: float = 0.0
+
+
+@dataclass(frozen=True)
+class RecordingSpec:
+    """Shots must be sorted and non-overlapping; gaps between them show the Lobby."""
+
+    duration: float
+    shots: Sequence[Shot] = ()
+    fps: float = 30.0
+    width: int = 1280
+    height: int = 720
+    audio: Sequence[AudioClip] = ()
+    keyframe_interval: float = 4.0
+    crf: int = 18
+
+    def __post_init__(self) -> None:
+        for name in ("duration", "fps", "keyframe_interval"):
+            value = getattr(self, name)
+            if not isfinite(value) or value <= 0:
+                raise ValueError(f"{name} must be a positive finite number, got {value}")
+        if self.width <= 0 or self.height <= 0 or self.width % 2 or self.height % 2:
+            raise ValueError(
+                f"width and height must be positive and even, got {self.width}x{self.height}"
+            )
+        previous_end = 0.0
+        for index, shot in enumerate(self.shots):
+            label = f"shot {index} ({type(shot.scene).__name__} {shot.start}-{shot.end})"
+            if not shot.start < shot.end:
+                raise ValueError(f"{label}: start must be before end")
+            if shot.start < previous_end:
+                raise ValueError(f"{label}: overlaps or precedes the previous shot")
+            if shot.end > self.duration:
+                raise ValueError(f"{label}: ends after the Recording duration {self.duration}")
+            previous_end = shot.end
+        for clip in self.audio:
+            if clip.at < 0 or not isfinite(clip.at):
+                raise ValueError(f"audio clip {clip.path.name}: offset must be non-negative")
+
+
+def match_shots(
+    start: float,
+    hud_steps: Sequence[tuple[float, int | None, int | None, int | None]],
+    results_at: float,
+    results_duration: float = 5.0,
+    placement: int = 1,
+) -> tuple[Shot, ...]:
+    """Expand counter steps into consecutive HUD shots followed by one results shot.
+
+    Each step is (seconds after `start`, personal eliminations, team eliminations, players left)
+    and holds until the next step; the last one holds until `results_at`.
+    """
+    if not hud_steps:
+        raise ValueError("a Match needs at least one HUD step")
+    boundaries = [start + step[0] for step in hud_steps] + [results_at]
+    shots = [
+        Shot(Hud(personal, team, left), boundaries[i], boundaries[i + 1])
+        for i, (_, personal, team, left) in enumerate(hud_steps)
+    ]
+    shots.append(Shot(Results(placement), results_at, results_at + results_duration))
+    return tuple(shots)
