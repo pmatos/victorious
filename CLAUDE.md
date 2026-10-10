@@ -13,15 +13,22 @@ Installable package in `src/victorious/` (hatchling build, console script `victo
 - `cli.py`: argparse entry point exposing the subcommands below.
 - `__main__.py`: enables `python -m victorious`.
 - `matcher.py`: internal multi-scale template matcher (scales 0.3-1.2) used as a detector for reference images such as the Victory Royale banner. Not a user-facing command.
+- `layout.py`: pydantic `Layout` (YAML, normalized rects) and `load_layout`.
+- `schema.py`: pydantic output models (`AnalysisOutput`, `Match`, `Event`), `SCHEMA_VERSION`, `json_schema()`.
+- `video.py`: `probe` (ffprobe) and `sample_frames` (one BGR frame per second through an ffmpeg raw pipe, serial).
+- `references.py` and `data/`: reference images shipped in the package (HUD icons, Victory Royale banner, `#` glyph).
+- `screens.py`: pure per-frame detection, `hud_score` and `results_reading`; thresholds `HUD_THRESHOLD`/`RESULTS_THRESHOLD`.
+- `ocr.py`: per-glyph Tesseract reading of a binary mask (`tesseract` CLI via subprocess).
+- `analysis.py`: `analyse(path, layout)`, the state machine that turns per-second scores into Matches and Events. A Match opens on the HUD and closes only on a results screen.
 
 | Subcommand | Purpose | Status |
 |------------|---------|--------|
 | `setup` | Produce a Layout from a Recording | stub, see epic #13 |
-| `analyse` | Turn a Recording and a Layout into Events | stub, see epic #13 |
+| `analyse` | Turn a Recording and a Layout into Matches with Events | working: Matches, Win, placement (counters, speech: later tickets) |
 | `review` | Inspect the Events found in a Recording | stub, see epic #13 |
-| `schema` | Print the JSON schema of the Analysis output | stub, see epic #13 |
+| `schema` | Print the JSON schema of the Analysis output | working |
 
-Stubs print `victorious <command>: not implemented yet` to stderr and exit 1.
+`setup` and `review` are stubs: they print `victorious <command>: not implemented yet` to stderr and exit 1. Errors in `analyse` print `victorious analyse: <reason>` to stderr, exit 1 and write nothing.
 
 ## Development Commands
 
@@ -61,13 +68,13 @@ spec = RecordingSpec(duration=35.0, shots=match_shots(5.0, [(0.0, 0, 0, 98)], 25
 build_recording(spec, tmp_path / "recording.mkv")
 ```
 
-- `ffmpeg` and `ffprobe` must be on `PATH` (tests fail with a clear message otherwise; CI installs ffmpeg).
-- Scenes are composited from small real-HUD crops in `tests/fixtures/crops/`; `tests/fixtures/make_crops.py` records where each came from and re-cuts them from local Recordings (never run in CI).
-- `ELEMENT_RECTS` gives the normalized rectangle of each HUD element, for tests that inspect decoded frames.
+- `ffmpeg`, `ffprobe` and `tesseract` must be on `PATH` (tests fail with a clear message otherwise; CI installs them).
+- Scenes are composited from small real-HUD crops: icons, banner and `#` live in `src/victorious/data/` (shared with the product), digits in `tests/fixtures/crops/`; `tests/fixtures/make_crops.py` records where each came from and re-cuts them from local Recordings (never run in CI).
+- `ELEMENT_RECTS` gives the normalized rectangle of each HUD element, for tests that inspect decoded frames; `write_layout(path)` writes the matching hand-written Layout YAML for `analyse` tests.
 
 ## Configuration
 
 - **Ruff**: 100-character line length, Python 3.13 target
 - **mypy**: strict
-- **Dependencies**: Python >=3.13, OpenCV, NumPy
+- **Dependencies**: Python >=3.13, OpenCV, NumPy, pydantic, PyYAML; runtime binaries ffmpeg, ffprobe, tesseract
 - **Commits and PR titles**: Conventional Commits (enforced in CI)
