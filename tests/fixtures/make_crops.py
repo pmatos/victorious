@@ -31,6 +31,7 @@ from tests.synthetic.render import (
 HERE = Path(__file__).parent
 CROPS = HERE / "crops"
 REPO = HERE.parent.parent
+REFERENCES = REPO / "src" / "victorious" / "data"
 
 HUD_RECORDING = Path(
     os.environ.get("VICTORIOUS_HUD_RECORDING", "/mnt/windows/Videos/2026-10-09_11-59-53.mkv")
@@ -169,7 +170,7 @@ def main() -> None:
         **cut_win(),
     }
     for name, image in written.items():
-        path = CROPS / f"{name}.png"
+        path = (CROPS if name.startswith("digit_") else REFERENCES) / f"{name}.png"
         cv2.imwrite(str(path), image, [cv2.IMWRITE_PNG_COMPRESSION, 9])
         print(f"{path.name:22s} {image.shape[1]}x{image.shape[0]} {path.stat().st_size} B")
 

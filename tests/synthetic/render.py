@@ -7,6 +7,7 @@ import cv2
 import numpy as np
 
 from tests.synthetic.spec import Hud, Lobby, Results, Scene
+from victorious.references import load_reference
 
 CROPS = Path(__file__).parent.parent / "fixtures" / "crops"
 
@@ -43,10 +44,12 @@ ICONS = {
 
 @cache
 def load_crop(name: str, color: bool = False) -> np.ndarray:
+    if not name.startswith("digit_"):
+        return load_reference(name, color)
     flag = cv2.IMREAD_COLOR if color else cv2.IMREAD_GRAYSCALE
     image = cv2.imread(str(CROPS / f"{name}.png"), flag)
     if image is None:
-        raise FileNotFoundError(f"missing HUD crop {name}.png in {CROPS}")
+        raise FileNotFoundError(f"missing digit crop {name}.png in {CROPS}")
     return image
 
 

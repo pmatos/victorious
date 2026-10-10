@@ -1,23 +1,14 @@
 """Behaviour of the `victorious` command line, observed through a real process."""
 
-import subprocess
-import sys
 from importlib.metadata import entry_points
 from pathlib import Path
 
 import pytest
 
+from tests.cli_runner import run_cli
+
 SUBCOMMANDS = ["setup", "analyse", "review", "schema"]
-
-
-def run_cli(*args: str, cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        [sys.executable, "-m", "victorious", *args],
-        capture_output=True,
-        text=True,
-        cwd=cwd,
-        check=False,
-    )
+STUBS = ["setup", "review"]
 
 
 def test_help_lists_the_four_subcommands() -> None:
@@ -28,8 +19,8 @@ def test_help_lists_the_four_subcommands() -> None:
         assert name in result.stdout
 
 
-@pytest.mark.parametrize("command", SUBCOMMANDS)
-def test_subcommand_reports_not_implemented_on_stderr(command: str) -> None:
+@pytest.mark.parametrize("command", STUBS)
+def test_stub_subcommand_reports_not_implemented_on_stderr(command: str) -> None:
     result = run_cli(command)
 
     assert result.returncode == 1
@@ -39,7 +30,7 @@ def test_subcommand_reports_not_implemented_on_stderr(command: str) -> None:
 
 
 def test_stub_accepts_arguments_and_writes_no_output_file(tmp_path: Path) -> None:
-    result = run_cli("analyse", "recording.mkv", "-o", "out.json", cwd=tmp_path)
+    result = run_cli("setup", "recording.mkv", "-o", "layout.yaml", cwd=tmp_path)
 
     assert result.returncode == 1
     assert "not implemented" in result.stderr
@@ -54,7 +45,7 @@ def test_missing_subcommand_is_a_usage_error() -> None:
 
 
 def test_unknown_top_level_option_is_a_usage_error() -> None:
-    result = run_cli("--bogus", "analyse")
+    result = run_cli("--bogus", "schema")
 
     assert result.returncode == 2
     assert "--bogus" in result.stderr
