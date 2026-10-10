@@ -50,6 +50,21 @@ uv run victorious <subcommand>
 
 Tests import the installed package (no `pythonpath` shim), so run them through `uv run`.
 
+## Test fixtures
+
+Tests build their Recordings on demand with `tests.synthetic`; no video is committed.
+
+```python
+from tests.synthetic import RecordingSpec, build_recording, match_shots
+
+spec = RecordingSpec(duration=35.0, shots=match_shots(5.0, [(0.0, 0, 0, 98)], 25.0))
+build_recording(spec, tmp_path / "recording.mkv")
+```
+
+- `ffmpeg` and `ffprobe` must be on `PATH` (tests fail with a clear message otherwise; CI installs ffmpeg).
+- Scenes are composited from small real-HUD crops in `tests/fixtures/crops/`; `tests/fixtures/make_crops.py` records where each came from and re-cuts them from local Recordings (never run in CI).
+- `ELEMENT_RECTS` gives the normalized rectangle of each HUD element, for tests that inspect decoded frames.
+
 ## Configuration
 
 - **Ruff**: 100-character line length, Python 3.13 target
