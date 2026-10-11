@@ -49,16 +49,22 @@ def _same_pixels(previous: np.ndarray, current: np.ndarray) -> bool:
     return mismatch <= REUSE_MISMATCH * max(1, union)
 
 
-def _to_reading(text: str, confidence: float) -> CounterReading | None:
-    if not text.isdigit() or len(text) > MAX_COUNTER_DIGITS or confidence < MIN_COUNTER_CONFIDENCE:
-        return None
-    return CounterReading(int(text), confidence)
+def _to_reading(reading: DigitReading) -> CounterReading | None:
+    text = reading.text
+    plausible = (
+        text.isdigit()
+        and len(text) <= MAX_COUNTER_DIGITS
+        and (len(text) == 1 or text[0] != "0")
+        and reading.confidence >= MIN_COUNTER_CONFIDENCE
+    )
+    return CounterReading(int(text), reading.confidence) if plausible else None
 
 
-def _best_reading(masks: list[np.ndarray]) -> DigitReading | None:
-    best: DigitReading | None = None
+def _best_reading(masks: list[np.ndarray]) -> CounterReading | None:
+    best: CounterReading | None = None
     for mask in masks:
-        reading = read_digits(mask)
+        digits = read_digits(mask)
+        reading = _to_reading(digits) if digits is not None else None
         if reading is not None and (best is None or reading.confidence > best.confidence):
             best = reading
         if best is not None and best.confidence >= RETRY_CONFIDENCE:
@@ -90,10 +96,9 @@ class CounterReader:
                 readings[element] = seen[1]
             else:
                 fresh[element] = masks
-        for (element, masks), digits in zip(
+        for (element, masks), reading in zip(
             fresh.items(), _POOL.map(_best_reading, fresh.values()), strict=True
         ):
-            reading = _to_reading(digits.text, digits.confidence) if digits is not None else None
             self._seen[element] = (masks[0], reading)
             readings[element] = reading
         return readings

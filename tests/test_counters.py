@@ -3,11 +3,15 @@
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import pytest
 
 from tests.analyse_helpers import STEADY, analyse, small
-from tests.synthetic import Hud, Results, Shot, layout_document, match_shots
-from victorious.counters import CounterReading, CounterTracker
+from tests.synthetic import Hud, Results, Shot, layout_document, match_shots, write_layout
+from victorious import counters
+from victorious.counters import CounterReader, CounterReading, CounterTracker
+from victorious.layout import load_layout
+from victorious.ocr import DigitReading
 from victorious.schema import CounterElement
 
 pytestmark = pytest.mark.usefixtures("require_ffmpeg", "require_tesseract")
@@ -282,3 +286,40 @@ def test_a_reading_from_before_an_unreadable_span_does_not_pair_with_one_after_i
     tracker.observe(20, reading(1))
 
     assert [event.kind for event in tracker.close(30).events] == ["unreadable"]
+
+
+def _read_players_left(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    by_mask: dict[int, DigitReading | None],
+) -> CounterReading | None:
+    masks = [np.full((4, 4), index, np.uint8) for index in range(len(by_mask))]
+    monkeypatch.setattr(counters, "counter_masks", lambda frame, rect: masks)
+    monkeypatch.setattr(counters, "read_digits", lambda mask: by_mask[int(mask[0, 0])])
+    layout = load_layout(write_layout(tmp_path / "layout.yaml"))
+    frame = np.zeros((1080, 1920, 3), np.uint8)
+    return CounterReader().read(frame, layout)["players_left"]
+
+
+def test_a_reading_with_a_leading_zero_is_unreadable_not_a_smaller_number(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    reading = _read_players_left(monkeypatch, tmp_path, {0: DigitReading("05", 0.4)})
+
+    assert reading is None
+
+
+def test_a_leading_zero_reading_does_not_hide_a_valid_reading_from_another_mask(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    reading = _read_players_left(
+        monkeypatch, tmp_path, {0: DigitReading("04", 0.23), 1: DigitReading("64", 0.19)}
+    )
+
+    assert reading == CounterReading(64, 0.19)
+
+
+def test_a_lone_zero_is_a_valid_reading(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    reading = _read_players_left(monkeypatch, tmp_path, {0: DigitReading("0", 0.3)})
+
+    assert reading == CounterReading(0, 0.3)

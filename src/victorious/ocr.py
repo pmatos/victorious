@@ -3,7 +3,9 @@
 Line mode confuses adjacent identical digits (11 reads as 1), so each connected
 component is recognised on its own. Tesseract's fast models drop some glyphs
 (a 0 under a digit whitelist, a 4 at one size), so every glyph is read with a few
-independent settings and the digits vote by confidence.
+independent settings and the digits vote by confidence. The glyph is smoothed
+after scaling because the fast models misread the hard edges of a binary mask
+(a 6 whose tip is missing reads as 0, a 4 as 1).
 """
 
 import os
@@ -18,6 +20,7 @@ import numpy as np
 GLYPH_PADDING = 16
 MIN_GLYPH_AREA = 12
 MIN_GLYPH_HEIGHT_RATIO = 0.5
+SMOOTHING_SIGMA = 0.05  # of the scaled glyph height
 LOOKALIKES = {"O": "0", "o": "0"}
 
 
@@ -68,6 +71,7 @@ def _glyph_image(glyph: np.ndarray, height: int) -> np.ndarray:
     resized = cv2.resize(
         glyph, (max(1, round(glyph.shape[1] * scale)), height), interpolation=cv2.INTER_CUBIC
     )
+    resized = cv2.GaussianBlur(resized, (0, 0), SMOOTHING_SIGMA * height)
     return cv2.copyMakeBorder(255 - resized, *(GLYPH_PADDING,) * 4, cv2.BORDER_CONSTANT, value=255)
 
 
