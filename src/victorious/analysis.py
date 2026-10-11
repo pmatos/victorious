@@ -272,7 +272,6 @@ def analyse(
     chunk_seconds: int = 60,
     cache: ObservationCache | None = None,
 ) -> AnalysisOutput:
-    analysis = analyse_with_observations(
+    return analyse_with_observations(
         path, layout, jobs=jobs, chunk_seconds=chunk_seconds, cache=cache
-    )
-    return analysis.output
+    ).output

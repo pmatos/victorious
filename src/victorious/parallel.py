@@ -26,6 +26,7 @@ from victorious.ocr import PASSES
 from victorious.video import RecordingError, VideoInfo, sample_chunk
 
 _ABORT: Event | None = None
+_WORKER_DIED = "a decoding worker died unexpectedly"
 
 
 @dataclass(frozen=True)
@@ -73,7 +74,7 @@ def _run_in_pool(chunks: list[_Chunk], workers: int) -> list[list[ChunkSecond]]:
             futures.extend(pool.submit(_extract, c) for c in chunks)
             wait(futures, return_when=FIRST_EXCEPTION)
         except BrokenExecutor as broken:
-            raise RecordingError("a decoding worker died unexpectedly") from broken
+            raise RecordingError(_WORKER_DIED) from broken
         finally:
             abort.set()
             for future in futures:
@@ -85,10 +86,10 @@ def _run_in_pool(chunks: list[_Chunk], workers: int) -> list[list[ChunkSecond]]:
             if not future.cancelled() and (error := future.exception()) is not None
         ]
         real = [error for error in failures if not isinstance(error, Aborted)]
-        if real or failures:
+        if failures:
             error = (real or failures)[0]
             if isinstance(error, BrokenExecutor):
-                raise RecordingError("a decoding worker died unexpectedly") from error
+                raise RecordingError(_WORKER_DIED) from error
             raise error
         return [future.result() for future in futures]
 

@@ -9,7 +9,13 @@ from typing import Any
 
 from victorious.counters import CounterReading
 from victorious.layout import Layout
-from victorious.observations import SecondObservation, from_json, to_json
+from victorious.observations import (
+    SecondObservation,
+    from_json,
+    reading_from_json,
+    reading_to_json,
+    to_json,
+)
 from victorious.schema import CounterElement
 
 OBSERVATION_VERSION = 1
@@ -92,20 +98,14 @@ class CacheEntry:
         if not isinstance(document, list):
             return None
         try:
-            return [
-                (float(time), None if raw is None else CounterReading(int(raw[0]), float(raw[1])))
-                for time, raw in document
-            ]
+            return [(float(time), reading_from_json(raw)) for time, raw in document]
         except (TypeError, ValueError, IndexError):
             return None
 
     def store_series(
         self, element: CounterElement, start: float, end: float, series: Series
     ) -> None:
-        document = [
-            [time, None if reading is None else [reading.value, reading.confidence]]
-            for time, reading in series
-        ]
+        document = [[time, reading_to_json(reading)] for time, reading in series]
         _write_atomically(self._series_path(element, start, end), json.dumps(document))
 
 

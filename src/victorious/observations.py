@@ -92,11 +92,11 @@ def extract_chunk(
     return seconds
 
 
-def _reading_to_json(reading: CounterReading | None) -> list[float] | None:
+def reading_to_json(reading: CounterReading | None) -> list[float] | None:
     return None if reading is None else [reading.value, reading.confidence]
 
 
-def _reading_from_json(raw: list[float] | None) -> CounterReading | None:
+def reading_from_json(raw: list[float] | None) -> CounterReading | None:
     return None if raw is None else CounterReading(int(raw[0]), float(raw[1]))
 
 
@@ -112,7 +112,7 @@ def to_json(observation: SecondObservation) -> dict[str, Any]:
         "elimination_placement_score": results.elimination_placement_score,
         "digits": None if digits is None else [digits.text, digits.confidence],
         "digits_element": results.digits_element,
-        "counters": {k: _reading_to_json(v) for k, v in observation.counters.items()},
+        "counters": {k: reading_to_json(v) for k, v in observation.counters.items()},
     }
 
 
@@ -129,25 +129,8 @@ def from_json(raw: dict[str, Any]) -> SecondObservation:
     counters: Counters = {}
     for element in COUNTER_ELEMENTS:
         if element in raw["counters"]:
-            counters[element] = _reading_from_json(raw["counters"][element])
+            counters[element] = reading_from_json(raw["counters"][element])
     return SecondObservation(int(raw["second"]), float(raw["hud"]), results, counters)
-
-
-def _rect_of(layout: Layout, element: ObservedElement) -> Rect | None:
-    hud, results = layout.screens.hud, layout.screens.results
-    found: Rect | None = getattr(hud if hasattr(hud, element) else results, element)
-    return found
-
-
-ELEMENT_ORDER: tuple[ObservedElement, ...] = (
-    "hud_anchor",
-    "personal_eliminations",
-    "team_eliminations",
-    "players_left",
-    "results_banner",
-    "placement",
-    "elimination_placement",
-)
 
 
 def _placement_digits(
@@ -163,7 +146,7 @@ def records(
     observations: Iterable[SecondObservation], layout: Layout
 ) -> Iterator[ObservationRecord]:
     """One record per second per HUD element the Layout describes."""
-    regions = {element: _rect_of(layout, element) for element in ELEMENT_ORDER}
+    regions: dict[str, Rect | None] = {**dict(layout.screens.hud), **dict(layout.screens.results)}
     for observation in observations:
         results = observation.results
         rows: list[tuple[ObservedElement, float | None, int | None, float]] = [
