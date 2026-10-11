@@ -344,7 +344,7 @@ for (const key of ["x", "y", "w", "h"]) {
     const text = event.target.value.trim();
     const value = Number(text);
     if (rect && text !== "" && Number.isFinite(value)) {
-      const limit = key === "x" ? 1 - rect.w : key === "y" ? 1 - rect.h : key === "w" ? 1 - rect.x : 1 - rect.y;
+      const limit = 1 - rect[{ x: "w", y: "h", w: "x", h: "y" }[key]];
       const low = key === "w" || key === "h" ? MIN_SIDE : 0;
       rect[key] = round4(Math.min(limit, Math.max(low, value)));
     }

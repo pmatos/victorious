@@ -107,12 +107,13 @@ def _handler(session: _Session, prefix: str) -> type[BaseHTTPRequestHandler]:
         def do_GET(self) -> None:
             route = self._route()
             frame = _FRAME.fullmatch(route) if route is not None else None
+            index = int(frame.group(1)) if frame is not None else len(session.images)
             if route == "":
                 self._send(HTTPStatus.OK, session.page, "text/html; charset=utf-8")
             elif route == "state.json":
                 self._send(HTTPStatus.OK, session.state, "application/json")
-            elif frame is not None and int(frame.group(1)) < len(session.images):
-                self._send(HTTPStatus.OK, session.images[int(frame.group(1))], "image/png")
+            elif index < len(session.images):
+                self._send(HTTPStatus.OK, session.images[index], "image/png")
             else:
                 self._json(HTTPStatus.NOT_FOUND, {"errors": ["not found"]})
 
@@ -160,15 +161,14 @@ def serve_manual(
     server.daemon_threads = True
     url = f"http://{HOST}:{server.server_address[1]}{prefix}"
     try:
-        announce(url)
-        if open_browser and _has_display():
-            threading.Thread(target=_open, args=(url,), daemon=True).start()
-        server.serve_forever()
-    except KeyboardInterrupt:
-        return session.outcome()
+        with contextlib.suppress(KeyboardInterrupt):
+            announce(url)
+            if open_browser and _has_display():
+                threading.Thread(target=_open, args=(url,), daemon=True).start()
+            server.serve_forever()
     finally:
         server.server_close()
-    return session.saved
+    return session.outcome()
 
 
 def _has_display() -> bool:

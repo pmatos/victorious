@@ -245,7 +245,7 @@ def _submitted_rects(
         left, width = _snapped(float(entry["x"]), float(entry["w"]))
         top, height = _snapped(float(entry["y"]), float(entry["h"]))
         try:
-            rect = Rect.model_validate({"x": left, "y": top, "w": width, "h": height})
+            rect = Rect(x=left, y=top, w=width, h=height)
         except ValidationError as error:
             reasons = "; ".join(
                 issue["msg"].removeprefix("Value error, ") for issue in error.errors()
@@ -266,10 +266,9 @@ def manual_result(panels: Sequence[Panel], submitted: object) -> SetupResult | l
     if not isinstance(elements, dict):
         return ["elements: expected an object of element name to rectangle"]
     placed, problems = _submitted_rects(panels, elements)
-    present = {name for names in placed for name in names}
-    problems.extend(f"{name}: required, not placed" for name in REQUIRED if name not in present)
-    height, width = panels[0].frame.shape[:2]
     found = {name: hit for names in placed for name, hit in names.items()}
+    problems.extend(f"{name}: required, not placed" for name in REQUIRED if name not in found)
+    height, width = panels[0].frame.shape[:2]
     layout = None if problems else _build_layout(width, height, found)
     if layout is None:
         return problems
