@@ -374,7 +374,7 @@ def test_opencv_failure_is_reported_as_a_clean_error(
     def broken(*args: Any, **options: Any) -> None:
         raise cv2.error("template larger than image")
 
-    monkeypatch.setattr(cli, "analyse", broken)
+    monkeypatch.setattr(cli, "analyse_with_observations", broken)
 
     status = cli.main(["analyse", str(tmp_path / "r.mkv"), "--layout", str(layout)])
 

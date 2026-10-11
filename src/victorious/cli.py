@@ -3,6 +3,7 @@ import json
 import os
 import secrets
 import sys
+import time
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
@@ -10,9 +11,10 @@ from typing import Any
 import cv2
 from pydantic import ValidationError
 
-from victorious.analysis import analyse
+from victorious.analysis import analyse_with_observations
 from victorious.cache import ObservationCache, default_cache_root
 from victorious.layout import LayoutError, load_layout
+from victorious.observations import records
 from victorious.ocr import OcrError
 from victorious.schema import json_schema
 from victorious.video import RecordingError
@@ -82,6 +84,11 @@ def build_parser() -> argparse.ArgumentParser:
             sub.add_argument(
                 "--no-cache", action="store_true", help="neither read nor write the cache"
             )
+            sub.add_argument(
+                "--observations",
+                type=Path,
+                help="write every raw reading here as JSON lines, one per HUD element per second",
+            )
         if name in {"analyse", "schema"}:
             sub.add_argument("-o", "--output", type=Path, help="write JSON here, not to stdout")
     return parser
@@ -107,13 +114,21 @@ def _require_writable_directory(output: Path | None) -> None:
         raise FileNotFoundError(f"output directory does not exist: {output.parent}")
 
 
-def _run_analyse(args: argparse.Namespace) -> str:
+def _run_analyse(args: argparse.Namespace) -> tuple[str, str | None]:
     layout = load_layout(args.layout)
     cache = None if args.no_cache else ObservationCache(args.cache_dir or default_cache_root())
-    output = analyse(
+    started = time.monotonic()
+    analysis = analyse_with_observations(
         args.recording, layout, jobs=args.jobs, chunk_seconds=args.chunk_seconds, cache=cache
     )
-    return output.model_dump_json(indent=2) + "\n"
+    state = "off" if cache is None else "hit" if analysis.cached else "miss"
+    elapsed = time.monotonic() - started
+    print(f"victorious analyse: cache {state}, {elapsed:.1f} s", file=sys.stderr)
+    text = analysis.output.model_dump_json(indent=2) + "\n"
+    if args.observations is None:
+        return text, None
+    lines = (record.model_dump_json() for record in records(analysis.observations, layout))
+    return text, "".join(f"{line}\n" for line in lines)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -123,10 +138,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 1
     try:
         _require_writable_directory(args.output)
+        sidecar: str | None = None
         if args.command == "schema":
             text = json.dumps(json_schema(), indent=2) + "\n"
         else:
-            text = _run_analyse(args)
+            _require_writable_directory(args.observations)
+            text, sidecar = _run_analyse(args)
+        if sidecar is not None:
+            _emit(sidecar, args.observations)
         _emit(text, args.output)
     except (LayoutError, RecordingError, OcrError, ValidationError, OSError, cv2.error) as error:
         print(f"victorious {args.command}: {error}", file=sys.stderr)
