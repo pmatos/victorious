@@ -7,6 +7,8 @@ import pytest
 
 from tests.analyse_helpers import STEADY, analyse, small
 from tests.synthetic import Hud, Results, Shot, layout_document, match_shots
+from victorious.counters import CounterReading, CounterTracker
+from victorious.schema import CounterElement
 
 pytestmark = pytest.mark.usefixtures("require_ffmpeg", "require_tesseract")
 
@@ -265,3 +267,18 @@ def test_counters_not_in_the_layout_are_never_unreadable(tmp_path: Path) -> None
     (match,) = output["matches"]
     assert counter_events(match) == []
     assert match["personal_eliminations"] is None
+
+
+def test_a_reading_from_before_an_unreadable_span_does_not_pair_with_one_after_it() -> None:
+    def reading(value: int) -> dict[CounterElement, CounterReading | None]:
+        return {"personal_eliminations": CounterReading(value, 0.9)}
+
+    tracker = CounterTracker(("personal_eliminations",))
+    for second in range(5):
+        tracker.observe(second, reading(0))
+    tracker.observe(5, reading(1))
+    for second in range(6, 20):
+        tracker.observe(second, {"personal_eliminations": None})
+    tracker.observe(20, reading(1))
+
+    assert [event.kind for event in tracker.close(30).events] == ["unreadable"]

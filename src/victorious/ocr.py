@@ -6,6 +6,7 @@ component is recognised on its own. Tesseract's fast models drop some glyphs
 independent settings and the digits vote by confidence.
 """
 
+import os
 import shutil
 import subprocess
 from concurrent.futures import ThreadPoolExecutor
@@ -29,6 +30,7 @@ class _Pass:
 
 PASSES = (_Pass(8, 96, True), _Pass(8, 80, True), _Pass(10, 64, False))
 _PASS_POOL = ThreadPoolExecutor(max_workers=len(PASSES))
+_TESSERACT_ENV = {**os.environ, "OMP_THREAD_LIMIT": "1"}
 
 
 class OcrError(Exception):
@@ -74,7 +76,9 @@ def _recognise(image: np.ndarray, tesseract: str, settings: _Pass) -> tuple[str,
     command = [tesseract, "stdin", "stdout", "--psm", str(settings.page_segmentation_mode)]
     if settings.whitelist:
         command += ["-c", "tessedit_char_whitelist=0123456789"]
-    result = subprocess.run([*command, "tsv"], input=encoded, capture_output=True, check=False)
+    result = subprocess.run(
+        [*command, "tsv"], input=encoded, capture_output=True, check=False, env=_TESSERACT_ENV
+    )
     if result.returncode != 0:
         raise OcrError(f"tesseract failed: {result.stderr.decode(errors='replace').strip()}")
     for line in result.stdout.decode(errors="replace").splitlines()[1:]:

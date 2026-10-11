@@ -17,6 +17,7 @@ RETRY_CONFIDENCE = 0.5
 MAX_COUNTER_DIGITS = 3
 UNREADABLE_SECONDS = 10.0
 REUSE_MISMATCH = 0.04
+_POOL = ThreadPoolExecutor(max_workers=len(COUNTER_ELEMENTS))
 
 
 @dataclass(frozen=True)
@@ -70,7 +71,6 @@ class CounterReader:
 
     def __init__(self) -> None:
         self._seen: dict[CounterElement, tuple[np.ndarray, CounterReading | None]] = {}
-        self._pool = ThreadPoolExecutor(max_workers=len(COUNTER_ELEMENTS))
 
     def reset(self) -> None:
         self._seen.clear()
@@ -92,7 +92,7 @@ class CounterReader:
                 fresh[element] = (masks[0], masks)
         elements = list(fresh)
         for element, digits in zip(
-            elements, self._pool.map(_best_reading, [fresh[e][1] for e in elements]), strict=True
+            elements, _POOL.map(_best_reading, [fresh[e][1] for e in elements]), strict=True
         ):
             reading = _accept(digits.text, digits.confidence) if digits is not None else None
             self._seen[element] = (fresh[element][0], reading)
@@ -135,6 +135,7 @@ class CounterTracker:
         start, state.gap_start = state.gap_start, None
         if start is None or end - start <= UNREADABLE_SECONDS:
             return
+        state.pending = None
         self._events.append(
             Event(
                 kind="unreadable",

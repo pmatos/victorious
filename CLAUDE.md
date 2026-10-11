@@ -17,7 +17,7 @@ Installable package in `src/victorious/` (hatchling build, console script `victo
 - `schema.py`: pydantic output models (`AnalysisOutput`, `Match`, `Event`), `SCHEMA_VERSION`, `json_schema()`.
 - `video.py`: `probe` (ffprobe) and `sample_frames` (one BGR frame per second through an ffmpeg raw pipe, serial).
 - `references.py` and `data/`: reference images shipped in the package (HUD icons, Victory Royale banner, `#` glyph).
-- `screens.py`: pure per-frame detection, `hud_score`, `results_reading` and `counter_mask`; thresholds `HUD_THRESHOLD`/`RESULTS_THRESHOLD`.
+- `screens.py`: pure per-frame detection, `hud_score`, `results_reading` and `counter_masks`; thresholds `HUD_THRESHOLD`/`RESULTS_THRESHOLD`.
 - `ocr.py`: per-glyph Tesseract reading of a binary mask (`tesseract` CLI via subprocess).
 - `counters.py`: `CounterReader` (Tesseract per HUD counter, reusing the last reading when the mask is unchanged) and `CounterTracker` (turns readings into change Events and `unreadable` spans).
 - `analysis.py`: `analyse(path, layout)`, the state machine that turns per-second scores into Matches and Events. A Match opens on the HUD and closes only on a results screen.
