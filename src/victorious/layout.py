@@ -1,5 +1,6 @@
 """A Layout: where each HUD element sits on screen, in resolution-independent coordinates."""
 
+import math
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -10,6 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_valida
 EPSILON = 1e-9
 ASPECT_RATIO_TOLERANCE = 0.02
 LAYOUT_SUFFIXES = (".yaml", ".yml")
+COMMON_ASPECT_RATIOS = ((16, 9), (16, 10), (21, 9), (32, 9), (4, 3), (5, 4), (3, 2))
 
 
 class LayoutError(Exception):
@@ -67,6 +69,23 @@ class Layout(_Model):
         wide, high = (int(part) for part in self.aspect_ratio.split(":"))
         expected = wide / high
         return abs(width / height - expected) <= ASPECT_RATIO_TOLERANCE * expected
+
+
+def aspect_ratio_label(width: int, height: int) -> str:
+    """A label such as 16:9 that `Layout.fits(width, height)` accepts."""
+    actual = width / height
+    nearest = min(COMMON_ASPECT_RATIOS, key=lambda ratio: abs(actual - ratio[0] / ratio[1]))
+    wide, high = nearest
+    if abs(actual - wide / high) <= ASPECT_RATIO_TOLERANCE * wide / high:
+        return f"{wide}:{high}"
+    divisor = math.gcd(width, height)
+    return f"{width // divisor}:{height // divisor}"
+
+
+def dump_layout(layout: Layout) -> str:
+    """The Layout as hand-editable YAML, each rectangle on one line."""
+    document = layout.model_dump(exclude_none=True)
+    return yaml.safe_dump(document, sort_keys=False, default_flow_style=None)
 
 
 @dataclass(frozen=True)
