@@ -164,6 +164,21 @@ def test_sidecar_and_output_naming_the_same_file_is_a_clean_error(tmp_path: Path
     assert not shared.exists()
 
 
+def test_sidecar_and_output_naming_one_file_through_a_symlink_is_a_clean_error(
+    tmp_path: Path,
+) -> None:
+    recording, layout = prepare(tmp_path, small(5, ()))
+    shared = tmp_path / "same.json"
+    linked = tmp_path / "link.json"
+    linked.symlink_to(shared)
+
+    result = analyse_text(recording, layout, "--observations", str(shared), "-o", str(linked))
+
+    assert result.returncode == 1
+    assert "same file" in result.stderr
+    assert not shared.exists()
+
+
 def test_the_analysis_output_is_unchanged_by_asking_for_observations(tmp_path: Path) -> None:
     spec = small(DURATION, match_shots(2, STEPS, results_at=20, placement=5))
     recording, layout = prepare(tmp_path, spec)

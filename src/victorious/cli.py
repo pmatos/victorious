@@ -115,7 +115,11 @@ def _require_writable_directory(output: Path | None) -> None:
 
 
 def _require_distinct(observations: Path | None, output: Path | None) -> None:
-    if observations is not None and observations == output:
+    if (
+        observations is not None
+        and output is not None
+        and observations.resolve() == output.resolve()
+    ):
         raise OSError("--observations and --output name the same file")
 
 
