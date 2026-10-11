@@ -20,7 +20,7 @@ uv run victorious --help
 
 | Subcommand | Purpose | Status |
 |------------|---------|--------|
-| `setup` | Produce a Layout from a Recording | working (auto-detect; `--manual` is a placeholder) |
+| `setup` | Produce a Layout from a Recording | working (auto-detect, or `--manual` in a local browser page) |
 | `analyse` | Turn a Recording and a Layout into Matches with Events | working (Matches, Win, final placement, HUD counters) |
 | `review` | Inspect the Events found in a Recording | placeholder |
 | `schema` | Print the JSON schema of the Analysis output | working |
@@ -38,11 +38,23 @@ Point `setup` at one second that shows the in-match HUD and one that shows a res
 | `--at hud=TIME`, `--at results=TIME` | required, once per kind at least; `TIME` is seconds (`754`, `754.5`) or `MM:SS` / `H:MM:SS`, floored to a whole second |
 | `-o`, `--output PATH` | where the Layout (YAML) goes; required, an existing file is replaced |
 | `--preview PATH` | where the preview PNG goes (default: `<output stem>.preview.png`) |
-| `--manual` | place the elements by hand; not implemented yet |
+| `--manual` | place the elements by hand on a local browser page, pre-filled with what auto-detect found |
+| `--no-browser` | with `--manual`, print the address and do not open a browser |
+| `--port N` | with `--manual`, listen on port `N` of `127.0.0.1` (default: any free port) |
 
 Either kind may be repeated, and the best match of each element wins. A results frame shows only one style: a Win has the banner and the gold `#N` (`results_banner`, `placement`), an eliminated player sees a white `YOU PLACED #N` (`elimination_placement`). Pass one of each to get all three; without an eliminated frame the Layout is still written and a warning on stderr names `elimination_placement`. A counter that cannot be read on a frame is reported by name: try another `--at hud=` second where the digits are crisp. The seconds either side of each `--at` are also tried, so one unlucky video frame does not fail a counter.
 
 When a required element cannot be found, `setup` exits 1, names each one with the reason, points to `--manual` and writes no Layout (the preview is still written when anything was found). A missing `--at` kind, or a time that is not a time, is a usage error (exit 2). `setup` finds HUDs between 0.7x and 1.4x of the reference size, but `analyse` reads only 0.9x to 1.1x, so a Layout that would not read back is reported instead of written. The Victory Royale banner animates: pick a second just after it appears, while it is full size, since on some XP screens it shrinks below 0.9x and `setup` then reports it.
+
+#### Placing the elements by hand
+
+```bash
+uv run victorious setup recording.mkv --at hud=12:34 --at results=1:05:20 --manual -o layout.yaml
+```
+
+`--manual` runs auto-detect first, then serves a page on `http://127.0.0.1:PORT/TOKEN/` (the address is printed on stderr and opened in your browser unless `--no-browser`; the random token keeps other pages and users from posting to it). The page shows the frame of every `--at`; the rectangles auto-detect found are already drawn and each element it did not find says why. Pick an element from the fixed list, drag on a frame of the matching kind to draw it, drag a box to move it, its corner to resize it, or type exact values (fractions of the frame, so the resolution does not matter). `Save Layout` writes the same YAML Layout and preview as auto-detect, then the server exits 0. `Ctrl-C` cancels: exit 1, nothing written.
+
+Saving is refused, with the reasons shown on the page, when a required element is missing, an element sits on a frame of the wrong kind or a rectangle leaves the frame. A Layout that is complete but does not read back with the `analyse` readers is still written, because you are the authority; each element that fails is a warning on the page and on stderr.
 
 ### Analyse
 
