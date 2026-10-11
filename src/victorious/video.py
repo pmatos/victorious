@@ -52,13 +52,8 @@ def probe(path: Path) -> VideoInfo:
         raise RecordingError(f"cannot read Recording {path}: no video stream") from error
 
 
-def sample_frames(path: Path, info: VideoInfo) -> Iterator[tuple[int, np.ndarray]]:
-    """Yield (whole seconds from the start, BGR frame), one per second."""
+def _decode(path: Path, info: VideoInfo, command: list[str]) -> Iterator[np.ndarray]:
     frame_bytes = info.width * info.height * 3
-    command = [
-        _tool("ffmpeg"), "-v", "error", "-nostdin", "-i", str(path),
-        "-an", "-sn", "-vf", "fps=1:round=down", "-f", "rawvideo", "-pix_fmt", "bgr24", "-",
-    ]  # fmt: skip
     shape = (info.height, info.width, 3)
     with (
         tempfile.TemporaryFile() as errors,
@@ -67,15 +62,13 @@ def sample_frames(path: Path, info: VideoInfo) -> Iterator[tuple[int, np.ndarray
         stream = process.stdout
         if stream is None:
             raise RecordingError("ffmpeg produced no output stream")
-        second = 0
         truncated = False
         try:
             while data := stream.read(frame_bytes):
                 if len(data) < frame_bytes:
                     truncated = True
                     break
-                yield second, np.frombuffer(data, np.uint8).reshape(shape)
-                second += 1
+                yield np.frombuffer(data, np.uint8).reshape(shape)
         except BaseException:
             process.kill()
             raise
@@ -84,3 +77,29 @@ def sample_frames(path: Path, info: VideoInfo) -> Iterator[tuple[int, np.ndarray
             errors.seek(0)
             detail = errors.read().decode(errors="replace").strip() or "truncated frame"
             raise RecordingError(f"cannot decode Recording {path}: {detail}")
+
+
+def sample_frames(path: Path, info: VideoInfo) -> Iterator[tuple[int, np.ndarray]]:
+    """Yield (whole seconds from the start, BGR frame), one per second."""
+    command = [
+        _tool("ffmpeg"), "-v", "error", "-nostdin", "-i", str(path),
+        "-an", "-sn", "-vf", "fps=1:round=down", "-f", "rawvideo", "-pix_fmt", "bgr24", "-",
+    ]  # fmt: skip
+    return enumerate(_decode(path, info, command))
+
+
+def sample_window(
+    path: Path, info: VideoInfo, start: float, end: float, rate: int
+) -> Iterator[tuple[float, np.ndarray]]:
+    """The frames of [start, end) at `rate` per second with the start of their slot.
+
+    Like `sample_frames`, each frame is the last one of its slot, so the frame of the slot
+    starting at `t` shows the screen just before `t + 1 / rate`.
+    """
+    command = [
+        _tool("ffmpeg"), "-v", "error", "-nostdin", "-ss", f"{start:g}", "-t", f"{end - start:g}",
+        "-i", str(path), "-an", "-sn", "-vf", f"fps={rate}:round=down",
+        "-f", "rawvideo", "-pix_fmt", "bgr24", "-",
+    ]  # fmt: skip
+    frames = _decode(path, info, command)
+    return ((start + k / rate, frame) for k, frame in enumerate(frames))

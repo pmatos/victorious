@@ -1,13 +1,18 @@
+import os
 import subprocess
 import sys
+from collections.abc import Mapping
 from pathlib import Path
 
 
-def run_cli(*args: str, cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
+def run_cli(
+    *args: str, cwd: Path | None = None, env: Mapping[str, str] | None = None
+) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         [sys.executable, "-m", "victorious", *args],
         capture_output=True,
         text=True,
         cwd=cwd,
+        env={**os.environ, **env} if env else None,
         check=False,
     )

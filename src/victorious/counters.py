@@ -1,5 +1,6 @@
 """Reading the HUD counters and turning their readings into Events."""
 
+from collections.abc import Callable, Iterable, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from typing import get_args
@@ -17,6 +18,17 @@ RETRY_CONFIDENCE = 0.5
 MAX_COUNTER_DIGITS = 3
 UNREADABLE_SECONDS = 10.0
 REUSE_MISMATCH = 0.04
+MAX_RESOLVED_JUMP: dict[CounterElement, int] = {
+    "personal_eliminations": 3,
+    "team_eliminations": 3,
+    "players_left": 10,
+}
+MAX_GAP_SECONDS = 3.0
+RISING: dict[CounterElement, int] = {
+    "personal_eliminations": 1,
+    "team_eliminations": 1,
+    "players_left": -1,
+}
 _POOL = ThreadPoolExecutor(max_workers=len(COUNTER_ELEMENTS))
 
 
@@ -24,6 +36,45 @@ _POOL = ThreadPoolExecutor(max_workers=len(COUNTER_ELEMENTS))
 class CounterReading:
     value: int
     confidence: float
+
+
+@dataclass(frozen=True)
+class Step:
+    value: int
+    time: float
+    confidence: float
+
+
+@dataclass(frozen=True)
+class Gap:
+    """A jump of more than one: `old` was last read at `start`, `new` first read at `end`."""
+
+    element: CounterElement
+    start: float
+    end: float
+    old: int
+    new: int
+    confidence: float
+
+
+Resolver = Callable[[Sequence[Gap]], list[list[Step]]]
+
+
+def _further(element: CounterElement, current: int | None, value: int) -> int:
+    """The value that is further along the direction the counter moves in.
+
+    Only the eliminations counters never move back within a Match; the players-left counter
+    rises while the lobby fills, so it has no such memory.
+    """
+    if element == "players_left":
+        return value
+    if current is None or (value - current) * RISING[element] > 0:
+        return value
+    return current
+
+
+def is_ambiguous(element: CounterElement, old: int, new: int) -> bool:
+    return 1 < (new - old) * RISING[element] <= MAX_RESOLVED_JUMP[element]
 
 
 @dataclass(frozen=True)
@@ -72,6 +123,24 @@ def _best_reading(masks: list[np.ndarray]) -> CounterReading | None:
     return best
 
 
+def read_counter_series(
+    frames: Iterable[tuple[float, np.ndarray]], layout: Layout, element: CounterElement
+) -> list[tuple[float, CounterReading | None]]:
+    """One counter read in each frame, skipping Tesseract while its pixels did not change."""
+    rect = _rect(layout, element)
+    if rect is None:
+        return [(time, None) for time, _ in frames]
+    series: list[tuple[float, CounterReading | None]] = []
+    previous: np.ndarray | None = None
+    reading: CounterReading | None = None
+    for time, frame in frames:
+        masks = counter_masks(frame, rect)
+        if previous is None or not _same_pixels(previous, masks[0]):
+            previous, reading = masks[0], _best_reading(masks)
+        series.append((time, reading))
+    return series
+
+
 class CounterReader:
     """Reads each counter once per frame, skipping Tesseract when its pixels did not change."""
 
@@ -108,6 +177,7 @@ class CounterReader:
 class _Pending:
     value: int
     time: float
+    start: float | None
     confidences: list[float] = field(default_factory=list)
 
 
@@ -116,19 +186,27 @@ class _State:
     committed: int | None = None
     pending: _Pending | None = None
     gap_start: float | None = None
+    last_seen: float | None = None
+    furthest: int | None = None
 
 
 class CounterTracker:
-    """Emits an Event when a counter's value changes, once the new value is read twice in a row."""
+    """Emits an Event when a counter's value changes, once the new value is read twice in a row.
+
+    A jump of more than one between two readable seconds is recorded as a Gap; `close` hands the
+    Gaps to a resolver and replaces each jump's single Event by one Event per step.
+    """
 
     def __init__(self, elements: tuple[CounterElement, ...]) -> None:
         self._states: dict[CounterElement, _State] = {element: _State() for element in elements}
         self._events: list[Event] = []
+        self._gaps: dict[int, Gap] = {}
 
     def observe(self, second: float, readings: dict[CounterElement, CounterReading | None]) -> None:
         for element, state in self._states.items():
             reading = readings.get(element)
             if reading is None:
+                state.last_seen = None
                 if state.gap_start is None:
                     state.gap_start = second
                 continue
@@ -147,23 +225,51 @@ class CounterTracker:
     ) -> None:
         if state.committed is not None and reading.value == state.committed:
             state.pending = None
+            state.last_seen = second
             return
         pending = state.pending
         if pending is None or pending.value != reading.value:
-            state.pending = _Pending(reading.value, second, [reading.confidence])
+            state.pending = _Pending(reading.value, second, state.last_seen, [reading.confidence])
             return
         pending.confidences.append(reading.confidence)
         if state.committed is not None:
             confidence = sum(pending.confidences) / len(pending.confidences)
             self._events.append(frame_event(element, pending.time, confidence, pending.value))
+            self._record_gap(element, state, pending, confidence)
         state.committed = pending.value
+        state.furthest = _further(element, state.furthest, pending.value)
         state.pending = None
+        state.last_seen = second
 
-    def close(self, end: float) -> TrackerResult:
+    def _record_gap(
+        self, element: CounterElement, state: _State, pending: _Pending, confidence: float
+    ) -> None:
+        start, committed = pending.start, state.committed
+        if start is None or committed is None or pending.time - start > MAX_GAP_SECONDS:
+            return
+        old = _further(element, state.furthest, committed)
+        if is_ambiguous(element, old, pending.value):
+            gap = Gap(element, start, pending.time, old, pending.value, confidence)
+            self._gaps[len(self._events) - 1] = gap
+
+    def close(self, end: float, resolver: Resolver | None = None) -> TrackerResult:
         for element, state in self._states.items():
             self._close_gap(element, state, end)
+        events = list(self._events)
+        if self._gaps and resolver is not None:
+            resolved = dict(zip(self._gaps, resolver(list(self._gaps.values())), strict=True))
+            events = []
+            for index, event in enumerate(self._events):
+                steps = resolved.get(index)
+                if steps:
+                    events.extend(
+                        frame_event(event.kind, step.time, step.confidence, step.value)
+                        for step in steps
+                    )
+                else:
+                    events.append(event)
         personal = self._states.get("personal_eliminations")
         return TrackerResult(
-            events=list(self._events),
+            events=events,
             personal_eliminations=personal.committed if personal else None,
         )
