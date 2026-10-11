@@ -19,6 +19,15 @@ def test_help_lists_the_four_subcommands() -> None:
         assert name in result.stdout
 
 
+def test_setup_help_describes_the_manual_editor() -> None:
+    result = run_cli("setup", "--help")
+
+    assert result.returncode == 0
+    for option in ("--manual", "--no-browser", "--port"):
+        assert option in result.stdout
+    assert "not implemented" not in result.stdout
+
+
 @pytest.mark.parametrize("command", STUBS)
 def test_stub_subcommand_reports_not_implemented_on_stderr(command: str) -> None:
     result = run_cli(command)

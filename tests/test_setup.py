@@ -1,17 +1,25 @@
 """`victorious setup` writes a Layout `analyse` accepts from the HUD elements it finds."""
 
 import json
-import subprocess
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
 
 import cv2
 import jsonschema
 import numpy as np
 import pytest
 
-from tests.analyse_helpers import FPS, STEADY
+from tests.analyse_helpers import (
+    EXPECTED_MATCHES,
+    FPS,
+    HUD_AT,
+    PLACED_RESULTS_AT,
+    WIN_RESULTS_AT,
+    analyse_facts,
+    intersection_over_union,
+    scenario_spec,
+    setup_at,
+)
 from tests.cli_runner import run_cli
 from tests.synthetic import (
     ELEMENT_RECTS,
@@ -23,25 +31,12 @@ from tests.synthetic import (
     build_recording,
     decode_frame,
     layout_document,
-    match_shots,
     write_layout,
 )
 from victorious.layout import Layout, aspect_ratio_label, load_layout
 from victorious.schema import json_schema
 
 pytestmark = pytest.mark.usefixtures("require_ffmpeg", "require_tesseract")
-
-HUD_AT = 14
-WIN_RESULTS_AT = 21
-PLACED_RESULTS_AT = 46
-
-
-def scenario_shots() -> tuple[Shot, ...]:
-    return (
-        *match_shots(2, ((0, 0, 0, 99), (6, 1, 0, 95), (10, 1, 1, 90)), 20, placement=1),
-        *match_shots(30, STEADY, results_at=45, placement=6, results_style="placed"),
-        *match_shots(60, STEADY, results_at=75, placement=6, results_style="classic"),
-    )
 
 
 @dataclass(frozen=True)
@@ -52,26 +47,8 @@ class SetupRun:
     stderr: str
 
 
-def setup_at(
-    recording: Path,
-    layout_path: Path,
-    *at: str,
-    extra: tuple[str, ...] = (),
-) -> subprocess.CompletedProcess[str]:
-    options = [part for item in at for part in ("--at", item)]
-    return run_cli("setup", str(recording), *options, "-o", str(layout_path), *extra)
-
-
 def run_scenario(directory: Path, width: int = 1920, height: int = 1080) -> SetupRun:
-    spec = RecordingSpec(
-        duration=85,
-        shots=scenario_shots(),
-        fps=FPS,
-        width=width,
-        height=height,
-        keyframe_interval=2,
-    )
-    recording = build_recording(spec, directory / "recording.mkv")
+    recording = build_recording(scenario_spec(width, height), directory / "recording.mkv")
     layout_path = directory / "layout.yaml"
     result = setup_at(
         recording, layout_path, f"hud={HUD_AT}", f"results={WIN_RESULTS_AT}",
@@ -84,35 +61,6 @@ def run_scenario(directory: Path, width: int = 1920, height: int = 1080) -> Setu
 @pytest.fixture(scope="module")
 def ran_setup(tmp_path_factory: pytest.TempPathFactory) -> SetupRun:
     return run_scenario(tmp_path_factory.mktemp("setup"))
-
-
-def analyse_facts(recording: Path, layout: Path) -> list[Any]:
-    """What `analyse` reports of each Match, leaving out the template and OCR confidences."""
-    result = run_cli("analyse", str(recording), "--layout", str(layout), "--no-cache")
-    assert result.returncode == 0, result.stderr
-    return [
-        (
-            match["start"],
-            match["end"],
-            match["win"],
-            match["placement"],
-            match["personal_eliminations"],
-            [
-                (event["kind"], event["time"], event["value"], event["end"], event["element"])
-                for event in match["events"]
-            ],
-        )
-        for match in json.loads(result.stdout)["matches"]
-    ]
-
-
-def intersection_over_union(a: dict[str, float], b: tuple[float, float, float, float]) -> float:
-    ax, ay, aw, ah = a["x"], a["y"], a["w"], a["h"]
-    bx, by, bw, bh = b
-    overlap_w = max(0.0, min(ax + aw, bx + bw) - max(ax, bx))
-    overlap_h = max(0.0, min(ay + ah, by + bh) - max(ay, by))
-    overlap = overlap_w * overlap_h
-    return overlap / (aw * ah + bw * bh - overlap)
 
 
 def test_setup_writes_a_layout_analyse_accepts(ran_setup: SetupRun) -> None:
@@ -129,9 +77,6 @@ def test_setup_writes_a_layout_analyse_accepts(ran_setup: SetupRun) -> None:
         (30.0, 45.0, False, 6),
         (60.0, 75.0, False, 6),
     ]
-
-
-EXPECTED_MATCHES = [(2.0, 20.0, True, 1, 1), (30.0, 45.0, False, 6, 0), (60.0, 75.0, False, 6, 0)]
 
 
 def test_setup_layout_gives_the_same_matches_as_a_hand_written_one(
@@ -182,11 +127,14 @@ def sparse_recording(tmp_path_factory: pytest.TempPathFactory) -> Path:
     return build_recording(compact(40, shots), directory / "recording.mkv")
 
 
-def test_the_two_screen_kinds_are_required(sparse_recording: Path, tmp_path: Path) -> None:
+@pytest.mark.parametrize("extra", [(), ("--manual", "--no-browser")])
+def test_the_two_screen_kinds_are_required(
+    sparse_recording: Path, tmp_path: Path, extra: tuple[str, ...]
+) -> None:
     layout = tmp_path / "layout.yaml"
 
     for given, absent in (((), "hud"), (("hud=10",), "results"), (("results=20",), "hud")):
-        result = setup_at(sparse_recording, layout, *given)
+        result = setup_at(sparse_recording, layout, *given, extra=extra)
 
         assert result.returncode == 2, result.stderr
         assert f"--at {absent}=" in result.stderr
@@ -203,10 +151,13 @@ def test_a_malformed_at_is_a_usage_error(sparse_recording: Path, tmp_path: Path,
     assert list(tmp_path.iterdir()) == []
 
 
+@pytest.mark.parametrize("extra", [(), ("--manual", "--no-browser")])
 def test_a_time_past_the_end_of_the_recording_names_the_duration(
-    sparse_recording: Path, tmp_path: Path
+    sparse_recording: Path, tmp_path: Path, extra: tuple[str, ...]
 ) -> None:
-    result = setup_at(sparse_recording, tmp_path / "layout.yaml", "hud=10", "results=900")
+    result = setup_at(
+        sparse_recording, tmp_path / "layout.yaml", "hud=10", "results=900", extra=extra
+    )
 
     assert result.returncode == 1
     assert "results=900" in result.stderr
@@ -308,26 +259,18 @@ def test_an_ultrawide_recording_gets_the_21_9_label(tmp_path: Path) -> None:
     assert load_layout(layout).fits(2560, 1080)
 
 
-def test_an_unreadable_recording_exits_1_and_writes_nothing(tmp_path: Path) -> None:
+@pytest.mark.parametrize("extra", [(), ("--manual", "--no-browser")])
+def test_an_unreadable_recording_exits_1_and_writes_nothing(
+    tmp_path: Path, extra: tuple[str, ...]
+) -> None:
     broken = tmp_path / "recording.mkv"
     broken.write_bytes(b"not a video")
 
-    result = setup_at(broken, tmp_path / "layout.yaml", "hud=1", "results=2")
+    result = setup_at(broken, tmp_path / "layout.yaml", "hud=1", "results=2", extra=extra)
 
     assert result.returncode == 1
     assert "recording.mkv" in result.stderr
     assert sorted(path.name for path in tmp_path.iterdir()) == ["recording.mkv"]
-
-
-def test_manual_is_not_implemented_yet(sparse_recording: Path, tmp_path: Path) -> None:
-    result = setup_at(
-        sparse_recording, tmp_path / "layout.yaml", "hud=10", "results=20", extra=("--manual",)
-    )
-
-    assert result.returncode == 1
-    assert "--manual" in result.stderr
-    assert "not implemented" in result.stderr
-    assert list(tmp_path.iterdir()) == []
 
 
 def test_a_lobby_second_is_not_a_hud(tmp_path: Path) -> None:

@@ -5,14 +5,17 @@ import re
 from collections.abc import Collection, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 import numpy as np
+from pydantic import ValidationError
 
 from victorious.counters import COUNTER_ELEMENTS, best_reading
 from victorious.detect import Found, find_hud, find_results
 from victorious.layout import (
     HudScreen,
     Layout,
+    Rect,
     ResultsScreen,
     Screens,
     aspect_ratio_label,
@@ -30,6 +33,8 @@ from victorious.video import RecordingError, VideoInfo, frame_at, probe
 
 AT_KINDS = ("hud", "results")
 HUD_ELEMENTS = ("hud_anchor", *COUNTER_ELEMENTS)
+RESULTS_ELEMENTS = ("results_banner", "placement", "elimination_placement")
+ELEMENTS_OF = {"hud": HUD_ELEMENTS, "results": RESULTS_ELEMENTS}
 REQUIRED = (*HUD_ELEMENTS, "results_banner", "placement")
 OPTIONAL_HINT = (
     "pass a second --at results= on a screen that shows YOU PLACED #N to find it, or use --manual"
@@ -199,6 +204,70 @@ def _assemble(
         reason = details.get("elimination_placement", "not found")
         warnings.append(f"elimination_placement: {reason}; {OPTIONAL_HINT}")
     return SetupResult(layout, panels, missing, warnings)
+
+
+def _is_number(value: object) -> bool:
+    return isinstance(value, int | float) and not isinstance(value, bool) and abs(value) < 1e6
+
+
+def _submitted_rects(
+    panels: Sequence[Panel], elements: dict[str, Any]
+) -> tuple[list[dict[str, Found]], list[str]]:
+    placed: list[dict[str, Found]] = [{} for _ in panels]
+    problems: list[str] = []
+    for name, entry in elements.items():
+        if not isinstance(entry, dict):
+            problems.append(f"{name}: expected an object with panel, x, y, w and h")
+            continue
+        index = entry.get("panel")
+        if not isinstance(index, int) or isinstance(index, bool) or not 0 <= index < len(panels):
+            problems.append(f"{name}: panel must be one of 0..{len(panels) - 1}, got {index!r}")
+            continue
+        kind = panels[index].kind
+        if not any(name in names for names in ELEMENTS_OF.values()):
+            problems.append(f"{name}: not a HUD element")
+            continue
+        if name not in ELEMENTS_OF[kind]:
+            problems.append(f"{name}: is not on a {kind} screen, panel {index} is a {kind} frame")
+            continue
+        if not all(_is_number(entry.get(key)) for key in "xywh"):
+            problems.append(f"{name}: x, y, w and h must be finite numbers")
+            continue
+        try:
+            rect = Rect.model_validate({key: round(float(entry[key]), 4) for key in "xywh"})
+        except ValidationError as error:
+            reasons = "; ".join(
+                issue["msg"].removeprefix("Value error, ") for issue in error.errors()
+            )
+            problems.append(f"{name}: {reasons}")
+            continue
+        placed[index][name] = Found(rect, 1.0, 1.0)
+    return placed, problems
+
+
+def manual_result(panels: Sequence[Panel], submitted: object) -> SetupResult | list[str]:
+    """The Layout drawn by hand on `panels`, or every reason it cannot be one.
+
+    `submitted` is the decoded JSON of the page: `{"elements": {name: {panel, x, y, w, h}}}`.
+    The Layout is returned even when a rectangle does not read back; those become warnings.
+    """
+    elements = submitted.get("elements") if isinstance(submitted, dict) else None
+    if not isinstance(elements, dict):
+        return ["elements: expected an object of element name to rectangle"]
+    placed, problems = _submitted_rects(panels, elements)
+    present = {name for names in placed for name in names}
+    problems.extend(f"{name}: required, not placed" for name in REQUIRED if name not in present)
+    height, width = panels[0].frame.shape[:2]
+    found = {name: hit for names in placed for name, hit in names.items()}
+    layout = None if problems else _build_layout(width, height, found)
+    if layout is None:
+        return problems
+    drawn = [
+        Panel(panel.kind, panel.second, panel.frames, names)
+        for panel, names in zip(panels, placed, strict=True)
+    ]
+    warnings = [f"{name}: {reason}" for name, reason in _self_check(layout, drawn).items()]
+    return SetupResult(layout, drawn, {}, warnings)
 
 
 def _neighbour_frames(recording: Path, info: VideoInfo, second: int) -> list[np.ndarray]:

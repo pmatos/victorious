@@ -11,12 +11,38 @@ from pathlib import Path
 from typing import Any
 
 from tests.cli_runner import run_cli
-from tests.synthetic import RecordingSpec, Shot, build_recording, write_layout
+from tests.synthetic import RecordingSpec, Shot, build_recording, match_shots, write_layout
 
 FPS = 5.0
 WIDTH = 1920
 HEIGHT = 1080
 STEADY = ((0.0, 0, 0, 99),)
+
+HUD_AT = 14
+WIN_RESULTS_AT = 21
+PLACED_RESULTS_AT = 46
+LOBBY_HUD_AT = 26
+LOBBY_RESULTS_AT = 27
+EXPECTED_MATCHES = [(2.0, 20.0, True, 1, 1), (30.0, 45.0, False, 6, 0), (60.0, 75.0, False, 6, 0)]
+
+
+def scenario_shots() -> tuple[Shot, ...]:
+    return (
+        *match_shots(2, ((0, 0, 0, 99), (6, 1, 0, 95), (10, 1, 1, 90)), 20, placement=1),
+        *match_shots(30, STEADY, results_at=45, placement=6, results_style="placed"),
+        *match_shots(60, STEADY, results_at=75, placement=6, results_style="classic"),
+    )
+
+
+def scenario_spec(width: int = WIDTH, height: int = HEIGHT) -> RecordingSpec:
+    return RecordingSpec(
+        duration=85,
+        shots=scenario_shots(),
+        fps=FPS,
+        width=width,
+        height=height,
+        keyframe_interval=2,
+    )
 
 
 def small(duration: float, shots: tuple[Shot, ...]) -> RecordingSpec:
@@ -115,3 +141,42 @@ class FfmpegShim:
 
     def reset(self) -> None:
         self.log.unlink(missing_ok=True)
+
+
+def setup_at(
+    recording: Path,
+    layout_path: Path,
+    *at: str,
+    extra: tuple[str, ...] = (),
+) -> subprocess.CompletedProcess[str]:
+    options = [part for item in at for part in ("--at", item)]
+    return run_cli("setup", str(recording), *options, "-o", str(layout_path), *extra)
+
+
+def analyse_facts(recording: Path, layout: Path) -> list[Any]:
+    """What `analyse` reports of each Match, leaving out the template and OCR confidences."""
+    result = run_cli("analyse", str(recording), "--layout", str(layout), "--no-cache")
+    assert result.returncode == 0, result.stderr
+    return [
+        (
+            match["start"],
+            match["end"],
+            match["win"],
+            match["placement"],
+            match["personal_eliminations"],
+            [
+                (event["kind"], event["time"], event["value"], event["end"], event["element"])
+                for event in match["events"]
+            ],
+        )
+        for match in json.loads(result.stdout)["matches"]
+    ]
+
+
+def intersection_over_union(a: dict[str, float], b: tuple[float, float, float, float]) -> float:
+    ax, ay, aw, ah = a["x"], a["y"], a["w"], a["h"]
+    bx, by, bw, bh = b
+    overlap_w = max(0.0, min(ax + aw, bx + bw) - max(ax, bx))
+    overlap_h = max(0.0, min(ay + ah, by + bh) - max(ay, by))
+    overlap = overlap_w * overlap_h
+    return overlap / (aw * ah + bw * bh - overlap)
