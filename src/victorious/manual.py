@@ -2,8 +2,10 @@
 
 import contextlib
 import json
+import os
 import re
 import secrets
+import sys
 import threading
 import webbrowser
 from collections.abc import Callable
@@ -15,12 +17,13 @@ from typing import Any
 import cv2
 
 from victorious.layout import aspect_ratio_label
+from victorious.ocr import OcrError
 from victorious.preview import scaled_frame
 from victorious.setup import ELEMENTS_OF, REQUIRED, SetupResult, manual_result
 
 HOST = "127.0.0.1"
 MAX_BODY = 64 * 1024
-_FRAME = re.compile(r"frame/(\d+)\.png")
+_FRAME = re.compile(r"frame/(\d{1,6})\.png")
 
 
 class _Session:
@@ -63,20 +66,23 @@ class _Session:
         with self.lock:
             if self.saved is not None:
                 return HTTPStatus.CONFLICT, {"errors": ["the Layout was already saved"]}
-            result = manual_result(self.panels, submitted)
-            if isinstance(result, list):
-                return HTTPStatus.BAD_REQUEST, {"errors": result}
             try:
+                result = manual_result(self.panels, submitted)
+                if isinstance(result, list):
+                    return HTTPStatus.BAD_REQUEST, {"errors": result}
                 self.commit(result)
-            except (OSError, cv2.error) as error:
+            except (OSError, cv2.error, OcrError) as error:
                 return HTTPStatus.INTERNAL_SERVER_ERROR, {"errors": [str(error)]}
             self.saved = result
             return HTTPStatus.OK, {"warnings": result.warnings}
 
+    def outcome(self) -> SetupResult | None:
+        """The saved Layout, waiting for a save that is still being written."""
+        with self.lock:
+            return self.saved
 
-def _handler(
-    session: _Session, prefix: str, finish: Callable[[], None]
-) -> type[BaseHTTPRequestHandler]:
+
+def _handler(session: _Session, prefix: str) -> type[BaseHTTPRequestHandler]:
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, format: str, *args: Any) -> None:
             pass
@@ -124,13 +130,14 @@ def _handler(
                 return
             try:
                 submitted = json.loads(self.rfile.read(length))
-            except ValueError:
+            except (ValueError, RecursionError):
                 self._json(HTTPStatus.BAD_REQUEST, {"errors": ["the body is not JSON"]})
                 return
             status, document = session.save(submitted)
-            self._json(status, document)
+            with contextlib.suppress(ConnectionError):
+                self._json(status, document)
             if status == HTTPStatus.OK:
-                finish()
+                threading.Thread(target=self.server.shutdown, daemon=True).start()
 
     return Handler
 
@@ -143,31 +150,32 @@ def serve_manual(
     announce: Callable[[str], None],
     commit: Callable[[SetupResult], None],
 ) -> SetupResult | None:
-    """Serve the page until a Layout is saved (returned) or the user interrupts (`None`)."""
+    """Serve the page until a Layout is saved, then return it; `None` if interrupted before."""
     session = _Session(result, commit)
     prefix = f"/{secrets.token_urlsafe(16)}/"
-    holder: list[ThreadingHTTPServer] = []
-
-    def finish() -> None:
-        threading.Thread(target=holder[0].shutdown, daemon=True).start()
-
     try:
-        server = ThreadingHTTPServer((HOST, port), _handler(session, prefix, finish))
+        server = ThreadingHTTPServer((HOST, port), _handler(session, prefix))
     except OSError as error:
         raise OSError(f"cannot listen on {HOST}:{port}: {error.strerror or error}") from error
-    holder.append(server)
     server.daemon_threads = True
     url = f"http://{HOST}:{server.server_address[1]}{prefix}"
     try:
         announce(url)
-        if open_browser:
+        if open_browser and _has_display():
             threading.Thread(target=_open, args=(url,), daemon=True).start()
         server.serve_forever()
     except KeyboardInterrupt:
-        return None
+        return session.outcome()
     finally:
         server.server_close()
     return session.saved
+
+
+def _has_display() -> bool:
+    """False where `webbrowser` could only fall back to a text browser on this terminal."""
+    if sys.platform != "linux":
+        return True
+    return any(os.environ.get(name) for name in ("DISPLAY", "WAYLAND_DISPLAY", "BROWSER"))
 
 
 def _open(url: str) -> None:

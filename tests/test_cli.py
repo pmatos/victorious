@@ -72,3 +72,14 @@ def test_console_script_entry_point_is_installed() -> None:
 
     assert len(scripts) == 1
     assert callable(next(iter(scripts)).load())
+
+
+@pytest.mark.parametrize("option", [["--no-browser"], ["--port", "8080"]])
+def test_manual_only_options_are_refused_without_manual(option: list[str], tmp_path: Path) -> None:
+    result = run_cli(
+        "setup", "rec.mkv", "--at", "hud=1", "--at", "results=2", "-o", str(tmp_path / "l.yaml"),
+        *option,
+    )  # fmt: skip
+
+    assert result.returncode == 2
+    assert "--manual" in result.stderr

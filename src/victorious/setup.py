@@ -39,6 +39,7 @@ REQUIRED = (*HUD_ELEMENTS, "results_banner", "placement")
 OPTIONAL_HINT = (
     "pass a second --at results= on a screen that shows YOU PLACED #N to find it, or use --manual"
 )
+ROUNDING = 1e-4
 _CLOCK = re.compile(r"\d+(:[0-5]?\d){1,2}(\.\d+)?|\d+(\.\d+)?")
 
 
@@ -210,6 +211,14 @@ def _is_number(value: object) -> bool:
     return isinstance(value, int | float) and not isinstance(value, bool) and abs(value) < 1e6
 
 
+def _snapped(origin: float, extent: float) -> tuple[float, float]:
+    """Both rounded to 4 decimals; the extent is kept in the frame if only rounding left it out."""
+    start, length = round(origin, 4), round(extent, 4)
+    if start + length > 1 and origin + extent <= 1 + ROUNDING:
+        length = round(1 - start, 4)
+    return start, length
+
+
 def _submitted_rects(
     panels: Sequence[Panel], elements: dict[str, Any]
 ) -> tuple[list[dict[str, Found]], list[str]]:
@@ -233,8 +242,10 @@ def _submitted_rects(
         if not all(_is_number(entry.get(key)) for key in "xywh"):
             problems.append(f"{name}: x, y, w and h must be finite numbers")
             continue
+        left, width = _snapped(float(entry["x"]), float(entry["w"]))
+        top, height = _snapped(float(entry["y"]), float(entry["h"]))
         try:
-            rect = Rect.model_validate({key: round(float(entry[key]), 4) for key in "xywh"})
+            rect = Rect.model_validate({"x": left, "y": top, "w": width, "h": height})
         except ValidationError as error:
             reasons = "; ".join(
                 issue["msg"].removeprefix("Value error, ") for issue in error.errors()

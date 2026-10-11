@@ -148,7 +148,7 @@ def build_parser() -> argparse.ArgumentParser:
             sub.add_argument(
                 "--port",
                 type=_port,
-                default=0,
+                default=None,
                 help="with --manual, listen on this port of 127.0.0.1 (default: a free one)",
             )
         if name in {"analyse", "schema"}:
@@ -266,7 +266,7 @@ def _run_manual(args: argparse.Namespace) -> int:
     result = run_setup(args.recording, args.at)
     saved = serve_manual(
         result,
-        port=args.port,
+        port=args.port or 0,
         open_browser=not args.no_browser,
         announce=lambda url: print(
             f"victorious setup: serving {url} (Ctrl-C to cancel)", file=sys.stderr, flush=True
@@ -280,6 +280,8 @@ def _run_manual(args: argparse.Namespace) -> int:
 
 
 def _setup_arguments_error(args: argparse.Namespace) -> str | None:
+    if not args.manual and (args.no_browser or args.port is not None):
+        return "--no-browser and --port only apply with --manual"
     present = {kind for kind, _ in args.at}
     missing = [kind for kind in AT_KINDS if kind not in present]
     if not missing:

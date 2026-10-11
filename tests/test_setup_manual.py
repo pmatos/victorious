@@ -3,6 +3,7 @@
 import json
 import socket
 import stat
+import struct
 import time
 from collections.abc import Callable, Iterator
 from pathlib import Path
@@ -423,3 +424,55 @@ def test_the_environment_leaves_no_browser_process_when_none_is_wanted(
 
     assert not marker.exists()
     running.interrupt()
+
+
+def test_a_rectangle_flush_with_the_frame_edge_survives_rounding(
+    recording: Path, start: Starter, tmp_path: Path
+) -> None:
+    running = start(recording, *AT)
+    running.url()
+    document = drawn(THREE_PANELS)
+    document["elements"]["placement"].update(x=0.84996, w=0.15006)
+
+    status, reply = running.post_json("layout", document)
+
+    assert status == 200, reply
+    assert running.wait() == 0
+    placement = saved_rects(tmp_path / "layout.yaml")["placement"]
+    assert placement["x"] + placement["w"] == pytest.approx(1.0, abs=1e-9)
+
+
+def test_requests_the_server_cannot_parse_are_answered_not_dropped(
+    recording: Path, start: Starter
+) -> None:
+    running = start(recording, *AT)
+    running.url()
+
+    nested = running.request("layout", b"[" * 60_000)
+    huge_frame = running.request("frame/" + "9" * 5000 + ".png")
+
+    assert nested[0] == 400
+    assert huge_frame[0] == 404
+    assert running.alive()
+    running.interrupt()
+
+
+def test_a_save_survives_the_page_going_away_before_the_answer(
+    recording: Path, start: Starter, tmp_path: Path
+) -> None:
+    running = start(recording, *AT)
+    url = running.url()
+    parsed = urlparse(url)
+    body = json.dumps(drawn(THREE_PANELS)).encode()
+    request = (
+        f"POST {parsed.path}layout HTTP/1.1\r\nHost: {parsed.netloc}\r\n"
+        f"Content-Type: application/json\r\nContent-Length: {len(body)}\r\n\r\n"
+    ).encode() + body
+
+    with socket.create_connection(("127.0.0.1", parsed.port or 0), timeout=10) as connection:
+        connection.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))
+        connection.sendall(request)
+
+    assert running.wait(timeout=60) == 0
+    assert load_layout(tmp_path / "layout.yaml")
+    assert "cancelled" not in running.stderr_text
