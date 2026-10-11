@@ -36,15 +36,23 @@ def recording(tmp_path_factory: pytest.TempPathFactory) -> tuple[Path, Path]:
 
 
 def output_of(recording: tuple[Path, Path], *options: str) -> str:
-    result = analyse_text(*recording, *options)
+    result = analyse_text(*recording, "--no-cache", *options)
     assert result.returncode == 0, result.stderr
     return result.stdout
 
 
-def test_chunked_parallel_output_equals_serial_decode(recording: tuple[Path, Path]) -> None:
+def test_chunked_parallel_output_equals_serial_decode(
+    recording: tuple[Path, Path], tmp_path: Path
+) -> None:
     serial = output_of(recording, *SERIAL)
 
-    assert output_of(recording, "--jobs", "3", "--chunk-seconds", "10") == serial
+    shim = FfmpegShim(tmp_path / "shim")
+    chunked = analyse_text(
+        *recording, "--no-cache", "--jobs", "3", "--chunk-seconds", "10", env=shim.env
+    )
+    assert chunked.returncode == 0, chunked.stderr
+    assert chunked.stdout == serial
+    assert shim.decodes(matching="-vf fps=1:") == 6
     assert output_of(recording, "--jobs", "2", "--chunk-seconds", "7") == serial
     assert output_of(recording, "--jobs", "4") == serial
 

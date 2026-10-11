@@ -92,8 +92,9 @@ class FfmpegShim:
         script.chmod(script.stat().st_mode | stat.S_IEXEC)
         self.env = {"PATH": f"{directory}{os.pathsep}{os.environ['PATH']}"}
 
-    def decodes(self) -> int:
-        return len(self.log.read_text().splitlines()) if self.log.exists() else 0
+    def decodes(self, matching: str = "") -> int:
+        lines = self.log.read_text().splitlines() if self.log.exists() else []
+        return sum(matching in line for line in lines)
 
     def reset(self) -> None:
         self.log.unlink(missing_ok=True)
