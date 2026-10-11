@@ -6,7 +6,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from victorious.layout import Rect
 
-SCHEMA_VERSION = "1.1"
+SCHEMA_VERSION = "1.2"
 
 CounterElement = Literal["personal_eliminations", "team_eliminations", "players_left"]
 EventKind = Literal[
@@ -96,9 +96,17 @@ class ObservationRecord(_Model):
     region: Rect
 
 
+class ChosenLayout(_Model):
+    path: str = Field(description="The Layout file used, as given on the command line.")
+    score: float = Field(
+        ge=0, le=1, description="Mean match of its HUD anchor over the in-match frames sampled."
+    )
+
+
 class AnalysisOutput(_Model):
-    schema_version: Literal["1.1"] = SCHEMA_VERSION  # type: ignore[assignment]
+    schema_version: Literal["1.2"] = SCHEMA_VERSION  # type: ignore[assignment]
     recording: RecordingInfo
+    layout: ChosenLayout
     matches: list[Match]
 
 

@@ -15,13 +15,14 @@ from victorious.counters import (
     ReuseTracker,
     tracked_elements,
 )
-from victorious.layout import Layout
+from victorious.layout import Layout, LoadedLayout
 from victorious.observations import Counters, SecondObservation
 from victorious.ocr import find_tesseract
 from victorious.parallel import extract_seconds, read_counters
 from victorious.resample import JumpResolver
 from victorious.schema import (
     AnalysisOutput,
+    ChosenLayout,
     CounterElement,
     Event,
     Match,
@@ -29,6 +30,7 @@ from victorious.schema import (
     frame_event,
 )
 from victorious.screens import HUD_THRESHOLD, RESULTS_THRESHOLD, ResultsReading
+from victorious.selection import select_layout
 from victorious.video import VideoInfo, probe
 
 PLACEMENT_READINGS_PER_RUN = 5
@@ -114,13 +116,11 @@ class CounterSource(Protocol):
 
 
 def run_machine(
-    path: Path,
-    info: VideoInfo,
     layout: Layout,
     observations: Sequence[SecondObservation],
     counters: CounterSource,
     resolver: Resolver | None,
-) -> AnalysisOutput:
+) -> list[Match]:
     matches: list[Match] = []
     current: _OpenMatch | None = None
     in_results = False
@@ -166,9 +166,7 @@ def run_machine(
 
     if current is not None:
         matches.append(_finish(len(matches), current, resolver))
-    return AnalysisOutput(
-        recording=RecordingInfo(path=str(path), duration=info.duration), matches=matches
-    )
+    return matches
 
 
 class _ScheduleRecorder:
@@ -207,7 +205,7 @@ def _with_counters(
     seconds = extract_seconds(path, info, layout, jobs, chunk_seconds)
     observations = [second.observation for second in seconds]
     recorder = _ScheduleRecorder()
-    run_machine(path, info, layout, observations, recorder, None)
+    run_machine(layout, observations, recorder, None)
 
     elements = tracked_elements(layout)
     reuse = ReuseTracker()
@@ -239,39 +237,47 @@ class Analysis:
     output: AnalysisOutput
     observations: list[SecondObservation]
     cached: bool
+    layout: LoadedLayout
+    candidates: int
 
 
 def analyse_with_observations(
     path: Path,
-    layout: Layout,
+    layouts: Sequence[LoadedLayout],
     *,
     jobs: int = 1,
     chunk_seconds: int = 60,
     cache: ObservationCache | None = None,
 ) -> Analysis:
     info = probe(path)
-    layout.require_aspect_ratio(info.width, info.height)
     find_tesseract()
+    selection = select_layout(path, info, layouts, jobs=jobs, cache=cache)
+    layout = selection.chosen.layout
     entry = cache.entry(path, layout) if cache is not None else None
     observations = entry.load() if entry is not None else None
     cached = observations is not None
     if observations is None:
         observations = _with_counters(path, info, layout, jobs, chunk_seconds)
     resolver = JumpResolver(path, info, layout, entry)
-    output = run_machine(path, info, layout, observations, _Readings(observations), resolver)
+    matches = run_machine(layout, observations, _Readings(observations), resolver)
     if entry is not None and not cached:
         entry.store(observations)
-    return Analysis(output, observations, cached)
+    output = AnalysisOutput(
+        recording=RecordingInfo(path=str(path), duration=info.duration),
+        layout=ChosenLayout(path=str(selection.chosen.path), score=selection.score),
+        matches=matches,
+    )
+    return Analysis(output, observations, cached, selection.chosen, selection.fitting)
 
 
 def analyse(
     path: Path,
-    layout: Layout,
+    layouts: Sequence[LoadedLayout],
     *,
     jobs: int = 1,
     chunk_seconds: int = 60,
     cache: ObservationCache | None = None,
 ) -> AnalysisOutput:
     return analyse_with_observations(
-        path, layout, jobs=jobs, chunk_seconds=chunk_seconds, cache=cache
+        path, layouts, jobs=jobs, chunk_seconds=chunk_seconds, cache=cache
     ).output

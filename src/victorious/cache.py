@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 import secrets
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
@@ -19,6 +20,7 @@ from victorious.observations import (
 from victorious.schema import CounterElement
 
 OBSERVATION_VERSION = 1
+SELECTION_VERSION = 1
 FINGERPRINT_SAMPLE = 1 << 20
 
 Series = list[tuple[float, CounterReading | None]]
@@ -116,3 +118,29 @@ class ObservationCache:
     def entry(self, recording: Path, layout: Layout) -> CacheEntry:
         name = f"{fingerprint(recording)[:24]}-{layout_hash(layout)[:24]}-v{OBSERVATION_VERSION}"
         return CacheEntry(self._root / name)
+
+    def selection(self, recording: Path, layout_hashes: Sequence[str]) -> "SelectionEntry":
+        digest = hashlib.sha256("\n".join(sorted(set(layout_hashes))).encode()).hexdigest()
+        name = f"selection-{fingerprint(recording)[:24]}-{digest[:24]}-v{SELECTION_VERSION}.json"
+        return SelectionEntry(self._root / name, layout_hashes)
+
+
+class SelectionEntry:
+    """The score of each candidate Layout of one Recording, in the order of their hashes."""
+
+    def __init__(self, file: Path, layout_hashes: Sequence[str]) -> None:
+        self._file = file
+        self._hashes = list(layout_hashes)
+
+    def load(self) -> list[float] | None:
+        document = _read_json(self._file)
+        if not isinstance(document, dict):
+            return None
+        scores = [document.get(digest) for digest in self._hashes]
+        if not all(isinstance(s, int | float) and not isinstance(s, bool) for s in scores):
+            return None
+        return [float(s) for s in scores if s is not None]
+
+    def store(self, scores: Sequence[float]) -> None:
+        document = dict(zip(self._hashes, scores, strict=True))
+        _write_atomically(self._file, json.dumps(document, sort_keys=True))

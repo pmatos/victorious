@@ -13,7 +13,7 @@ from pydantic import ValidationError
 
 from victorious.analysis import analyse_with_observations
 from victorious.cache import ObservationCache, default_cache_root
-from victorious.layout import LayoutError, load_layout
+from victorious.layout import LayoutError, load_layouts
 from victorious.observations import records
 from victorious.ocr import OcrError
 from victorious.schema import json_schema
@@ -66,7 +66,12 @@ def build_parser() -> argparse.ArgumentParser:
         )
         if name == "analyse":
             sub.add_argument("recording", type=Path, help="the Recording to analyse")
-            sub.add_argument("--layout", type=Path, required=True, help="the Layout file (YAML)")
+            sub.add_argument(
+                "--layout",
+                type=Path,
+                required=True,
+                help="a Layout file, or a directory of Layouts (YAML); the best fit is used",
+            )
             sub.add_argument(
                 "--jobs",
                 type=_positive_int,
@@ -124,19 +129,28 @@ def _require_distinct(observations: Path | None, output: Path | None) -> None:
 
 
 def _run_analyse(args: argparse.Namespace) -> tuple[str, str | None]:
-    layout = load_layout(args.layout)
+    layouts = load_layouts(args.layout)
     cache = None if args.no_cache else ObservationCache(args.cache_dir or default_cache_root())
     started = time.monotonic()
     analysis = analyse_with_observations(
-        args.recording, layout, jobs=args.jobs, chunk_seconds=args.chunk_seconds, cache=cache
+        args.recording, layouts, jobs=args.jobs, chunk_seconds=args.chunk_seconds, cache=cache
     )
     state = "off" if cache is None else "hit" if analysis.cached else "miss"
     elapsed = time.monotonic() - started
-    print(f"victorious analyse: cache {state}, {elapsed:.1f} s", file=sys.stderr)
+    chosen = analysis.output.layout
+    print(
+        f"victorious analyse: layout {chosen.path} (score {chosen.score:.2f}, "
+        f"{analysis.candidates} candidate{'s' if analysis.candidates != 1 else ''}), "
+        f"cache {state}, {elapsed:.1f} s",
+        file=sys.stderr,
+    )
     text = analysis.output.model_dump_json(indent=2) + "\n"
     if args.observations is None:
         return text, None
-    lines = (record.model_dump_json() for record in records(analysis.observations, layout))
+    lines = (
+        record.model_dump_json()
+        for record in records(analysis.observations, analysis.layout.layout)
+    )
     return text, "".join(f"{line}\n" for line in lines)
 
 

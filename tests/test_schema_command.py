@@ -17,9 +17,9 @@ def test_schema_prints_a_json_schema_with_its_version() -> None:
     assert result.returncode == 0, result.stderr
     schema = json.loads(result.stdout)
     jsonschema.Draft202012Validator.check_schema(schema)
-    assert schema["schema_version"] == "1.1"
-    assert schema["properties"]["schema_version"]["const"] == "1.1"
-    assert {"schema_version", "recording", "matches"} <= set(schema["required"])
+    assert schema["schema_version"] == "1.2"
+    assert schema["properties"]["schema_version"]["const"] == "1.2"
+    assert {"schema_version", "recording", "layout", "matches"} <= set(schema["required"])
 
 
 def test_schema_rejects_documents_missing_required_fields() -> None:
@@ -38,7 +38,7 @@ def test_schema_output_option_writes_the_file(tmp_path: Path) -> None:
 
     assert result.returncode == 0, result.stderr
     assert result.stdout == ""
-    assert json.loads(target.read_text())["schema_version"] == "1.1"
+    assert json.loads(target.read_text())["schema_version"] == "1.2"
 
 
 def test_output_file_gets_the_default_permissions_not_owner_only(tmp_path: Path) -> None:

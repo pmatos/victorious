@@ -71,6 +71,11 @@ def analyse_text(
     return run_cli("analyse", str(recording), "--layout", str(layout), *options, env=env)
 
 
+def is_selection_seek(line: str) -> bool:
+    """Layout selection decodes the one frame at a second: a 1 s span at 1 fps."""
+    return " -t 1 -i " in line and "-vf fps=1:" in line
+
+
 class FfmpegShim:
     """An `ffmpeg` first on PATH that logs each invocation, then runs the real one."""
 
@@ -82,9 +87,11 @@ class FfmpegShim:
         script = directory / "ffmpeg"
         refusal = ""
         if fail_when is not None:
+            words = fail_when.split()
+            label = words[words.index("-ss") + 1] if "-ss" in words else words[-1]
             refusal = (
                 f'case "$*" in *{shlex.quote(fail_when)}*) '
-                f'echo "chunk {fail_when.split()[-1]} refused" >&2; exit 1;; esac\n'
+                f'echo "chunk {label} refused" >&2; exit 1;; esac\n'
             )
         script.write_text(
             f'#!/bin/sh\necho "$*" >> {shlex.quote(str(self.log))}\n{refusal}exec {real} "$@"\n'
@@ -92,9 +99,19 @@ class FfmpegShim:
         script.chmod(script.stat().st_mode | stat.S_IEXEC)
         self.env = {"PATH": f"{directory}{os.pathsep}{os.environ['PATH']}"}
 
-    def decodes(self, matching: str = "") -> int:
-        lines = self.log.read_text().splitlines() if self.log.exists() else []
-        return sum(matching in line for line in lines)
+    def lines(self) -> list[str]:
+        return self.log.read_text().splitlines() if self.log.exists() else []
+
+    def decodes(self, matching: str = "", chunks_only: bool = False) -> int:
+        """Invocations containing `matching`; `chunks_only` leaves out Layout selection's seeks."""
+        return sum(
+            matching in line and not (chunks_only and is_selection_seek(line))
+            for line in self.lines()
+        )
+
+    def chunk_decodes(self) -> int:
+        """Decodes of a stretch of the Recording at one frame per second."""
+        return self.decodes(matching="-vf fps=1:", chunks_only=True)
 
     def reset(self) -> None:
         self.log.unlink(missing_ok=True)

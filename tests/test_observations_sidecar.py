@@ -122,7 +122,7 @@ def test_sidecar_is_identical_from_cache_and_from_a_fresh_decode(tmp_path: Path)
 
 def test_sidecar_is_not_written_when_the_analysis_fails(tmp_path: Path) -> None:
     recording, layout = prepare(tmp_path, small(DURATION, (Shot(Hud(), 2, 25),)))
-    shim = FfmpegShim(tmp_path / "shim", fail_when="-ss 10 ")
+    shim = FfmpegShim(tmp_path / "shim", fail_when="-ss 10 -t 10")
     destination = tmp_path / "observations.jsonl"
 
     result = analyse_text(

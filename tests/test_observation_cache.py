@@ -31,7 +31,7 @@ def test_second_run_skips_decoding(tmp_path: Path) -> None:
     shim = FfmpegShim(tmp_path / "shim")
 
     first = analyse_text(recording, layout, env=shim.env)
-    cold_decodes = shim.decodes()
+    cold_decodes = shim.decodes(chunks_only=True)
     shim.reset()
     second = analyse_text(recording, layout, env=shim.env)
 
@@ -107,10 +107,10 @@ def test_no_cache_always_decodes_and_writes_nothing(tmp_path: Path) -> None:
     shim = FfmpegShim(tmp_path / "shim")
 
     analyse_text(recording, layout, "--no-cache", env=shim.env)
-    first = shim.decodes()
+    first = shim.decodes(chunks_only=True)
     analyse_text(recording, layout, "--no-cache", env=shim.env)
 
-    assert shim.decodes() == 2 * first
+    assert shim.decodes(chunks_only=True) == 2 * first
     assert first > 0
     assert not xdg_root().exists()
 
@@ -142,7 +142,7 @@ def test_default_cache_location_follows_xdg_cache_home(tmp_path: Path) -> None:
 def test_failed_run_leaves_no_cache_entry(tmp_path: Path) -> None:
     shots = (Shot(Hud(), 2, 30),)
     recording, layout = prepare(tmp_path, fast(35, shots))
-    shim = FfmpegShim(tmp_path / "shim", fail_when="-ss 20 ")
+    shim = FfmpegShim(tmp_path / "shim", fail_when="-ss 20 -t 10")
 
     result = analyse_text(recording, layout, "--jobs", "2", "--chunk-seconds", "10", env=shim.env)
 
