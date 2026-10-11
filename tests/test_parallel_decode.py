@@ -52,7 +52,7 @@ def test_chunked_parallel_output_equals_serial_decode(
     )
     assert chunked.returncode == 0, chunked.stderr
     assert chunked.stdout == serial
-    assert shim.decodes(matching="-vf fps=1:") == 6
+    assert shim.chunk_decodes() == 6
     assert output_of(recording, "--jobs", "2", "--chunk-seconds", "7") == serial
     assert output_of(recording, "--jobs", "4") == serial
 
@@ -77,7 +77,7 @@ def test_jobs_has_no_effect_on_output(recording: tuple[Path, Path], jobs: str) -
 def test_a_failing_chunk_fails_the_run_without_output(tmp_path: Path) -> None:
     shots = (Shot(Hud(), 2, 30), Shot(Results(placement=3), 30, 35))
     recording, layout = prepare(tmp_path, small(40, shots))
-    shim = FfmpegShim(tmp_path / "shim", fail_when="-ss 20 ")
+    shim = FfmpegShim(tmp_path / "shim", fail_when="-ss 20 -t 5")
     output = tmp_path / "out.json"
 
     result = analyse_text(

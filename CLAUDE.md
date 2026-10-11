@@ -13,7 +13,7 @@ Installable package in `src/victorious/` (hatchling build, console script `victo
 - `cli.py`: argparse entry point exposing the subcommands below.
 - `__main__.py`: enables `python -m victorious`.
 - `matcher.py`: internal multi-scale template matcher (scales 0.3-1.2) used as a detector for reference images such as the Victory Royale banner. Not a user-facing command.
-- `layout.py`: pydantic `Layout` (YAML, normalized rects) and `load_layout`.
+- `layout.py`: pydantic `Layout` (YAML, normalized rects), `Layout.fits` (aspect ratio), `load_layout` and `load_layouts` (a file or a directory of Layouts, as `LoadedLayout`s).
 - `schema.py`: pydantic output models (`AnalysisOutput`, `Match`, `Event`), `SCHEMA_VERSION`, `json_schema()`.
 - `video.py`: `probe` (ffprobe), `sample_chunk` (one BGR frame per second of a whole-second chunk through an ffmpeg raw pipe) and `sample_window` (a short seek-based decode at a higher rate, used to bisect counter jumps).
 - `references.py` and `data/`: reference images shipped in the package (HUD icons, Victory Royale banner, `#` glyph).
@@ -23,8 +23,9 @@ Installable package in `src/victorious/` (hatchling build, console script `victo
 - `resample.py`: `resolve_jump` (pure: times each step of a jump from 4 fps samples) and `JumpResolver` (decodes each Gap's window, pooled per Match close). `analyse` seeks only for ambiguous gaps.
 - `observations.py`: `SecondObservation` (everything read at one second), per-chunk extraction with packed counter masks, JSON (de)serialisation and the `--observations` records.
 - `parallel.py`: the chunk plan and `spawn` process pool for frame facts (abort flag, error transport), and the OCR thread pool for counters.
-- `cache.py`: Observation cache keyed by Recording fingerprint, Layout hash and `OBSERVATION_VERSION` (bump it when readings or thresholds change), plus the bisect windows.
-- `analysis.py`: `analyse(path, layout, jobs=, chunk_seconds=, cache=)` and `run_machine`, the state machine that turns per-second Observations into Matches and Events. A Match opens on the HUD and closes only on a results screen. Output must not depend on `jobs` or chunk size: the skip-OCR rule is replayed with `ReuseTracker` over the exact schedule of counter reads the machine produces, instead of running per chunk.
+- `selection.py`: `select_layout` drops Layouts whose aspect ratio does not fit the Recording, scores each remaining `hud_anchor` on up to 20 in-match frames (at most 240 candidate seconds, read in time order so the choice does not depend on `--jobs`) and picks the best; none above `MIN_LAYOUT_SCORE` is a `LayoutSelectionError`.
+- `cache.py`: Observation cache keyed by Recording fingerprint, Layout hash and `OBSERVATION_VERSION` (bump it when readings or thresholds change), plus the bisect windows. The selection scores live beside it in `selection-*.json`, keyed by the Recording and the set of Layout hashes and by both `OBSERVATION_VERSION` and `SELECTION_VERSION` (bump the latter when `SCORED_FRAMES`, `MAX_CANDIDATE_FRAMES` or how a score is formed changes).
+- `analysis.py`: `analyse(path, layouts, jobs=, chunk_seconds=, cache=)` and `run_machine`, the state machine that turns per-second Observations into Matches and Events. A Match opens on the HUD and closes only on a results screen. Output must not depend on `jobs` or chunk size: the skip-OCR rule is replayed with `ReuseTracker` over the exact schedule of counter reads the machine produces, instead of running per chunk.
 
 | Subcommand | Purpose | Status |
 |------------|---------|--------|

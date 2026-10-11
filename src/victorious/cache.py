@@ -2,8 +2,10 @@
 
 import hashlib
 import json
+import math
 import os
 import secrets
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
@@ -19,6 +21,7 @@ from victorious.observations import (
 from victorious.schema import CounterElement
 
 OBSERVATION_VERSION = 1
+SELECTION_VERSION = 1
 FINGERPRINT_SAMPLE = 1 << 20
 
 Series = list[tuple[float, CounterReading | None]]
@@ -109,10 +112,52 @@ class CacheEntry:
         _write_atomically(self._series_path(element, start, end), json.dumps(document))
 
 
+class SelectionEntry:
+    """The score of each candidate Layout of one Recording, in the order of their hashes."""
+
+    def __init__(self, file: Path, layout_hashes: Sequence[str]) -> None:
+        self._file = file
+        self._hashes = list(layout_hashes)
+
+    def load(self) -> list[float] | None:
+        document = _read_json(self._file)
+        if not isinstance(document, dict):
+            return None
+        scores: list[float] = []
+        for digest in self._hashes:
+            score = document.get(digest)
+            if isinstance(score, bool) or not isinstance(score, int | float):
+                return None
+            if not math.isfinite(score) or not 0.0 <= score <= 1.0:
+                return None
+            scores.append(float(score))
+        return scores
+
+    def store(self, scores: Sequence[float]) -> None:
+        document = dict(zip(self._hashes, scores, strict=True))
+        _write_atomically(self._file, json.dumps(document, sort_keys=True))
+
+
 class ObservationCache:
     def __init__(self, root: Path) -> None:
         self._root = root
+        self._fingerprints: dict[Path, str] = {}
+
+    def _fingerprint(self, recording: Path) -> str:
+        if recording not in self._fingerprints:
+            self._fingerprints[recording] = fingerprint(recording)
+        return self._fingerprints[recording]
 
     def entry(self, recording: Path, layout: Layout) -> CacheEntry:
-        name = f"{fingerprint(recording)[:24]}-{layout_hash(layout)[:24]}-v{OBSERVATION_VERSION}"
+        name = (
+            f"{self._fingerprint(recording)[:24]}-{layout_hash(layout)[:24]}-v{OBSERVATION_VERSION}"
+        )
         return CacheEntry(self._root / name)
+
+    def selection(self, recording: Path, layout_hashes: Sequence[str]) -> SelectionEntry:
+        digest = hashlib.sha256("\n".join(sorted(set(layout_hashes))).encode()).hexdigest()
+        name = (
+            f"selection-{self._fingerprint(recording)[:24]}-{digest[:24]}"
+            f"-v{OBSERVATION_VERSION}.{SELECTION_VERSION}.json"
+        )
+        return SelectionEntry(self._root / name, layout_hashes)

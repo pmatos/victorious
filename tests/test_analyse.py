@@ -25,7 +25,7 @@ from tests.synthetic import (
 from victorious import cli, screens
 from victorious import parallel as parallel_module
 from victorious.analysis import analyse as analyse_recording
-from victorious.layout import load_layout
+from victorious.layout import load_layouts
 from victorious.ocr import OcrError
 
 pytestmark = pytest.mark.usefixtures("require_ffmpeg", "require_tesseract")
@@ -35,7 +35,7 @@ def summary(output: dict[str, Any]) -> list[tuple[float, float, bool, int | None
     return [(m["start"], m["end"], m["win"], m["placement"]) for m in output["matches"]]
 
 
-@pytest.mark.parametrize("size", [(1280, 720), (2560, 1440)])
+@pytest.mark.parametrize("size", [(1280, 720), (1920, 1080), (2560, 1440)])
 def test_two_matches_one_win_one_loss(tmp_path: Path, size: tuple[int, int]) -> None:
     shots = (
         *match_shots(5, STEADY, results_at=25, placement=1),
@@ -48,6 +48,7 @@ def test_two_matches_one_win_one_loss(tmp_path: Path, size: tuple[int, int]) -> 
     output = analyse(tmp_path, spec)
 
     assert summary(output) == [(5.0, 25.0, True, 1), (45.0, 70.0, False, 7)]
+    assert output["layout"]["score"] >= 0.7
 
 
 def test_eliminated_results_screens_end_each_match_and_give_the_placement(tmp_path: Path) -> None:
@@ -226,10 +227,15 @@ def test_placements_with_repeated_and_similar_digits_are_read(tmp_path: Path) ->
     assert not any(m["win"] for m in output["matches"])
 
 
-def test_recording_with_no_match_yields_no_matches(tmp_path: Path) -> None:
-    output = analyse(tmp_path, small(10, ()))
+def test_recording_without_a_hud_is_refused_not_reported_empty(tmp_path: Path) -> None:
+    recording = build_recording(small(10, ()), tmp_path / "recording.mkv")
+    layout = write_layout(tmp_path / "layout.yaml")
 
-    assert output["matches"] == []
+    result = run_cli("analyse", str(recording), "--layout", str(layout))
+
+    assert result.returncode == 1
+    assert "no Layout matches" in result.stderr
+    assert result.stdout == ""
 
 
 def test_recording_ending_mid_match_reports_an_unfinished_match(tmp_path: Path) -> None:
@@ -310,7 +316,7 @@ def test_results_screens_with_unreadable_digits_still_end_each_match(
         *match_shots(45, STEADY, results_at=70, placement=4),
     )
     recording = build_recording(small(80, shots), tmp_path / "recording.mkv")
-    layout = load_layout(write_layout(tmp_path / "layout.yaml"))
+    layout = load_layouts(write_layout(tmp_path / "layout.yaml"))
 
     output = analyse_recording(recording, layout)
 
@@ -324,7 +330,7 @@ def test_missing_tesseract_fails_before_any_frame_is_decoded(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     recording = build_recording(small(10, ()), tmp_path / "recording.mkv")
-    layout = load_layout(write_layout(tmp_path / "layout.yaml"))
+    layout = load_layouts(write_layout(tmp_path / "layout.yaml"))
     real_which = shutil.which
     monkeypatch.setattr(
         shutil, "which", lambda name: None if name == "tesseract" else real_which(name)

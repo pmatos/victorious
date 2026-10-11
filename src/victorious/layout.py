@@ -1,6 +1,7 @@
 """A Layout: where each HUD element sits on screen, in resolution-independent coordinates."""
 
 import re
+from dataclasses import dataclass
 from pathlib import Path
 
 import yaml
@@ -8,6 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_valida
 
 EPSILON = 1e-9
 ASPECT_RATIO_TOLERANCE = 0.02
+LAYOUT_SUFFIXES = (".yaml", ".yml")
 
 
 class LayoutError(Exception):
@@ -61,14 +63,16 @@ class Layout(_Model):
             raise ValueError("must look like 16:9")
         return value
 
-    def require_aspect_ratio(self, width: int, height: int) -> None:
+    def fits(self, width: int, height: int) -> bool:
         wide, high = (int(part) for part in self.aspect_ratio.split(":"))
         expected = wide / high
-        if abs(width / height - expected) > ASPECT_RATIO_TOLERANCE * expected:
-            raise LayoutError(
-                f"Layout is for aspect ratio {self.aspect_ratio} "
-                f"but the Recording is {width}x{height}"
-            )
+        return abs(width / height - expected) <= ASPECT_RATIO_TOLERANCE * expected
+
+
+@dataclass(frozen=True)
+class LoadedLayout:
+    path: Path
+    layout: Layout
 
 
 def load_layout(path: Path) -> Layout:
@@ -86,3 +90,16 @@ def load_layout(path: Path) -> Layout:
             for issue in error.errors()
         )
         raise LayoutError(f"invalid Layout {path}: {problems}") from error
+
+
+def load_layouts(path: Path) -> list[LoadedLayout]:
+    """The Layout at `path`, or every `*.yaml` / `*.yml` Layout directly inside it by name."""
+    if not path.is_dir():
+        return [LoadedLayout(path, load_layout(path))]
+    files = sorted(
+        (entry for entry in path.iterdir() if entry.suffix in LAYOUT_SUFFIXES and entry.is_file()),
+        key=lambda entry: entry.name,
+    )
+    if not files:
+        raise LayoutError(f"no Layout files (*.yaml, *.yml) in {path}")
+    return [LoadedLayout(file, load_layout(file)) for file in files]
