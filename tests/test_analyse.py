@@ -9,6 +9,7 @@ import cv2
 import jsonschema
 import pytest
 
+from tests.analyse_helpers import FPS, STEADY, analyse, small
 from tests.cli_runner import run_cli
 from tests.synthetic import (
     Hud,
@@ -28,22 +29,6 @@ from victorious.layout import load_layout
 from victorious.ocr import OcrError
 
 pytestmark = pytest.mark.usefixtures("require_ffmpeg", "require_tesseract")
-
-FPS = 5.0
-STEADY = ((0.0, 0, 0, 99),)
-
-
-def small(duration: float, shots: tuple[Shot, ...]) -> RecordingSpec:
-    return RecordingSpec(duration=duration, shots=shots, fps=FPS, keyframe_interval=2)
-
-
-def analyse(tmp_path: Path, spec: RecordingSpec) -> dict[str, Any]:
-    recording = build_recording(spec, tmp_path / "recording.mkv")
-    layout = write_layout(tmp_path / "layout.yaml")
-    result = run_cli("analyse", str(recording), "--layout", str(layout))
-    assert result.returncode == 0, result.stderr
-    output: dict[str, Any] = json.loads(result.stdout)
-    return output
 
 
 def summary(output: dict[str, Any]) -> list[tuple[float, float, bool, int | None]]:
@@ -148,8 +133,13 @@ def test_hud_after_a_win_does_not_open_a_phantom_match(tmp_path: Path) -> None:
 
 
 def test_output_validates_against_the_exported_schema(tmp_path: Path) -> None:
-    spec = small(40, match_shots(5, STEADY, results_at=25, placement=1))
-    recording = build_recording(spec, tmp_path / "recording.mkv")
+    shots = (
+        Shot(Hud(0, 0, 99), 5, 10),
+        Shot(Hud(None, 1, 98), 10, 22),
+        Shot(Hud(2, 1, 98), 22, 25),
+        Shot(Results(placement=1), 25, 30),
+    )
+    recording = build_recording(small(40, shots), tmp_path / "recording.mkv")
     layout = write_layout(tmp_path / "layout.yaml")
     produced = tmp_path / "out.json"
 
@@ -161,6 +151,8 @@ def test_output_validates_against_the_exported_schema(tmp_path: Path) -> None:
     jsonschema.Draft202012Validator.check_schema(schema)
     jsonschema.validate(document, schema)
     assert document["schema_version"] == schema["schema_version"]
+    kinds = {event["kind"] for event in document["matches"][0]["events"]}
+    assert {"unreadable", "players_left", "team_eliminations"} <= kinds
 
 
 def test_events_carry_seconds_source_and_confidence(tmp_path: Path) -> None:
@@ -357,7 +349,7 @@ def test_layout_for_another_aspect_ratio_is_rejected(tmp_path: Path) -> None:
 
     assert result.returncode == 1
     assert "21:9" in result.stderr
-    assert "1280x720" in result.stderr
+    assert "1920x1080" in result.stderr
     assert result.stdout == ""
 
 

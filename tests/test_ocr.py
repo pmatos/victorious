@@ -2,6 +2,7 @@
 
 import shutil
 import subprocess
+from pathlib import Path
 from typing import Any
 
 import cv2
@@ -9,6 +10,9 @@ import numpy as np
 import pytest
 
 from victorious.ocr import OcrError, read_digits
+
+CROPS = Path(__file__).parent / "fixtures" / "crops"
+COUNTER_MASKS = sorted(CROPS.glob("counter_*.png"))
 
 
 def _digits_mask(text: str) -> np.ndarray:
@@ -52,3 +56,15 @@ def test_malformed_tesseract_output_is_skipped_not_fatal(monkeypatch: pytest.Mon
     monkeypatch.setattr(subprocess, "run", fake_run)
 
     assert read_digits(_digits_mask("7")) is None
+
+
+@pytest.mark.usefixtures("require_tesseract")
+@pytest.mark.parametrize("path", COUNTER_MASKS, ids=lambda path: path.stem)
+def test_real_counter_masks_are_read_as_what_the_hud_shows(path: Path) -> None:
+    mask = cv2.imread(str(path), cv2.IMREAD_GRAYSCALE)
+    assert mask is not None
+
+    reading = read_digits(mask)
+
+    assert reading is not None
+    assert reading.text == path.stem.split("_")[1]

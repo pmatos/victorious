@@ -4,9 +4,19 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-SCHEMA_VERSION = "1.0"
+SCHEMA_VERSION = "1.1"
 
-EventKind = Literal["match_start", "win", "final_placement", "match_end"]
+CounterElement = Literal["personal_eliminations", "team_eliminations", "players_left"]
+EventKind = Literal[
+    "match_start",
+    "win",
+    "final_placement",
+    "match_end",
+    "personal_eliminations",
+    "team_eliminations",
+    "players_left",
+    "unreadable",
+]
 EventSource = Literal["frame", "speech"]
 
 
@@ -19,7 +29,32 @@ class Event(_Model):
     time: float = Field(ge=0, description="Seconds from the start of the Recording.")
     source: EventSource
     confidence: float = Field(ge=0, le=1)
-    value: int | None = Field(description="The placement for final_placement, otherwise null.")
+    value: int | None = Field(
+        description="The placement for final_placement, the new count for a counter, else null."
+    )
+    end: float | None = Field(
+        ge=0, description="Seconds from the start of the Recording the span ends, for unreadable."
+    )
+    element: CounterElement | None = Field(description="Which counter, for unreadable only.")
+
+
+def frame_event(
+    kind: EventKind,
+    time: float,
+    confidence: float,
+    value: int | None = None,
+    end: float | None = None,
+    element: CounterElement | None = None,
+) -> Event:
+    return Event(
+        kind=kind,
+        time=time,
+        source="frame",
+        confidence=min(1.0, max(0.0, confidence)),
+        value=value,
+        end=end,
+        element=element,
+    )
 
 
 class Match(_Model):
@@ -28,6 +63,9 @@ class Match(_Model):
     end: float = Field(ge=0, description="Seconds from the start of the Recording.")
     win: bool
     placement: int | None = Field(ge=1, le=100)
+    personal_eliminations: int | None = Field(
+        ge=0, description="Personal eliminations at the end of the Match, null when not read."
+    )
     events: list[Event]
 
 
@@ -37,7 +75,7 @@ class RecordingInfo(_Model):
 
 
 class AnalysisOutput(_Model):
-    schema_version: Literal["1.0"] = SCHEMA_VERSION  # type: ignore[assignment]
+    schema_version: Literal["1.1"] = SCHEMA_VERSION  # type: ignore[assignment]
     recording: RecordingInfo
     matches: list[Match]
 

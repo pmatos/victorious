@@ -4,9 +4,10 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from victorious.counters import CounterReader, CounterTracker, tracked_elements
 from victorious.layout import Layout
 from victorious.ocr import find_tesseract
-from victorious.schema import AnalysisOutput, Event, EventKind, Match, RecordingInfo
+from victorious.schema import AnalysisOutput, Event, Match, RecordingInfo, frame_event
 from victorious.screens import (
     HUD_THRESHOLD,
     RESULTS_THRESHOLD,
@@ -21,10 +22,6 @@ MAX_PLACEMENT = 100
 MAX_PLACEMENT_ATTEMPTS = 15
 
 
-def _clamp(value: float) -> float:
-    return min(1.0, max(0.0, value))
-
-
 def _is_results(reading: ResultsReading) -> bool:
     return reading.banner >= RESULTS_THRESHOLD or reading.hash >= RESULTS_THRESHOLD
 
@@ -34,6 +31,7 @@ class _OpenMatch:
     start: int
     start_confidence: float
     last_hud: int
+    tracker: CounterTracker
     results_start: int | None = None
     readings: list[ResultsReading] = field(default_factory=list)
 
@@ -52,36 +50,44 @@ def _vote(readings: list[ResultsReading]) -> tuple[int, float] | None:
     return placement, sum(confidences) / len(confidences)
 
 
-def _event(kind: EventKind, time: float, confidence: float, value: int | None = None) -> Event:
-    return Event(kind=kind, time=time, source="frame", confidence=_clamp(confidence), value=value)
-
-
 def _finish(index: int, match: _OpenMatch) -> Match:
-    start = float(match.start)
-    events = [_event("match_start", start, match.start_confidence)]
+    outcome: list[Event] = []
     if match.results_start is None:
         end = float(match.last_hud)
-        events.append(_event("match_end", end, 0.0))
-        return Match(index=index, start=start, end=end, win=False, placement=None, events=events)
-
-    end = float(match.results_start)
-    banner = max(reading.banner for reading in match.readings)
-    voted = _vote(match.readings)
-    if banner >= RESULTS_THRESHOLD:
-        win, placement, placement_confidence = True, 1, banner
-    elif voted is not None:
-        placement, placement_confidence = voted
-        win = placement == 1
+        win, placement = False, None
+        closing = frame_event("match_end", end, 0.0)
     else:
-        win, placement, placement_confidence = False, None, 0.0
+        end = float(match.results_start)
+        banner = max(reading.banner for reading in match.readings)
+        voted = _vote(match.readings)
+        if banner >= RESULTS_THRESHOLD:
+            win, placement, placement_confidence = True, 1, banner
+        elif voted is not None:
+            placement, placement_confidence = voted
+            win = placement == 1
+        else:
+            win, placement, placement_confidence = False, None, 0.0
 
-    if win:
-        events.append(_event("win", end, placement_confidence))
-    if placement is not None:
-        events.append(_event("final_placement", end, placement_confidence, placement))
-    results_confidence = max(max(r.banner, r.hash) for r in match.readings)
-    events.append(_event("match_end", end, results_confidence))
-    return Match(index=index, start=start, end=end, win=win, placement=placement, events=events)
+        if win:
+            outcome.append(frame_event("win", end, placement_confidence))
+        if placement is not None:
+            outcome.append(frame_event("final_placement", end, placement_confidence, placement))
+        results_confidence = max(max(r.banner, r.hash) for r in match.readings)
+        closing = frame_event("match_end", end, results_confidence)
+
+    counted = match.tracker.close(end)
+    middle = sorted([*counted.events, *outcome], key=lambda event: event.time)
+    start = float(match.start)
+    opening = frame_event("match_start", start, match.start_confidence)
+    return Match(
+        index=index,
+        start=start,
+        end=end,
+        win=win,
+        placement=placement,
+        personal_eliminations=counted.personal_eliminations,
+        events=[opening, *middle, closing],
+    )
 
 
 def _wants_digits(current: _OpenMatch | None) -> bool:
@@ -99,6 +105,8 @@ def analyse(path: Path, layout: Layout) -> AnalysisOutput:
     current: _OpenMatch | None = None
     in_results = False
     quiet_seen = True
+    reader = CounterReader()
+    elements = tracked_elements(layout)
 
     for second, frame in sample_frames(path, info):
         reading = results_reading(frame, layout, read_placement=_wants_digits(current))
@@ -117,13 +125,22 @@ def analyse(path: Path, layout: Layout) -> AnalysisOutput:
                 current = None
             quiet_seen = False
         hud = hud_score(frame, layout)
-        if hud >= HUD_THRESHOLD:
+        present = hud >= HUD_THRESHOLD
+        if present:
             if current is not None:
                 current.last_hud = second
             elif quiet_seen:
-                current = _OpenMatch(start=second, start_confidence=hud, last_hud=second)
+                reader.reset()
+                current = _OpenMatch(
+                    start=second,
+                    start_confidence=hud,
+                    last_hud=second,
+                    tracker=CounterTracker(elements),
+                )
         else:
             quiet_seen = True
+        if current is not None:
+            current.tracker.observe(second, reader.read(frame, layout) if present else {})
 
     if current is not None:
         matches.append(_finish(len(matches), current))

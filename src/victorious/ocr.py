@@ -3,11 +3,15 @@
 Line mode confuses adjacent identical digits (11 reads as 1), so each connected
 component is recognised on its own. Tesseract's fast models drop some glyphs
 (a 0 under a digit whitelist, a 4 at one size), so every glyph is read with a few
-independent settings and the digits vote by confidence.
+independent settings and the digits vote by confidence. The glyph is smoothed
+after scaling because the fast models misread the hard edges of a binary mask
+(a 6 whose tip is missing reads as 0, a 4 as 1).
 """
 
+import os
 import shutil
 import subprocess
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 
 import cv2
@@ -16,6 +20,7 @@ import numpy as np
 GLYPH_PADDING = 16
 MIN_GLYPH_AREA = 12
 MIN_GLYPH_HEIGHT_RATIO = 0.5
+SMOOTHING_SIGMA = 0.05  # of the scaled glyph height
 LOOKALIKES = {"O": "0", "o": "0"}
 
 
@@ -27,6 +32,8 @@ class _Pass:
 
 
 PASSES = (_Pass(8, 96, True), _Pass(8, 80, True), _Pass(10, 64, False))
+_PASS_POOL = ThreadPoolExecutor(max_workers=len(PASSES))
+_TESSERACT_ENV = {**os.environ, "OMP_THREAD_LIMIT": "1"}
 
 
 class OcrError(Exception):
@@ -64,6 +71,7 @@ def _glyph_image(glyph: np.ndarray, height: int) -> np.ndarray:
     resized = cv2.resize(
         glyph, (max(1, round(glyph.shape[1] * scale)), height), interpolation=cv2.INTER_CUBIC
     )
+    resized = cv2.GaussianBlur(resized, (0, 0), SMOOTHING_SIGMA * height)
     return cv2.copyMakeBorder(255 - resized, *(GLYPH_PADDING,) * 4, cv2.BORDER_CONSTANT, value=255)
 
 
@@ -72,7 +80,9 @@ def _recognise(image: np.ndarray, tesseract: str, settings: _Pass) -> tuple[str,
     command = [tesseract, "stdin", "stdout", "--psm", str(settings.page_segmentation_mode)]
     if settings.whitelist:
         command += ["-c", "tessedit_char_whitelist=0123456789"]
-    result = subprocess.run([*command, "tsv"], input=encoded, capture_output=True, check=False)
+    result = subprocess.run(
+        [*command, "tsv"], input=encoded, capture_output=True, check=False, env=_TESSERACT_ENV
+    )
     if result.returncode != 0:
         raise OcrError(f"tesseract failed: {result.stderr.decode(errors='replace').strip()}")
     for line in result.stdout.decode(errors="replace").splitlines()[1:]:
@@ -93,9 +103,11 @@ def _recognise(image: np.ndarray, tesseract: str, settings: _Pass) -> tuple[str,
 
 
 def _read_glyph(glyph: np.ndarray, tesseract: str) -> tuple[str, float] | None:
+    def run(settings: _Pass) -> tuple[str, float] | None:
+        return _recognise(_glyph_image(glyph, settings.glyph_height), tesseract, settings)
+
     votes: dict[str, float] = {}
-    for settings in PASSES:
-        reading = _recognise(_glyph_image(glyph, settings.glyph_height), tesseract, settings)
+    for reading in _PASS_POOL.map(run, PASSES):
         if reading is not None:
             votes[reading[0]] = votes.get(reading[0], 0.0) + reading[1]
     if not votes:
