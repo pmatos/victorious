@@ -107,7 +107,6 @@ def build_parser() -> argparse.ArgumentParser:
             sub.add_argument("recording", type=Path, help="the Recording to read the HUD from")
             sub.add_argument(
                 "--at",
-                dest="at",
                 action="append",
                 type=_at_argument,
                 default=[],

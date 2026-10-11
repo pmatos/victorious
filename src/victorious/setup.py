@@ -21,6 +21,7 @@ from victorious.screens import (
     HUD_THRESHOLD,
     RESULTS_THRESHOLD,
     SCALE_SWEEP,
+    ResultsReading,
     counter_masks,
     hud_score,
     results_reading,
@@ -103,30 +104,38 @@ def _scale_note(found: Found) -> str:
     )
 
 
-def _read_back(frame: np.ndarray, element: str, layout: Layout) -> tuple[float, bool]:
-    """How well `analyse` reads `element` from `frame`, and whether that is good enough."""
-    if element == "hud_anchor":
-        score = hud_score(frame, layout)
-        return score, score >= HUD_THRESHOLD
-    if element in COUNTER_ELEMENTS:
-        rect = getattr(layout.screens.hud, element)
-        reading = best_reading(counter_masks(frame, rect))
-        return (reading.confidence, True) if reading is not None else (0.0, False)
-    reading_of = results_reading(frame, layout, read_placement=False)
-    score = {
-        "results_banner": reading_of.banner,
-        "placement": reading_of.placement_score,
-        "elimination_placement": reading_of.elimination_placement_score,
-    }[element]
-    return score, score >= RESULTS_THRESHOLD
+def _read_back(
+    frame: np.ndarray, elements: Collection[str], layout: Layout
+) -> dict[str, tuple[float, bool]]:
+    """How well `analyse` reads each of `elements` from `frame`, and whether that is enough."""
+    outcomes: dict[str, tuple[float, bool]] = {}
+    results: ResultsReading | None = None
+    for element in elements:
+        if element == "hud_anchor":
+            score = hud_score(frame, layout)
+            outcomes[element] = score, score >= HUD_THRESHOLD
+        elif element in COUNTER_ELEMENTS:
+            rect = getattr(layout.screens.hud, element)
+            reading = best_reading(counter_masks(frame, rect))
+            outcomes[element] = (reading.confidence, True) if reading is not None else (0.0, False)
+        else:
+            results = results or results_reading(frame, layout, read_placement=False)
+            score = {
+                "results_banner": results.banner,
+                "placement": results.placement_score,
+                "elimination_placement": results.elimination_placement_score,
+            }[element]
+            outcomes[element] = score, score >= RESULTS_THRESHOLD
+    return outcomes
 
 
 def _self_check(layout: Layout, panels: Sequence[Panel]) -> dict[str, str]:
     """Reads each element back as `analyse` will; the elements that fail, with why."""
     problems: dict[str, str] = {}
     for panel in panels:
+        per_frame = [_read_back(frame, panel.found, layout) for frame in panel.frames]
         for element, found in panel.found.items():
-            outcomes = [_read_back(frame, element, layout) for frame in panel.frames]
+            outcomes = [frame_outcomes[element] for frame_outcomes in per_frame]
             if not any(ok for _, ok in outcomes):
                 best = max(score for score, _ in outcomes)
                 problems[element] = (

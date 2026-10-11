@@ -3,7 +3,6 @@
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 
-import cv2
 import numpy as np
 
 from victorious.counters import best_reading
@@ -13,10 +12,10 @@ from victorious.ocr import glyph_boxes, read_digits
 from victorious.references import load_reference, reference_scale
 from victorious.screens import (
     BANNER_NAMES,
-    COUNTER_BANDS,
     HUD_THRESHOLD,
     ICON_NAMES,
     RESULTS_THRESHOLD,
+    counter_band_masks,
     gold_mask,
     white_mask,
 )
@@ -154,9 +153,7 @@ def _counter(frame: np.ndarray, icon: _Icon) -> tuple[Rect | None, str]:
     left = max(0, right - COUNTER_WINDOW_ICONS * hit.w)
     margin = round(COUNTER_ROW_MARGIN * hit.h)
     top, bottom = max(0, hit.y - margin), min(height, hit.y + hit.h + margin)
-    hsv = cv2.cvtColor(frame[top:bottom, left:right], cv2.COLOR_BGR2HSV)
-    for low, high in COUNTER_BANDS:
-        mask = np.asarray(cv2.inRange(hsv, low, high))
+    for mask in counter_band_masks(frame[top:bottom, left:right]):
         cluster = _rightmost_cluster(
             glyph_boxes(mask, max_height=int(COUNTER_GLYPH_HEIGHT[1] * hit.h)), hit.h
         )
@@ -213,8 +210,8 @@ def find_hud(frame: np.ndarray) -> Detection:
     return Detection(found, missing)
 
 
-def _placement_digits(mask: np.ndarray, hit: TemplateHit) -> tuple[int, int] | None:
-    """The placement written right of the "#" at `hit`, and how many digits it has."""
+def _placement_digit_count(mask: np.ndarray, hit: TemplateHit) -> int | None:
+    """How many digits the placement right of the "#" at `hit` has, if it reads as a placement."""
     advance = DIGIT_ADVANCE * hit.h
     left = hit.x + hit.w
     margin = round(HASH_ROW_MARGIN * hit.h)
@@ -239,7 +236,7 @@ def _placement_digits(mask: np.ndarray, hit: TemplateHit) -> tuple[int, int] | N
     value = int(reading.text)
     if not PLACEMENT_RANGE[0] <= value <= PLACEMENT_RANGE[1] or len(reading.text) != count:
         return None
-    return value, count
+    return count
 
 
 def _placement_rect(
@@ -285,12 +282,11 @@ def find_results(frame: np.ndarray) -> Detection:
     for element, template, mask_of, label in styles:
         mask = mask_of(region)
         hit, score = _locate(mask, template, False, height)
-        digits = (
-            _placement_digits(mask, hit) if hit is not None and score >= RESULTS_THRESHOLD else None
-        )
-        rect = (
-            _placement_rect(hit, digits[1], (x0, y0), frame) if hit is not None and digits else None
-        )
+        rect = None
+        if hit is not None and score >= RESULTS_THRESHOLD:
+            count = _placement_digit_count(mask, hit)
+            if count is not None:
+                rect = _placement_rect(hit, count, (x0, y0), frame)
         if hit is not None and rect is not None:
             found[element] = Found(rect, score, _factor(hit, template, height))
         else:
