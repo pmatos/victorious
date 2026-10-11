@@ -11,6 +11,7 @@ import cv2
 from pydantic import ValidationError
 
 from victorious.analysis import analyse
+from victorious.cache import ObservationCache, default_cache_root
 from victorious.layout import LayoutError, load_layout
 from victorious.ocr import OcrError
 from victorious.schema import json_schema
@@ -73,6 +74,14 @@ def build_parser() -> argparse.ArgumentParser:
             sub.add_argument(
                 "--chunk-seconds", type=_positive_int, default=60, help=argparse.SUPPRESS
             )
+            sub.add_argument(
+                "--cache-dir",
+                type=Path,
+                help="keep the cached Observations here (default: $XDG_CACHE_HOME/victorious)",
+            )
+            sub.add_argument(
+                "--no-cache", action="store_true", help="neither read nor write the cache"
+            )
         if name in {"analyse", "schema"}:
             sub.add_argument("-o", "--output", type=Path, help="write JSON here, not to stdout")
     return parser
@@ -100,7 +109,10 @@ def _require_writable_directory(output: Path | None) -> None:
 
 def _run_analyse(args: argparse.Namespace) -> str:
     layout = load_layout(args.layout)
-    output = analyse(args.recording, layout, jobs=args.jobs, chunk_seconds=args.chunk_seconds)
+    cache = None if args.no_cache else ObservationCache(args.cache_dir or default_cache_root())
+    output = analyse(
+        args.recording, layout, jobs=args.jobs, chunk_seconds=args.chunk_seconds, cache=cache
+    )
     return output.model_dump_json(indent=2) + "\n"
 
 

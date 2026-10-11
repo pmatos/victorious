@@ -5,6 +5,7 @@ from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
+from victorious.cache import CacheEntry
 from victorious.counters import CounterReading, Gap, Step, read_counter_series
 from victorious.layout import Layout
 from victorious.video import VideoInfo, sample_window
@@ -55,7 +56,10 @@ def resolve_jump(gap: Gap, samples: Sequence[tuple[float, CounterReading | None]
 class JumpResolver:
     """Decodes a short window around each Gap and times its steps; Gaps run in parallel."""
 
-    def __init__(self, path: Path, info: VideoInfo, layout: Layout) -> None:
+    def __init__(
+        self, path: Path, info: VideoInfo, layout: Layout, cache: CacheEntry | None = None
+    ) -> None:
+        self._cache = cache
         self._path = path
         self._info = info
         self._layout = layout
@@ -66,5 +70,11 @@ class JumpResolver:
             return list(pool.map(self._resolve, gaps))
 
     def _resolve(self, gap: Gap) -> list[Step]:
-        frames = sample_window(self._path, self._info, gap.start + 1, gap.end + 1, RESAMPLE_RATE)
-        return resolve_jump(gap, read_counter_series(frames, self._layout, gap.element))
+        start, end = gap.start + 1, gap.end + 1
+        series = self._cache.load_series(gap.element, start, end) if self._cache else None
+        if series is None:
+            frames = sample_window(self._path, self._info, start, end, RESAMPLE_RATE)
+            series = read_counter_series(frames, self._layout, gap.element)
+            if self._cache is not None:
+                self._cache.store_series(gap.element, start, end, series)
+        return resolve_jump(gap, series)

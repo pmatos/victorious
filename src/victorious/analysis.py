@@ -8,6 +8,7 @@ from typing import Protocol
 
 import numpy as np
 
+from victorious.cache import ObservationCache
 from victorious.counters import (
     CounterTracker,
     Resolver,
@@ -237,21 +238,41 @@ def _with_counters(
 class Analysis:
     output: AnalysisOutput
     observations: list[SecondObservation]
+    cached: bool
 
 
 def analyse_with_observations(
-    path: Path, layout: Layout, *, jobs: int = 1, chunk_seconds: int = 60
+    path: Path,
+    layout: Layout,
+    *,
+    jobs: int = 1,
+    chunk_seconds: int = 60,
+    cache: ObservationCache | None = None,
 ) -> Analysis:
     info = probe(path)
     layout.require_aspect_ratio(info.width, info.height)
     find_tesseract()
-    observations = _with_counters(path, info, layout, jobs, chunk_seconds)
-    resolver = JumpResolver(path, info, layout)
+    entry = cache.entry(path, layout) if cache is not None else None
+    observations = entry.load() if entry is not None else None
+    cached = observations is not None
+    if observations is None:
+        observations = _with_counters(path, info, layout, jobs, chunk_seconds)
+    resolver = JumpResolver(path, info, layout, entry)
     output = run_machine(path, info, layout, observations, _Readings(observations), resolver)
-    return Analysis(output, observations)
+    if entry is not None and not cached:
+        entry.store(observations)
+    return Analysis(output, observations, cached)
 
 
 def analyse(
-    path: Path, layout: Layout, *, jobs: int = 1, chunk_seconds: int = 60
+    path: Path,
+    layout: Layout,
+    *,
+    jobs: int = 1,
+    chunk_seconds: int = 60,
+    cache: ObservationCache | None = None,
 ) -> AnalysisOutput:
-    return analyse_with_observations(path, layout, jobs=jobs, chunk_seconds=chunk_seconds).output
+    analysis = analyse_with_observations(
+        path, layout, jobs=jobs, chunk_seconds=chunk_seconds, cache=cache
+    )
+    return analysis.output
