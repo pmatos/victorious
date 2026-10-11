@@ -60,6 +60,19 @@ class Gap:
 Resolver = Callable[[Sequence[Gap]], list[list[Step]]]
 
 
+def _further(element: CounterElement, current: int | None, value: int) -> int:
+    """The value that is further along the direction the counter moves in.
+
+    Only the eliminations counters never move back within a Match; the players-left counter
+    rises while the lobby fills, so it has no such memory.
+    """
+    if element == "players_left":
+        return value
+    if current is None or (value - current) * RISING[element] > 0:
+        return value
+    return current
+
+
 def is_ambiguous(element: CounterElement, old: int, new: int) -> bool:
     return 1 < (new - old) * RISING[element] <= MAX_RESOLVED_JUMP[element]
 
@@ -174,6 +187,7 @@ class _State:
     pending: _Pending | None = None
     gap_start: float | None = None
     last_seen: float | None = None
+    furthest: int | None = None
 
 
 class CounterTracker:
@@ -223,15 +237,17 @@ class CounterTracker:
             self._events.append(frame_event(element, pending.time, confidence, pending.value))
             self._record_gap(element, state, pending, confidence)
         state.committed = pending.value
+        state.furthest = _further(element, state.furthest, pending.value)
         state.pending = None
         state.last_seen = second
 
     def _record_gap(
         self, element: CounterElement, state: _State, pending: _Pending, confidence: float
     ) -> None:
-        start, old = pending.start, state.committed
-        if start is None or old is None or pending.time - start > MAX_GAP_SECONDS:
+        start, committed = pending.start, state.committed
+        if start is None or committed is None or pending.time - start > MAX_GAP_SECONDS:
             return
+        old = _further(element, state.furthest, committed)
         if is_ambiguous(element, old, pending.value):
             gap = Gap(element, start, pending.time, old, pending.value, confidence)
             self._gaps[len(self._events) - 1] = gap

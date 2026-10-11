@@ -267,6 +267,47 @@ def test_implausible_jumps_stay_one_event_without_sampling(
     assert shim.windows() == []
 
 
+def test_a_recovery_from_a_sustained_misread_is_not_bisected(
+    tmp_path: Path, shim: FfmpegShim
+) -> None:
+    steps = ((0.0, 0, 3, 99), (5.0, 0, 1, 99), (7.0, 0, 3, 99))
+    shots = match_shots(5, steps, results_at=30, placement=3)
+
+    output = run(tmp_path, shim, 40, shots)
+
+    (match,) = output["matches"]
+    assert counter(match, "team_eliminations") == [(10.0, 1), (12.0, 3)]
+    assert shim.windows() == []
+
+
+def test_a_rise_that_passes_the_peak_after_a_misread_resolves_only_the_new_steps(
+    tmp_path: Path, shim: FfmpegShim
+) -> None:
+    steps = ((0.0, 0, 1, 99), (5.0, 0, 0, 99), (7.3, 0, 3, 99))
+    shots = match_shots(5, steps, results_at=30, placement=3)
+
+    output = run(tmp_path, shim, 40, shots)
+
+    (match,) = output["matches"]
+    found = counter(match, "team_eliminations")
+    assert [value for _, value in found] == [0, 2, 3]
+    assert all(0 <= 12.3 - time <= TOLERANCE for time, _ in found[1:])
+
+
+def test_players_left_that_rose_while_the_lobby_filled_still_resolves_the_fall(
+    tmp_path: Path, shim: FfmpegShim
+) -> None:
+    steps = ((0.0, 0, 0, 80), (5.0, 0, 0, 90), (8.3, 0, 0, 88))
+    shots = match_shots(5, steps, results_at=30, placement=3)
+
+    output = run(tmp_path, shim, 40, shots)
+
+    (match,) = output["matches"]
+    found = counter(match, "players_left")
+    assert [value for _, value in found] == [90, 89, 88]
+    assert all(0 <= 13.3 - time <= TOLERANCE for time, _ in found[1:])
+
+
 def test_a_misread_sample_away_from_the_change_does_not_move_a_step() -> None:
     gap = Gap("personal_eliminations", 9.0, 10.0, 0, 2, 0.5)
     samples = [
