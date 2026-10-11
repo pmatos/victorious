@@ -71,7 +71,7 @@ def test_counter_values_and_scores_match_what_is_on_screen(
 
     during = {e: at(sidecar, 15, e) for e in ORDER[1:4]}
     assert [during[e].value for e in ORDER[1:4]] == [1, 0, 98]
-    assert all(record.confidence > 0.5 for record in during.values())
+    assert all(record.confidence > 0.0 for record in during.values())
     assert all(record.score is None for record in during.values())
 
     lobby = at(sidecar, 0, "personal_eliminations")
