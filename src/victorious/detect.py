@@ -33,7 +33,8 @@ COUNTER_ROW_MARGIN = 0.2
 COUNTER_GLYPH_HEIGHT = (0.3, 0.9)
 COUNTER_GAP = 0.6
 COUNTER_WIDTH_PER_HEIGHT = 4
-HASH_ROW_MARGIN = 0.25
+HASH_ROW_MARGIN = 0.75
+PLACEMENT_DIGIT_HEIGHT = (0.6, 2.0)
 HASH_GAP = 0.15
 DIGIT_ADVANCE = 1.0
 MAX_PLACEMENT_DIGITS = 3
@@ -210,8 +211,14 @@ def find_hud(frame: np.ndarray) -> Detection:
     return Detection(found, missing)
 
 
-def _placement_digit_count(mask: np.ndarray, hit: TemplateHit) -> int | None:
-    """How many digits the placement right of the "#" at `hit` has, if it reads as a placement."""
+def _placement_digits(
+    mask: np.ndarray, hit: TemplateHit, banner_found: bool
+) -> tuple[int, int, int] | None:
+    """Digit count and vertical span of the placement right of the "#" at `hit`, if it is one.
+
+    On a Win the banner already says the placement is 1, so a lone digit-sized glyph is enough
+    where OCR cannot read the big gold "1".
+    """
     advance = DIGIT_ADVANCE * hit.h
     left = hit.x + hit.w
     margin = round(HASH_ROW_MARGIN * hit.h)
@@ -219,7 +226,8 @@ def _placement_digit_count(mask: np.ndarray, hit: TemplateHit) -> int | None:
     window = mask[
         top:bottom, left : left + int(HASH_GAP * hit.h + (MAX_PLACEMENT_DIGITS + 1) * advance)
     ]
-    boxes = [b for b in glyph_boxes(window, max_height=int(1.4 * hit.h)) if 0.6 * hit.h <= b[3]]
+    low, high = PLACEMENT_DIGIT_HEIGHT
+    boxes = [b for b in glyph_boxes(window, max_height=int(high * hit.h)) if low * hit.h <= b[3]]
     if not boxes:
         return None
     boxes.sort()
@@ -231,24 +239,31 @@ def _placement_digit_count(mask: np.ndarray, hit: TemplateHit) -> int | None:
         x0, y0, x1, y1 = min(x0, x), min(y0, y), max(x1, x + w), max(y1, y + h)
         count += 1
     reading = read_digits(window[y0:y1, x0:x1])
-    if reading is None or not reading.text.isdigit():
+    if reading is None:
+        return (1, top + y0, top + y1) if banner_found and count == 1 else None
+    if not reading.text.isdigit():
         return None
     value = int(reading.text)
     if not PLACEMENT_RANGE[0] <= value <= PLACEMENT_RANGE[1] or len(reading.text) != count:
         return None
-    return count
+    return count, top + y0, top + y1
 
 
 def _placement_rect(
-    hit: TemplateHit, digits: int, region_origin: tuple[int, int], frame: np.ndarray
+    hit: TemplateHit,
+    digits: tuple[int, int, int],
+    region_origin: tuple[int, int],
+    frame: np.ndarray,
 ) -> Rect | None:
+    count, digit_top, digit_bottom = digits
     advance = DIGIT_ADVANCE * hit.h
     gap = HASH_GAP * hit.h
     ox, oy = region_origin
-    left = ox + hit.x - (MAX_PLACEMENT_DIGITS - digits) / 2 * advance
+    left = ox + hit.x - (MAX_PLACEMENT_DIGITS - count) / 2 * advance
     right = ox + hit.x + hit.w + gap + MAX_PLACEMENT_DIGITS * advance
-    centre = oy + hit.y + hit.h / 2
-    half = PLACEMENT_HEIGHT_PER_HASH * hit.h / 2
+    top, bottom = min(hit.y, digit_top), max(hit.y + hit.h, digit_bottom)
+    half = max(PLACEMENT_HEIGHT_PER_HASH * hit.h, 1.1 * (bottom - top)) / 2
+    centre = oy + (top + bottom) / 2
     return _normalised(left, centre - half, right, centre + half, frame)
 
 
@@ -284,9 +299,9 @@ def find_results(frame: np.ndarray) -> Detection:
         hit, score = _locate(mask, template, False, height)
         rect = None
         if hit is not None and score >= RESULTS_THRESHOLD:
-            count = _placement_digit_count(mask, hit)
-            if count is not None:
-                rect = _placement_rect(hit, count, (x0, y0), frame)
+            digits = _placement_digits(mask, hit, "results_banner" in found and template == "hash")
+            if digits is not None:
+                rect = _placement_rect(hit, digits, (x0, y0), frame)
         if hit is not None and rect is not None:
             found[element] = Found(rect, score, _factor(hit, template, height))
         else:
