@@ -32,7 +32,8 @@ class _Pass:
 
 
 PASSES = (_Pass(8, 96, True), _Pass(8, 80, True), _Pass(10, 64, False))
-_PASS_POOL = ThreadPoolExecutor(max_workers=len(PASSES))
+# One slot per pass for each concurrent reader: parallel counter OCR shares this pool.
+_PASS_POOL = ThreadPoolExecutor(max_workers=len(PASSES) * (os.cpu_count() or 1))
 _TESSERACT_ENV = {**os.environ, "OMP_THREAD_LIMIT": "1"}
 
 

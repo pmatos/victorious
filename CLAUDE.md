@@ -15,13 +15,16 @@ Installable package in `src/victorious/` (hatchling build, console script `victo
 - `matcher.py`: internal multi-scale template matcher (scales 0.3-1.2) used as a detector for reference images such as the Victory Royale banner. Not a user-facing command.
 - `layout.py`: pydantic `Layout` (YAML, normalized rects) and `load_layout`.
 - `schema.py`: pydantic output models (`AnalysisOutput`, `Match`, `Event`), `SCHEMA_VERSION`, `json_schema()`.
-- `video.py`: `probe` (ffprobe), `sample_frames` (one BGR frame per second through an ffmpeg raw pipe, serial) and `sample_window` (a short seek-based decode at a higher rate, used to bisect counter jumps).
+- `video.py`: `probe` (ffprobe), `sample_chunk` (one BGR frame per second of a whole-second chunk through an ffmpeg raw pipe) and `sample_window` (a short seek-based decode at a higher rate, used to bisect counter jumps).
 - `references.py` and `data/`: reference images shipped in the package (HUD icons, Victory Royale banner, `#` glyph).
 - `screens.py`: pure per-frame detection, `hud_score`, `results_reading` and `counter_masks`; thresholds `HUD_THRESHOLD`/`RESULTS_THRESHOLD`.
 - `ocr.py`: per-glyph Tesseract reading of a binary mask (`tesseract` CLI via subprocess).
-- `counters.py`: `CounterReader` (Tesseract per HUD counter, reusing the last reading when the mask is unchanged) and `CounterTracker` (turns readings into change Events and `unreadable` spans, and records jumps of more than one as `Gap`s for a resolver).
+- `counters.py`: `ReuseTracker` (the skip-OCR rule: read again only when the pixels differ from the last OCR'd ones), `CounterReader` (the serial reader built on it) and `CounterTracker` (turns readings into change Events and `unreadable` spans, and records jumps of more than one as `Gap`s for a resolver).
 - `resample.py`: `resolve_jump` (pure: times each step of a jump from 4 fps samples) and `JumpResolver` (decodes each Gap's window, pooled per Match close). `analyse` seeks only for ambiguous gaps.
-- `analysis.py`: `analyse(path, layout)`, the state machine that turns per-second scores into Matches and Events. A Match opens on the HUD and closes only on a results screen.
+- `observations.py`: `SecondObservation` (everything read at one second), per-chunk extraction with packed counter masks, JSON (de)serialisation and the `--observations` records.
+- `parallel.py`: the chunk plan and `spawn` process pool for frame facts (abort flag, error transport), and the OCR thread pool for counters.
+- `cache.py`: Observation cache keyed by Recording fingerprint, Layout hash and `OBSERVATION_VERSION` (bump it when readings or thresholds change), plus the bisect windows.
+- `analysis.py`: `analyse(path, layout, jobs=, chunk_seconds=, cache=)` and `run_machine`, the state machine that turns per-second Observations into Matches and Events. A Match opens on the HUD and closes only on a results screen. Output must not depend on `jobs` or chunk size: the skip-OCR rule is replayed with `ReuseTracker` over the exact schedule of counter reads the machine produces, instead of running per chunk.
 
 | Subcommand | Purpose | Status |
 |------------|---------|--------|
@@ -30,7 +33,7 @@ Installable package in `src/victorious/` (hatchling build, console script `victo
 | `review` | Inspect the Events found in a Recording | stub, see epic #13 |
 | `schema` | Print the JSON schema of the Analysis output | working |
 
-`setup` and `review` are stubs: they print `victorious <command>: not implemented yet` to stderr and exit 1. Errors in `analyse` print `victorious analyse: <reason>` to stderr, exit 1 and write nothing.
+`setup` and `review` are stubs: they print `victorious <command>: not implemented yet` to stderr and exit 1. `analyse` takes `--jobs` (default: CPU count), `--cache-dir`/`--no-cache`, `--observations out.jsonl` and a hidden `--chunk-seconds`. Errors in `analyse` print `victorious analyse: <reason>` to stderr, exit 1 and write nothing.
 
 ## Development Commands
 
