@@ -7,7 +7,7 @@ from pathlib import Path
 from victorious.counters import CounterReader, CounterTracker, tracked_elements
 from victorious.layout import Layout
 from victorious.ocr import find_tesseract
-from victorious.schema import AnalysisOutput, Event, EventKind, Match, RecordingInfo
+from victorious.schema import AnalysisOutput, Event, Match, RecordingInfo, frame_event
 from victorious.screens import (
     HUD_THRESHOLD,
     RESULTS_THRESHOLD,
@@ -20,10 +20,6 @@ from victorious.video import probe, sample_frames
 PLACEMENT_READINGS_PER_RUN = 5
 MAX_PLACEMENT = 100
 MAX_PLACEMENT_ATTEMPTS = 15
-
-
-def _clamp(value: float) -> float:
-    return min(1.0, max(0.0, value))
 
 
 def _is_results(reading: ResultsReading) -> bool:
@@ -54,69 +50,43 @@ def _vote(readings: list[ResultsReading]) -> tuple[int, float] | None:
     return placement, sum(confidences) / len(confidences)
 
 
-def _event(kind: EventKind, time: float, confidence: float, value: int | None = None) -> Event:
-    return Event(
-        kind=kind,
-        time=time,
-        source="frame",
-        confidence=_clamp(confidence),
-        value=value,
-        end=None,
-        element=None,
-    )
-
-
-def _assemble(
-    start: float, match: _OpenMatch, end: float, outcome: list[Event], closing: Event
-) -> tuple[list[Event], int | None]:
-    counted = match.tracker.close(end)
-    middle = sorted([*counted.events, *outcome], key=lambda event: event.time)
-    opening = _event("match_start", start, match.start_confidence)
-    return [opening, *middle, closing], counted.personal_eliminations
-
-
 def _finish(index: int, match: _OpenMatch) -> Match:
-    start = float(match.start)
+    outcome: list[Event] = []
     if match.results_start is None:
         end = float(match.last_hud)
-        events, personal = _assemble(start, match, end, [], _event("match_end", end, 0.0))
-        return Match(
-            index=index,
-            start=start,
-            end=end,
-            win=False,
-            placement=None,
-            personal_eliminations=personal,
-            events=events,
-        )
-
-    end = float(match.results_start)
-    banner = max(reading.banner for reading in match.readings)
-    voted = _vote(match.readings)
-    if banner >= RESULTS_THRESHOLD:
-        win, placement, placement_confidence = True, 1, banner
-    elif voted is not None:
-        placement, placement_confidence = voted
-        win = placement == 1
+        win, placement = False, None
+        closing = frame_event("match_end", end, 0.0)
     else:
-        win, placement, placement_confidence = False, None, 0.0
+        end = float(match.results_start)
+        banner = max(reading.banner for reading in match.readings)
+        voted = _vote(match.readings)
+        if banner >= RESULTS_THRESHOLD:
+            win, placement, placement_confidence = True, 1, banner
+        elif voted is not None:
+            placement, placement_confidence = voted
+            win = placement == 1
+        else:
+            win, placement, placement_confidence = False, None, 0.0
 
-    outcome: list[Event] = []
-    if win:
-        outcome.append(_event("win", end, placement_confidence))
-    if placement is not None:
-        outcome.append(_event("final_placement", end, placement_confidence, placement))
-    results_confidence = max(max(r.banner, r.hash) for r in match.readings)
-    closing = _event("match_end", end, results_confidence)
-    events, personal = _assemble(start, match, end, outcome, closing)
+        if win:
+            outcome.append(frame_event("win", end, placement_confidence))
+        if placement is not None:
+            outcome.append(frame_event("final_placement", end, placement_confidence, placement))
+        results_confidence = max(max(r.banner, r.hash) for r in match.readings)
+        closing = frame_event("match_end", end, results_confidence)
+
+    counted = match.tracker.close(end)
+    middle = sorted([*counted.events, *outcome], key=lambda event: event.time)
+    start = float(match.start)
+    opening = frame_event("match_start", start, match.start_confidence)
     return Match(
         index=index,
         start=start,
         end=end,
         win=win,
         placement=placement,
-        personal_eliminations=personal,
-        events=events,
+        personal_eliminations=counted.personal_eliminations,
+        events=[opening, *middle, closing],
     )
 
 

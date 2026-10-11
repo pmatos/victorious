@@ -8,7 +8,7 @@ import numpy as np
 
 from victorious.layout import Layout, Rect
 from victorious.ocr import DigitReading, read_digits
-from victorious.schema import CounterElement, Event
+from victorious.schema import CounterElement, Event, frame_event
 from victorious.screens import counter_masks
 
 COUNTER_ELEMENTS: tuple[CounterElement, ...] = get_args(CounterElement)
@@ -49,7 +49,7 @@ def _same_pixels(previous: np.ndarray, current: np.ndarray) -> bool:
     return mismatch <= REUSE_MISMATCH * max(1, union)
 
 
-def _accept(text: str, confidence: float) -> CounterReading | None:
+def _to_reading(text: str, confidence: float) -> CounterReading | None:
     if not text.isdigit() or len(text) > MAX_COUNTER_DIGITS or confidence < MIN_COUNTER_CONFIDENCE:
         return None
     return CounterReading(int(text), confidence)
@@ -79,7 +79,7 @@ class CounterReader:
         self, frame: np.ndarray, layout: Layout
     ) -> dict[CounterElement, CounterReading | None]:
         readings: dict[CounterElement, CounterReading | None] = {}
-        fresh: dict[CounterElement, tuple[np.ndarray, list[np.ndarray]]] = {}
+        fresh: dict[CounterElement, list[np.ndarray]] = {}
         for element in COUNTER_ELEMENTS:
             rect = _rect(layout, element)
             if rect is None:
@@ -89,13 +89,12 @@ class CounterReader:
             if seen is not None and _same_pixels(seen[0], masks[0]):
                 readings[element] = seen[1]
             else:
-                fresh[element] = (masks[0], masks)
-        elements = list(fresh)
-        for element, digits in zip(
-            elements, _POOL.map(_best_reading, [fresh[e][1] for e in elements]), strict=True
+                fresh[element] = masks
+        for (element, masks), digits in zip(
+            fresh.items(), _POOL.map(_best_reading, fresh.values()), strict=True
         ):
-            reading = _accept(digits.text, digits.confidence) if digits is not None else None
-            self._seen[element] = (fresh[element][0], reading)
+            reading = _to_reading(digits.text, digits.confidence) if digits is not None else None
+            self._seen[element] = (masks[0], reading)
             readings[element] = reading
         return readings
 
@@ -136,17 +135,7 @@ class CounterTracker:
         if start is None or end - start <= UNREADABLE_SECONDS:
             return
         state.pending = None
-        self._events.append(
-            Event(
-                kind="unreadable",
-                time=start,
-                source="frame",
-                confidence=0.0,
-                value=None,
-                end=end,
-                element=element,
-            )
-        )
+        self._events.append(frame_event("unreadable", start, 0.0, end=end, element=element))
 
     def _accept(
         self, element: CounterElement, state: _State, second: float, reading: CounterReading
@@ -160,17 +149,8 @@ class CounterTracker:
             return
         pending.confidences.append(reading.confidence)
         if state.committed is not None:
-            self._events.append(
-                Event(
-                    kind=element,
-                    time=pending.time,
-                    source="frame",
-                    confidence=sum(pending.confidences) / len(pending.confidences),
-                    value=pending.value,
-                    end=None,
-                    element=None,
-                )
-            )
+            confidence = sum(pending.confidences) / len(pending.confidences)
+            self._events.append(frame_event(element, pending.time, confidence, pending.value))
         state.committed = pending.value
         state.pending = None
 

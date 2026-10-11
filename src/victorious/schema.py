@@ -38,6 +38,25 @@ class Event(_Model):
     element: CounterElement | None = Field(description="Which counter, for unreadable only.")
 
 
+def frame_event(
+    kind: EventKind,
+    time: float,
+    confidence: float,
+    value: int | None = None,
+    end: float | None = None,
+    element: CounterElement | None = None,
+) -> Event:
+    return Event(
+        kind=kind,
+        time=time,
+        source="frame",
+        confidence=min(1.0, max(0.0, confidence)),
+        value=value,
+        end=end,
+        element=element,
+    )
+
+
 class Match(_Model):
     index: int = Field(ge=0)
     start: float = Field(ge=0, description="Seconds from the start of the Recording.")
