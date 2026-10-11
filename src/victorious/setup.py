@@ -8,12 +8,11 @@ from pathlib import Path
 
 import numpy as np
 
-from victorious.counters import best_reading
+from victorious.counters import COUNTER_ELEMENTS, best_reading
 from victorious.detect import Found, find_hud, find_results
 from victorious.layout import (
     HudScreen,
     Layout,
-    Rect,
     ResultsScreen,
     Screens,
     aspect_ratio_label,
@@ -26,11 +25,10 @@ from victorious.screens import (
     hud_score,
     results_reading,
 )
-from victorious.video import RecordingError, frame_at, probe
+from victorious.video import RecordingError, VideoInfo, frame_at, probe
 
 AT_KINDS = ("hud", "results")
-HUD_ELEMENTS = ("hud_anchor", "personal_eliminations", "team_eliminations", "players_left")
-COUNTER_ELEMENTS = HUD_ELEMENTS[1:]
+HUD_ELEMENTS = ("hud_anchor", *COUNTER_ELEMENTS)
 REQUIRED = (*HUD_ELEMENTS, "results_banner", "placement")
 OPTIONAL_HINT = (
     "pass a second --at results= on a screen that shows YOU PLACED #N to find it, or use --manual"
@@ -141,20 +139,17 @@ def _self_check(layout: Layout, panels: Sequence[Panel]) -> dict[str, str]:
 def _build_layout(width: int, height: int, found: dict[str, Found]) -> Layout | None:
     if any(name not in found for name in REQUIRED):
         return None
-
-    def rect(name: str) -> Rect | None:
-        return found[name].rect if name in found else None
-
+    elimination_placement = found.get("elimination_placement")
     hud = HudScreen(
         hud_anchor=found["hud_anchor"].rect,
-        personal_eliminations=rect("personal_eliminations"),
-        team_eliminations=rect("team_eliminations"),
-        players_left=rect("players_left"),
+        personal_eliminations=found["personal_eliminations"].rect,
+        team_eliminations=found["team_eliminations"].rect,
+        players_left=found["players_left"].rect,
     )
     results = ResultsScreen(
         results_banner=found["results_banner"].rect,
         placement=found["placement"].rect,
-        elimination_placement=rect("elimination_placement"),
+        elimination_placement=elimination_placement.rect if elimination_placement else None,
     )
     label = aspect_ratio_label(width, height)
     return Layout(aspect_ratio=label, screens=Screens(hud=hud, results=results))
@@ -197,8 +192,19 @@ def _assemble(
     return SetupResult(layout, panels, missing, warnings)
 
 
-def _neighbours(second: int, duration: float) -> list[int]:
-    return [s for s in (second, second - 1, second + 1) if 0 <= s < duration]
+def _neighbour_frames(recording: Path, info: VideoInfo, second: int) -> list[np.ndarray]:
+    """The frames either side of `second`; a neighbour that cannot be decoded is skipped."""
+    frames: list[np.ndarray] = []
+    for neighbour in (second - 1, second + 1):
+        if not 0 <= neighbour < info.duration:
+            continue
+        try:
+            frame = frame_at(recording, info, neighbour)
+        except RecordingError:
+            continue
+        if frame is not None:
+            frames.append(frame)
+    return frames
 
 
 def run_setup(recording: Path, at: Sequence[tuple[str, int]]) -> SetupResult:
@@ -211,10 +217,10 @@ def run_setup(recording: Path, at: Sequence[tuple[str, int]]) -> SetupResult:
             raise RecordingError(
                 f"--at {kind}={second} is past the end of {recording} ({info.duration:.1f} s long)"
             )
-        frames = [frame_at(recording, info, s) for s in _neighbours(second, info.duration)]
-        if frames[0] is None:
+        reference = frame_at(recording, info, second)
+        if reference is None:
             raise RecordingError(f"cannot read a frame at {second} s of {recording}")
-        readable = tuple(frame for frame in frames if frame is not None)
+        readable = (reference, *_neighbour_frames(recording, info, second))
         found: dict[str, Found] = {}
         for frame in readable:
             detection = find_hud(frame) if kind == "hud" else find_results(frame)

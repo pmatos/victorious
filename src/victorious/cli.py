@@ -196,6 +196,8 @@ def _run_setup(args: argparse.Namespace) -> int:
     _require_writable_directory(preview_path)
     if layout_path.resolve() == preview_path.resolve():
         raise OSError("--preview and --output name the same file")
+    if args.recording.resolve() in (layout_path.resolve(), preview_path.resolve()):
+        raise OSError("--output and --preview must not name the Recording")
     result = run_setup(args.recording, args.at)
     if result.found:
         encoded = cv2.imencode(".png", render_preview(result.panels))[1].tobytes()

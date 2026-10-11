@@ -125,13 +125,15 @@ def _locate_icons(frame: np.ndarray) -> tuple[dict[str, _Icon], dict[str, str]]:
 def _rightmost_cluster(
     boxes: Sequence[tuple[int, int, int, int]], icon_height: int
 ) -> tuple[int, int, int, int] | None:
-    """The right-most run of digit-sized glyph pieces, as a box; a cracked glyph stays whole."""
-    low, high = COUNTER_GLYPH_HEIGHT
-    pieces = [box for box in boxes if box[3] <= high * icon_height]
-    tallest = max((box[3] for box in pieces), default=0)
+    """The right-most run of digit-sized glyph pieces, as a box; a cracked glyph stays whole.
+
+    `boxes` come from `glyph_boxes` already capped at the tallest digit.
+    """
+    low = COUNTER_GLYPH_HEIGHT[0]
+    tallest = max((box[3] for box in boxes), default=0)
     if tallest < low * icon_height:
         return None
-    pieces.sort(key=lambda box: box[0] + box[2], reverse=True)
+    pieces = sorted(boxes, key=lambda box: box[0] + box[2], reverse=True)
     runs: list[tuple[int, int, int, int]] = []
     for x, y, w, h in pieces:
         if runs and runs[-1][0] - (x + w) <= COUNTER_GAP * tallest:
@@ -155,7 +157,9 @@ def _counter(frame: np.ndarray, icon: _Icon) -> tuple[Rect | None, str]:
     hsv = cv2.cvtColor(frame[top:bottom, left:right], cv2.COLOR_BGR2HSV)
     for low, high in COUNTER_BANDS:
         mask = np.asarray(cv2.inRange(hsv, low, high))
-        cluster = _rightmost_cluster(glyph_boxes(mask), hit.h)
+        cluster = _rightmost_cluster(
+            glyph_boxes(mask, max_height=int(COUNTER_GLYPH_HEIGHT[1] * hit.h)), hit.h
+        )
         if cluster is None:
             continue
         x, y, w, h = cluster
@@ -218,7 +222,7 @@ def _placement_digits(mask: np.ndarray, hit: TemplateHit) -> tuple[int, int] | N
     window = mask[
         top:bottom, left : left + int(HASH_GAP * hit.h + (MAX_PLACEMENT_DIGITS + 1) * advance)
     ]
-    boxes = [b for b in glyph_boxes(window) if 0.6 * hit.h <= b[3] <= 1.4 * hit.h]
+    boxes = [b for b in glyph_boxes(window, max_height=int(1.4 * hit.h)) if 0.6 * hit.h <= b[3]]
     if not boxes:
         return None
     boxes.sort()
