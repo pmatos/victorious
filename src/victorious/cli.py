@@ -3,6 +3,7 @@ import json
 import os
 import secrets
 import sys
+import time
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
@@ -10,8 +11,10 @@ from typing import Any
 import cv2
 from pydantic import ValidationError
 
-from victorious.analysis import analyse
+from victorious.analysis import analyse_with_observations
+from victorious.cache import ObservationCache, default_cache_root
 from victorious.layout import LayoutError, load_layout
+from victorious.observations import records
 from victorious.ocr import OcrError
 from victorious.schema import json_schema
 from victorious.video import RecordingError
@@ -39,6 +42,16 @@ class _CommandParser(argparse.ArgumentParser):
         return parsed, [] if self._tolerant else extras
 
 
+def _positive_int(text: str) -> int:
+    try:
+        value = int(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"not a whole number: {text!r}") from None
+    if value < 1:
+        raise argparse.ArgumentTypeError(f"must be at least 1, got {value}")
+    return value
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="victorious",
@@ -54,6 +67,28 @@ def build_parser() -> argparse.ArgumentParser:
         if name == "analyse":
             sub.add_argument("recording", type=Path, help="the Recording to analyse")
             sub.add_argument("--layout", type=Path, required=True, help="the Layout file (YAML)")
+            sub.add_argument(
+                "--jobs",
+                type=_positive_int,
+                default=os.cpu_count() or 1,
+                help="decode and read this many chunks at once (default: one per CPU)",
+            )
+            sub.add_argument(
+                "--chunk-seconds", type=_positive_int, default=60, help=argparse.SUPPRESS
+            )
+            sub.add_argument(
+                "--cache-dir",
+                type=Path,
+                help="keep the cached Observations here (default: $XDG_CACHE_HOME/victorious)",
+            )
+            sub.add_argument(
+                "--no-cache", action="store_true", help="neither read nor write the cache"
+            )
+            sub.add_argument(
+                "--observations",
+                type=Path,
+                help="write every raw reading here as JSON lines, one per HUD element per second",
+            )
         if name in {"analyse", "schema"}:
             sub.add_argument("-o", "--output", type=Path, help="write JSON here, not to stdout")
     return parser
@@ -79,9 +114,30 @@ def _require_writable_directory(output: Path | None) -> None:
         raise FileNotFoundError(f"output directory does not exist: {output.parent}")
 
 
-def _run_analyse(args: argparse.Namespace) -> str:
+def _require_distinct(observations: Path | None, output: Path | None) -> None:
+    if (
+        observations is not None
+        and output is not None
+        and observations.resolve() == output.resolve()
+    ):
+        raise OSError("--observations and --output name the same file")
+
+
+def _run_analyse(args: argparse.Namespace) -> tuple[str, str | None]:
     layout = load_layout(args.layout)
-    return analyse(args.recording, layout).model_dump_json(indent=2) + "\n"
+    cache = None if args.no_cache else ObservationCache(args.cache_dir or default_cache_root())
+    started = time.monotonic()
+    analysis = analyse_with_observations(
+        args.recording, layout, jobs=args.jobs, chunk_seconds=args.chunk_seconds, cache=cache
+    )
+    state = "off" if cache is None else "hit" if analysis.cached else "miss"
+    elapsed = time.monotonic() - started
+    print(f"victorious analyse: cache {state}, {elapsed:.1f} s", file=sys.stderr)
+    text = analysis.output.model_dump_json(indent=2) + "\n"
+    if args.observations is None:
+        return text, None
+    lines = (record.model_dump_json() for record in records(analysis.observations, layout))
+    return text, "".join(f"{line}\n" for line in lines)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -91,10 +147,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 1
     try:
         _require_writable_directory(args.output)
+        sidecar: str | None = None
         if args.command == "schema":
             text = json.dumps(json_schema(), indent=2) + "\n"
         else:
-            text = _run_analyse(args)
+            _require_writable_directory(args.observations)
+            _require_distinct(args.observations, args.output)
+            text, sidecar = _run_analyse(args)
+        if sidecar is not None:
+            _emit(sidecar, args.observations)
         _emit(text, args.output)
     except (LayoutError, RecordingError, OcrError, ValidationError, OSError, cv2.error) as error:
         print(f"victorious {args.command}: {error}", file=sys.stderr)

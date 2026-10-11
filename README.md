@@ -45,6 +45,25 @@ The output carries `schema_version` and, per Match, `start`, `end`, `win`, `plac
 
 Counter digits are about 17 px tall at 2560x1440 and Tesseract reads them reliably from 1920x1080 up; at 720p they are unreliable.
 
+#### Parallel decode, cache and `--observations`
+
+`analyse` reads the Recording in whole-second chunks (60 s) on up to `--jobs` processes (default: one per CPU), each chunk decoded by its own ffmpeg. Chunk boundaries sit on whole seconds, so every chunk samples exactly the frames a single serial decode would, and the counter skip-OCR rule is replayed over the Match loop's exact schedule afterwards; the output is byte-identical for any `--jobs` and chunk size. A Recording whose chunks do not join up (missing seconds) is rejected as undecodable.
+
+The per-second Observations are cached, keyed by a fingerprint of the Recording (its size and its first, middle and last MiB, not its name or mtime) and a hash of the Layout (its content, not its YAML formatting). A rerun with the same Recording and Layout loads them, and the windows that time counter jumps, so it runs no ffmpeg at all. Changing any Layout rectangle or the aspect ratio, or replacing the Recording, misses the cache; an unreadable entry is recomputed. The cache lives in `$XDG_CACHE_HOME/victorious` (`~/.cache/victorious`) unless `--cache-dir` says otherwise, `--no-cache` neither reads nor writes it, and nothing is ever evicted: an entry is about 3-4 MB per 3 h Recording per Layout. A failed run stores no Observations, and a cache that cannot be written is skipped, not an error. A line on stderr reports `cache hit`, `cache miss` or `cache off` and the wall time.
+
+`--observations observations.jsonl` also writes every raw reading, one JSON line per HUD element per sampled second, in the order `hud_anchor`, `personal_eliminations`, `team_eliminations`, `players_left`, `results_banner`, `placement`, `elimination_placement` (elements the Layout does not describe are left out):
+
+| Field | Meaning |
+|-------|---------|
+| `second` | whole seconds from the start of the Recording |
+| `element` | the HUD element |
+| `value` | the digits read as an integer, `null` when none were read; only counters and placements have one |
+| `confidence` | OCR confidence of `value` (0..1), `0` when `value` is `null` |
+| `score` | template match score for `hud_anchor`, `results_banner`, `placement` and `elimination_placement`; `null` for counters |
+| `region` | the Layout's `{x, y, w, h}` for the element |
+
+Counters are read only while a Match is open and the HUD is on screen, and only when their pixels changed; any other second has `value: null` for them, and a second that reused the pixels of an earlier one carries that earlier reading. `placement` and `elimination_placement` carry the digits read on the results screen, `value` going to whichever of the two "#" styles matched best. The file is written, like `-o`, only after the whole run succeeded; it is not part of the exported JSON schema.
+
 ### Layout file
 
 Until `setup` exists, a Layout is written by hand. Coordinates are fractions of the frame (`x`, `y`, `w`, `h` in 0..1), so one Layout serves every resolution of the same HUD design:

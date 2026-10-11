@@ -83,13 +83,18 @@ class TrackerResult:
     personal_eliminations: int | None
 
 
-def _rect(layout: Layout, element: CounterElement) -> Rect | None:
+def counter_rect(layout: Layout, element: CounterElement) -> Rect | None:
     rect: Rect | None = getattr(layout.screens.hud, element)
     return rect
 
 
+def tracked_rects(layout: Layout) -> list[tuple[CounterElement, Rect]]:
+    found = ((element, counter_rect(layout, element)) for element in COUNTER_ELEMENTS)
+    return [(element, rect) for element, rect in found if rect is not None]
+
+
 def tracked_elements(layout: Layout) -> tuple[CounterElement, ...]:
-    return tuple(element for element in COUNTER_ELEMENTS if _rect(layout, element) is not None)
+    return tuple(element for element, _ in tracked_rects(layout))
 
 
 def _same_pixels(previous: np.ndarray, current: np.ndarray) -> bool:
@@ -111,7 +116,7 @@ def _to_reading(reading: DigitReading) -> CounterReading | None:
     return CounterReading(int(text), reading.confidence) if plausible else None
 
 
-def _best_reading(masks: list[np.ndarray]) -> CounterReading | None:
+def best_reading(masks: list[np.ndarray]) -> CounterReading | None:
     best: CounterReading | None = None
     for mask in masks:
         digits = read_digits(mask)
@@ -127,7 +132,7 @@ def read_counter_series(
     frames: Iterable[tuple[float, np.ndarray]], layout: Layout, element: CounterElement
 ) -> list[tuple[float, CounterReading | None]]:
     """One counter read in each frame, skipping Tesseract while its pixels did not change."""
-    rect = _rect(layout, element)
+    rect = counter_rect(layout, element)
     if rect is None:
         return [(time, None) for time, _ in frames]
     series: list[tuple[float, CounterReading | None]] = []
@@ -136,19 +141,37 @@ def read_counter_series(
     for time, frame in frames:
         masks = counter_masks(frame, rect)
         if previous is None or not _same_pixels(previous, masks[0]):
-            previous, reading = masks[0], _best_reading(masks)
+            previous, reading = masks[0], best_reading(masks)
         series.append((time, reading))
     return series
+
+
+class ReuseTracker:
+    """Decides when a counter's pixels differ enough from the last OCR'd ones to read again."""
+
+    def __init__(self) -> None:
+        self._seen: dict[CounterElement, np.ndarray] = {}
+
+    def reset(self) -> None:
+        self._seen.clear()
+
+    def needs_ocr(self, element: CounterElement, mask: np.ndarray) -> bool:
+        seen = self._seen.get(element)
+        if seen is not None and _same_pixels(seen, mask):
+            return False
+        self._seen[element] = mask
+        return True
 
 
 class CounterReader:
     """Reads each counter once per frame, skipping Tesseract when its pixels did not change."""
 
     def __init__(self) -> None:
-        self._seen: dict[CounterElement, tuple[np.ndarray, CounterReading | None]] = {}
+        self._reuse = ReuseTracker()
+        self._readings: dict[CounterElement, CounterReading | None] = {}
 
     def reset(self) -> None:
-        self._seen.clear()
+        self._reuse.reset()
 
     def read(
         self, frame: np.ndarray, layout: Layout
@@ -156,19 +179,16 @@ class CounterReader:
         readings: dict[CounterElement, CounterReading | None] = {}
         fresh: dict[CounterElement, list[np.ndarray]] = {}
         for element in COUNTER_ELEMENTS:
-            rect = _rect(layout, element)
+            rect = counter_rect(layout, element)
             if rect is None:
                 continue
             masks = counter_masks(frame, rect)
-            seen = self._seen.get(element)
-            if seen is not None and _same_pixels(seen[0], masks[0]):
-                readings[element] = seen[1]
-            else:
+            if self._reuse.needs_ocr(element, masks[0]):
                 fresh[element] = masks
-        for (element, masks), reading in zip(
-            fresh.items(), _POOL.map(_best_reading, fresh.values()), strict=True
-        ):
-            self._seen[element] = (masks[0], reading)
+            else:
+                readings[element] = self._readings[element]
+        for element, reading in zip(fresh, _POOL.map(best_reading, fresh.values()), strict=True):
+            self._readings[element] = reading
             readings[element] = reading
         return readings
 

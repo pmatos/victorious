@@ -22,8 +22,8 @@ from tests.synthetic import (
     match_shots,
     write_layout,
 )
-from victorious import analysis as analysis_module
 from victorious import cli, screens
+from victorious import parallel as parallel_module
 from victorious.analysis import analyse as analyse_recording
 from victorious.layout import load_layout
 from victorious.ocr import OcrError
@@ -333,7 +333,7 @@ def test_missing_tesseract_fails_before_any_frame_is_decoded(
     def no_decoding(*args: Any) -> None:
         raise AssertionError("frames were decoded")
 
-    monkeypatch.setattr(analysis_module, "sample_frames", no_decoding)
+    monkeypatch.setattr(parallel_module, "sample_chunk", no_decoding)
 
     with pytest.raises(OcrError, match="tesseract"):
         analyse_recording(recording, layout)
@@ -371,10 +371,10 @@ def test_opencv_failure_is_reported_as_a_clean_error(
 ) -> None:
     layout = write_layout(tmp_path / "layout.yaml")
 
-    def broken(*args: Any) -> None:
+    def broken(*args: Any, **options: Any) -> None:
         raise cv2.error("template larger than image")
 
-    monkeypatch.setattr(cli, "analyse", broken)
+    monkeypatch.setattr(cli, "analyse_with_observations", broken)
 
     status = cli.main(["analyse", str(tmp_path / "r.mkv"), "--layout", str(layout)])
 

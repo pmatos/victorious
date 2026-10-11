@@ -1,30 +1,39 @@
 """Turn a Recording and a Layout into Matches with Events."""
 
 from collections import defaultdict
-from dataclasses import dataclass, field
+from collections.abc import Sequence
+from dataclasses import dataclass, field, replace
 from pathlib import Path
+from typing import Protocol
 
-from victorious.counters import CounterReader, CounterTracker, tracked_elements
-from victorious.layout import Layout
-from victorious.ocr import find_tesseract
-from victorious.resample import JumpResolver
-from victorious.schema import AnalysisOutput, Event, Match, RecordingInfo, frame_event
-from victorious.screens import (
-    HUD_THRESHOLD,
-    RESULTS_THRESHOLD,
-    ResultsReading,
-    hud_score,
-    results_reading,
+import numpy as np
+
+from victorious.cache import ObservationCache
+from victorious.counters import (
+    CounterTracker,
+    Resolver,
+    ReuseTracker,
+    tracked_elements,
 )
-from victorious.video import probe, sample_frames
+from victorious.layout import Layout
+from victorious.observations import Counters, SecondObservation
+from victorious.ocr import find_tesseract
+from victorious.parallel import extract_seconds, read_counters
+from victorious.resample import JumpResolver
+from victorious.schema import (
+    AnalysisOutput,
+    CounterElement,
+    Event,
+    Match,
+    RecordingInfo,
+    frame_event,
+)
+from victorious.screens import HUD_THRESHOLD, RESULTS_THRESHOLD, ResultsReading
+from victorious.video import VideoInfo, probe
 
 PLACEMENT_READINGS_PER_RUN = 5
 MAX_PLACEMENT = 100
 MAX_PLACEMENT_ATTEMPTS = 15
-
-
-def _is_results(reading: ResultsReading) -> bool:
-    return reading.banner >= RESULTS_THRESHOLD or reading.hash >= RESULTS_THRESHOLD
 
 
 @dataclass
@@ -51,7 +60,7 @@ def _vote(readings: list[ResultsReading]) -> tuple[int, float] | None:
     return placement, sum(confidences) / len(confidences)
 
 
-def _finish(index: int, match: _OpenMatch, resolver: JumpResolver) -> Match:
+def _finish(index: int, match: _OpenMatch, resolver: Resolver | None) -> Match:
     outcome: list[Event] = []
     if match.results_start is None:
         end = float(match.last_hud)
@@ -98,24 +107,35 @@ def _wants_digits(current: _OpenMatch | None) -> bool:
     return read < PLACEMENT_READINGS_PER_RUN and len(current.readings) < MAX_PLACEMENT_ATTEMPTS
 
 
-def analyse(path: Path, layout: Layout) -> AnalysisOutput:
-    info = probe(path)
-    layout.require_aspect_ratio(info.width, info.height)
-    find_tesseract()
-    resolver = JumpResolver(path, info, layout)
+class CounterSource(Protocol):
+    def reset(self) -> None: ...
+
+    def read(self, second: int) -> Counters: ...
+
+
+def run_machine(
+    path: Path,
+    info: VideoInfo,
+    layout: Layout,
+    observations: Sequence[SecondObservation],
+    counters: CounterSource,
+    resolver: Resolver | None,
+) -> AnalysisOutput:
     matches: list[Match] = []
     current: _OpenMatch | None = None
     in_results = False
     quiet_seen = True
-    reader = CounterReader()
     elements = tracked_elements(layout)
 
-    for second, frame in sample_frames(path, info):
-        reading = results_reading(frame, layout, read_placement=_wants_digits(current))
-        if _is_results(reading):
+    for observation in observations:
+        second = observation.second
+        reading = observation.results
+        if reading.is_results:
             if current is not None:
                 if current.results_start is None:
                     current.results_start = second
+                if not _wants_digits(current):
+                    reading = replace(reading, digits=None)
                 current.readings.append(reading)
             in_results = True
             continue
@@ -126,13 +146,13 @@ def analyse(path: Path, layout: Layout) -> AnalysisOutput:
                 matches.append(_finish(len(matches), current, resolver))
                 current = None
             quiet_seen = False
-        hud = hud_score(frame, layout)
+        hud = observation.hud
         present = hud >= HUD_THRESHOLD
         if present:
             if current is not None:
                 current.last_hud = second
             elif quiet_seen:
-                reader.reset()
+                counters.reset()
                 current = _OpenMatch(
                     start=second,
                     start_confidence=hud,
@@ -142,10 +162,116 @@ def analyse(path: Path, layout: Layout) -> AnalysisOutput:
         else:
             quiet_seen = True
         if current is not None:
-            current.tracker.observe(second, reader.read(frame, layout) if present else {})
+            current.tracker.observe(second, counters.read(second) if present else {})
 
     if current is not None:
         matches.append(_finish(len(matches), current, resolver))
     return AnalysisOutput(
         recording=RecordingInfo(path=str(path), duration=info.duration), matches=matches
     )
+
+
+class _ScheduleRecorder:
+    """Stands in for the counter source to learn when the Match loop resets and reads."""
+
+    def __init__(self) -> None:
+        self.calls: list[int | None] = []
+
+    def reset(self) -> None:
+        self.calls.append(None)
+
+    def read(self, second: int) -> Counters:
+        self.calls.append(second)
+        return {}
+
+
+class _Readings:
+    def __init__(self, observations: Sequence[SecondObservation]) -> None:
+        self._observations = observations
+
+    def reset(self) -> None:
+        pass
+
+    def read(self, second: int) -> Counters:
+        return self._observations[second].counters
+
+
+def _with_counters(
+    path: Path, info: VideoInfo, layout: Layout, jobs: int, chunk_seconds: int
+) -> list[SecondObservation]:
+    """The Observations of every second, reading counters exactly where a serial pass would.
+
+    The Match loop is run once with a recorder to learn which seconds it reads counters at, the
+    skip-OCR rule is replayed over that schedule, and only the pixels that rule keeps are OCR'd.
+    """
+    seconds = extract_seconds(path, info, layout, jobs, chunk_seconds)
+    observations = [second.observation for second in seconds]
+    recorder = _ScheduleRecorder()
+    run_machine(path, info, layout, observations, recorder, None)
+
+    elements = tracked_elements(layout)
+    reuse = ReuseTracker()
+    fresh: list[list[np.ndarray]] = []
+    source: dict[tuple[int, CounterElement], int] = {}
+    latest: dict[CounterElement, int] = {}
+    for call in recorder.calls:
+        if call is None:
+            reuse.reset()
+            continue
+        masks = seconds[call].masks
+        for element in elements:
+            tight, loose = masks[element]
+            band = tight.unpack()
+            if reuse.needs_ocr(element, band):
+                fresh.append([band, loose.unpack()])
+                latest[element] = len(fresh) - 1
+            source[call, element] = latest[element]
+
+    readings = read_counters(fresh, jobs)
+    counters: dict[int, Counters] = {}
+    for (second, element), index in source.items():
+        counters.setdefault(second, {})[element] = readings[index]
+    return [replace(o, counters=counters.get(o.second, {})) for o in observations]
+
+
+@dataclass(frozen=True)
+class Analysis:
+    output: AnalysisOutput
+    observations: list[SecondObservation]
+    cached: bool
+
+
+def analyse_with_observations(
+    path: Path,
+    layout: Layout,
+    *,
+    jobs: int = 1,
+    chunk_seconds: int = 60,
+    cache: ObservationCache | None = None,
+) -> Analysis:
+    info = probe(path)
+    layout.require_aspect_ratio(info.width, info.height)
+    find_tesseract()
+    entry = cache.entry(path, layout) if cache is not None else None
+    observations = entry.load() if entry is not None else None
+    cached = observations is not None
+    if observations is None:
+        observations = _with_counters(path, info, layout, jobs, chunk_seconds)
+    resolver = JumpResolver(path, info, layout, entry)
+    output = run_machine(path, info, layout, observations, _Readings(observations), resolver)
+    if entry is not None and not cached:
+        entry.store(observations)
+    return Analysis(output, observations, cached)
+
+
+def analyse(
+    path: Path,
+    layout: Layout,
+    *,
+    jobs: int = 1,
+    chunk_seconds: int = 60,
+    cache: ObservationCache | None = None,
+) -> AnalysisOutput:
+    return analyse_with_observations(
+        path, layout, jobs=jobs, chunk_seconds=chunk_seconds, cache=cache
+    ).output

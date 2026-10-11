@@ -79,13 +79,21 @@ def _decode(path: Path, info: VideoInfo, command: list[str]) -> Iterator[np.ndar
             raise RecordingError(f"cannot decode Recording {path}: {detail}")
 
 
-def sample_frames(path: Path, info: VideoInfo) -> Iterator[tuple[int, np.ndarray]]:
-    """Yield (whole seconds from the start, BGR frame), one per second."""
+def sample_chunk(
+    path: Path, info: VideoInfo, start: int, length: int | None, threads: int
+) -> Iterator[tuple[int, np.ndarray]]:
+    """Yield (whole seconds from the start of the Recording, BGR frame), one per second.
+
+    Covers [start, start + length), or to the end of the Recording when `length` is None. The
+    boundaries are whole seconds, so the frames are the ones a single decode would sample.
+    """
+    seek = ["-ss", str(start), "-t", str(length)] if length is not None else ["-ss", str(start)]
     command = [
-        _tool("ffmpeg"), "-v", "error", "-nostdin", "-i", str(path),
-        "-an", "-sn", "-vf", "fps=1:round=down", "-f", "rawvideo", "-pix_fmt", "bgr24", "-",
+        _tool("ffmpeg"), "-v", "error", "-nostdin", "-threads", str(max(1, threads)), *seek,
+        "-i", str(path), "-an", "-sn", "-vf", "fps=1:round=down",
+        "-f", "rawvideo", "-pix_fmt", "bgr24", "-",
     ]  # fmt: skip
-    return enumerate(_decode(path, info, command))
+    return ((start + k, frame) for k, frame in enumerate(_decode(path, info, command)))
 
 
 def sample_window(
@@ -93,7 +101,7 @@ def sample_window(
 ) -> Iterator[tuple[float, np.ndarray]]:
     """The frames of [start, end) at `rate` per second with the start of their slot.
 
-    Like `sample_frames`, each frame is the last one of its slot, so the frame of the slot
+    Like `sample_chunk`, each frame is the last one of its slot, so the frame of the slot
     starting at `t` shows the screen just before `t + 1 / rate`.
     """
     command = [
