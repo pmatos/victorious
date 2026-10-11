@@ -227,7 +227,7 @@ def test_a_span_still_open_when_the_match_ends_is_unreadable_up_to_the_end(
 
 def test_final_personal_eliminations_are_reported_per_match(tmp_path: Path) -> None:
     first = ((0.0, 0, 0, 99), (8.0, 1, 0, 80), (14.0, 3, 1, 50))
-    second = ((0.0, 0, 0, 99), (9.0, 1, 0, 90))
+    second = ((0.0, 0, 0, 99), (9.0, 1, 0, 98))
     shots = (
         *match_shots(5, first, results_at=30, placement=2),
         *match_shots(50, second, results_at=75, placement=9),

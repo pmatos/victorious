@@ -7,6 +7,7 @@ from pathlib import Path
 from victorious.counters import CounterReader, CounterTracker, tracked_elements
 from victorious.layout import Layout
 from victorious.ocr import find_tesseract
+from victorious.resample import JumpResolver
 from victorious.schema import AnalysisOutput, Event, Match, RecordingInfo, frame_event
 from victorious.screens import (
     HUD_THRESHOLD,
@@ -50,7 +51,7 @@ def _vote(readings: list[ResultsReading]) -> tuple[int, float] | None:
     return placement, sum(confidences) / len(confidences)
 
 
-def _finish(index: int, match: _OpenMatch) -> Match:
+def _finish(index: int, match: _OpenMatch, resolver: JumpResolver) -> Match:
     outcome: list[Event] = []
     if match.results_start is None:
         end = float(match.last_hud)
@@ -75,7 +76,7 @@ def _finish(index: int, match: _OpenMatch) -> Match:
         results_confidence = max(max(r.banner, r.hash) for r in match.readings)
         closing = frame_event("match_end", end, results_confidence)
 
-    counted = match.tracker.close(end)
+    counted = match.tracker.close(end, resolver)
     middle = sorted([*counted.events, *outcome], key=lambda event: event.time)
     start = float(match.start)
     opening = frame_event("match_start", start, match.start_confidence)
@@ -101,6 +102,7 @@ def analyse(path: Path, layout: Layout) -> AnalysisOutput:
     info = probe(path)
     layout.require_aspect_ratio(info.width, info.height)
     find_tesseract()
+    resolver = JumpResolver(path, info, layout)
     matches: list[Match] = []
     current: _OpenMatch | None = None
     in_results = False
@@ -121,7 +123,7 @@ def analyse(path: Path, layout: Layout) -> AnalysisOutput:
         if in_results:
             in_results = False
             if current is not None:
-                matches.append(_finish(len(matches), current))
+                matches.append(_finish(len(matches), current, resolver))
                 current = None
             quiet_seen = False
         hud = hud_score(frame, layout)
@@ -143,7 +145,7 @@ def analyse(path: Path, layout: Layout) -> AnalysisOutput:
             current.tracker.observe(second, reader.read(frame, layout) if present else {})
 
     if current is not None:
-        matches.append(_finish(len(matches), current))
+        matches.append(_finish(len(matches), current, resolver))
     return AnalysisOutput(
         recording=RecordingInfo(path=str(path), duration=info.duration), matches=matches
     )
