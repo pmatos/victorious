@@ -67,10 +67,7 @@ def _in_match_scores(
 
 
 def _best(layouts: Sequence[LoadedLayout], scores: Sequence[float]) -> tuple[LoadedLayout, float]:
-    ranked = sorted(
-        zip(layouts, scores, strict=True), key=lambda pair: (-pair[1], str(pair[0].path))
-    )
-    return ranked[0]
+    return max(zip(layouts, scores, strict=True), key=lambda pair: pair[1])
 
 
 def _no_fit(path: Path, info: VideoInfo, layouts: Sequence[LoadedLayout]) -> LayoutSelectionError:
@@ -107,10 +104,9 @@ def select_layout(
     if not frames:
         raise LayoutSelectionError(
             f"no Layout matches this Recording's HUD: none of {tried} sampled frames shows "
-            f"a HUD at the anchor of {_names(fitting)}"
+            f"a HUD at the anchor of {', '.join(str(loaded.path) for loaded in fitting)}"
         )
-    means = [float(np.mean([scores[i] for scores in frames])) for i in range(len(fitting))]
-    means = [min(1.0, max(0.0, mean)) for mean in means]
+    means = [min(1.0, max(0.0, float(np.mean(column)))) for column in zip(*frames, strict=True)]
     best, score = _best(fitting, means)
     if score < MIN_LAYOUT_SCORE:
         raise LayoutSelectionError(
@@ -121,7 +117,3 @@ def select_layout(
     if entry is not None:
         entry.store(means)
     return Selection(best, score, len(fitting))
-
-
-def _names(layouts: Sequence[LoadedLayout]) -> str:
-    return ", ".join(str(loaded.path) for loaded in layouts)
