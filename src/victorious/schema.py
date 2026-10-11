@@ -4,6 +4,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from victorious.layout import Rect
+
 SCHEMA_VERSION = "1.1"
 
 CounterElement = Literal["personal_eliminations", "team_eliminations", "players_left"]
@@ -18,6 +20,15 @@ EventKind = Literal[
     "unreadable",
 ]
 EventSource = Literal["frame", "speech"]
+ObservedElement = Literal[
+    "hud_anchor",
+    "personal_eliminations",
+    "team_eliminations",
+    "players_left",
+    "results_banner",
+    "placement",
+    "elimination_placement",
+]
 
 
 class _Model(BaseModel):
@@ -72,6 +83,17 @@ class Match(_Model):
 class RecordingInfo(_Model):
     path: str
     duration: float = Field(ge=0, description="Seconds.")
+
+
+class ObservationRecord(_Model):
+    """One line of the `--observations` file: a HUD element read at one sampled second."""
+
+    second: int = Field(ge=0, description="Whole seconds from the start of the Recording.")
+    element: ObservedElement
+    value: int | None = Field(description="The digits read, null when none were read.")
+    confidence: float = Field(ge=0, le=1, description="OCR confidence of the digits, else 0.")
+    score: float | None = Field(description="Template match score; null for counters.")
+    region: Rect
 
 
 class AnalysisOutput(_Model):

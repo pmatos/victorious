@@ -2,6 +2,7 @@
 
 from collections.abc import Callable
 from dataclasses import dataclass
+from typing import Literal
 
 import cv2
 import numpy as np
@@ -30,11 +31,23 @@ COUNTER_BANDS = (
 )
 
 
+PlacementElement = Literal["placement", "elimination_placement"]
+
+
 @dataclass(frozen=True)
 class ResultsReading:
+    """What the results screen shows: `hash` is the best "#" score of the two styles."""
+
     banner: float
     hash: float
     digits: DigitReading | None
+    placement_score: float = 0.0
+    elimination_placement_score: float = 0.0
+    digits_element: PlacementElement | None = None
+
+    @property
+    def is_results(self) -> bool:
+        return self.banner >= RESULTS_THRESHOLD or self.hash >= RESULTS_THRESHOLD
 
 
 def _crop(frame: np.ndarray, rect: Rect, margin: float) -> np.ndarray:
@@ -96,14 +109,20 @@ def _digits_right_of_hash(
 
 @dataclass(frozen=True)
 class _HashStyle:
+    element: PlacementElement
     template: str
     rect: Callable[[Layout], Rect | None]
     mask: Callable[[np.ndarray], np.ndarray]
 
 
 HASH_STYLES = (
-    _HashStyle("hash", lambda layout: layout.screens.results.placement, _gold),
-    _HashStyle("hash_white", lambda layout: layout.screens.results.elimination_placement, _white),
+    _HashStyle("placement", "hash", lambda layout: layout.screens.results.placement, _gold),
+    _HashStyle(
+        "elimination_placement",
+        "hash_white",
+        lambda layout: layout.screens.results.elimination_placement,
+        _white,
+    ),
 )
 
 
@@ -112,18 +131,33 @@ def results_reading(frame: np.ndarray, layout: Layout, read_placement: bool) -> 
     height = frame.shape[0]
     banner_region = _crop(frame, layout.screens.results.results_banner, RESULTS_MARGIN)
     banner = max(_score(banner_region, name, True, height)[0] for name in BANNER_NAMES)
-    best: tuple[float, np.ndarray, float, str] | None = None
+    best: tuple[float, np.ndarray, float, _HashStyle] | None = None
+    scores: dict[str, float] = {}
     for style in HASH_STYLES:
         rect = style.rect(layout)
         if rect is None:
             continue
         mask = style.mask(_crop(frame, rect, RESULTS_MARGIN))
         score, scale = _score(mask, style.template, False, height)
+        scores[style.element] = score
         if best is None or score > best[0]:
-            best = (score, mask, scale, style.template)
+            best = (score, mask, scale, style)
+    placement_score = scores.get("placement", 0.0)
+    elimination_score = scores.get("elimination_placement", 0.0)
     if best is None:
         return ResultsReading(banner=banner, hash=0.0, digits=None)
-    hash_score, mask, scale, template = best
+    hash_score, mask, scale, style = best
     wanted = read_placement and banner < RESULTS_THRESHOLD and hash_score >= RESULTS_THRESHOLD
-    digits = _digits_right_of_hash(mask, load_reference(template, False), scale) if wanted else None
-    return ResultsReading(banner=banner, hash=hash_score, digits=digits)
+    digits = (
+        _digits_right_of_hash(mask, load_reference(style.template, False), scale)
+        if wanted
+        else None
+    )
+    return ResultsReading(
+        banner=banner,
+        hash=hash_score,
+        digits=digits,
+        placement_score=placement_score,
+        elimination_placement_score=elimination_score,
+        digits_element=style.element if digits is not None else None,
+    )

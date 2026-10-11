@@ -22,3 +22,10 @@ def require_tesseract() -> None:
             "Install it, e.g. `apt install tesseract-ocr`.",
             pytrace=False,
         )
+
+
+@pytest.fixture(autouse=True)
+def isolated_cache(
+    tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path_factory.mktemp("xdg-cache")))

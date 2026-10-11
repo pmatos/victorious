@@ -39,6 +39,16 @@ class _CommandParser(argparse.ArgumentParser):
         return parsed, [] if self._tolerant else extras
 
 
+def _positive_int(text: str) -> int:
+    try:
+        value = int(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"not a whole number: {text!r}") from None
+    if value < 1:
+        raise argparse.ArgumentTypeError(f"must be at least 1, got {value}")
+    return value
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="victorious",
@@ -54,6 +64,15 @@ def build_parser() -> argparse.ArgumentParser:
         if name == "analyse":
             sub.add_argument("recording", type=Path, help="the Recording to analyse")
             sub.add_argument("--layout", type=Path, required=True, help="the Layout file (YAML)")
+            sub.add_argument(
+                "--jobs",
+                type=_positive_int,
+                default=os.cpu_count() or 1,
+                help="decode and read this many chunks at once (default: one per CPU)",
+            )
+            sub.add_argument(
+                "--chunk-seconds", type=_positive_int, default=60, help=argparse.SUPPRESS
+            )
         if name in {"analyse", "schema"}:
             sub.add_argument("-o", "--output", type=Path, help="write JSON here, not to stdout")
     return parser
@@ -81,7 +100,8 @@ def _require_writable_directory(output: Path | None) -> None:
 
 def _run_analyse(args: argparse.Namespace) -> str:
     layout = load_layout(args.layout)
-    return analyse(args.recording, layout).model_dump_json(indent=2) + "\n"
+    output = analyse(args.recording, layout, jobs=args.jobs, chunk_seconds=args.chunk_seconds)
+    return output.model_dump_json(indent=2) + "\n"
 
 
 def main(argv: Sequence[str] | None = None) -> int:
