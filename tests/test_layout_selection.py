@@ -13,8 +13,10 @@ from tests.analyse_helpers import FPS, STEADY, FfmpegShim, analyse_text, small
 from tests.synthetic import RecordingSpec, build_recording, layout_document, match_shots
 from tests.synthetic import write_layout as write_layout_document
 from victorious import selection
+from victorious.cache import ObservationCache
 from victorious.cli import main
 from victorious.schema import json_schema
+from victorious.video import RecordingError
 
 pytestmark = pytest.mark.usefixtures("require_ffmpeg", "require_tesseract")
 
@@ -265,3 +267,66 @@ def test_layouts_that_each_fit_half_the_frames_score_below_the_minimum(
     assert status == 1
     assert "below the minimum" in capsys.readouterr().err
     assert not produced.exists()
+
+
+def test_a_decode_error_after_the_scored_frames_does_not_fail_selection(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(selection, "SCORED_FRAMES", 3)
+    real = selection._frame_at
+
+    def truncated(path: Path, info: Any, second: int) -> Any:
+        if second >= 8:
+            raise RecordingError("truncated frame")
+        return real(path, info, second)
+
+    monkeypatch.setattr(selection, "_frame_at", truncated)
+    recording = build_recording(two_matches(), tmp_path / "recording.mkv")
+    layout = write_layout_document(tmp_path / "layout.yaml")
+    produced = tmp_path / "out.json"
+
+    status = main(
+        [
+            *("analyse", str(recording), "--layout", str(layout)),
+            *("--jobs", "16", "--no-cache", "-o", str(produced)),
+        ]
+    )
+
+    assert status == 0
+    assert json.loads(produced.read_text())["layout"]["score"] >= 0.7
+
+
+def test_candidate_frames_never_exceed_the_cap(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(selection, "MAX_CANDIDATE_FRAMES", 4)
+    seconds: list[int] = []
+    real = selection._frame_at
+
+    def counting(path: Path, info: Any, second: int) -> Any:
+        seconds.append(second)
+        return real(path, info, second)
+
+    monkeypatch.setattr(selection, "_frame_at", counting)
+    recording = build_recording(small(10, ()), tmp_path / "recording.mkv")
+    layout = write_layout_document(tmp_path / "layout.yaml")
+
+    status = main(["analyse", str(recording), "--layout", str(layout), "--jobs", "1", "--no-cache"])
+
+    assert status == 1
+    assert seconds == [0, 3, 6, 9]
+
+
+@pytest.mark.parametrize("stored", [1.7, -0.1, float("nan"), float("inf"), True, "0.9", None])
+def test_a_selection_entry_with_an_impossible_score_is_not_used(
+    tmp_path: Path, stored: Any
+) -> None:
+    recording = tmp_path / "recording.bin"
+    recording.write_bytes(b"frames")
+    entry = ObservationCache(tmp_path / "cache").selection(recording, ["abc"])
+    entry.store([0.9])
+    assert entry.load() == [0.9]
+    (file,) = (tmp_path / "cache").glob("selection-*.json")
+    file.write_text(json.dumps({"abc": stored}))
+
+    assert entry.load() is None

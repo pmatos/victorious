@@ -27,7 +27,6 @@ class Selection:
     chosen: LoadedLayout
     score: float
     fitting: int
-    cached: bool
 
 
 def _frame_at(path: Path, info: VideoInfo, second: int) -> np.ndarray | None:
@@ -50,7 +49,7 @@ def _in_match_scores(
 ) -> tuple[list[list[float]], int]:
     """The scores of the first in-match frames in time order, and how many frames were tried."""
     whole = math.floor(info.duration)
-    stride = max(1, whole // MAX_CANDIDATE_FRAMES)
+    stride = max(1, math.ceil(whole / MAX_CANDIDATE_FRAMES))
     seconds = list(range(0, whole, stride))
     found: list[list[float]] = []
     tried = 0
@@ -59,12 +58,12 @@ def _in_match_scores(
         for offset in range(0, len(seconds), batch):
             group = seconds[offset : offset + batch]
             for scores in pool.map(lambda s: _scores_at(path, info, s, layouts), group):
+                tried += 1
                 if scores is not None and max(scores) >= HUD_THRESHOLD:
                     found.append(scores)
-            tried += len(group)
-            if len(found) >= SCORED_FRAMES:
-                break
-    return found[:SCORED_FRAMES], tried
+                    if len(found) >= SCORED_FRAMES:
+                        return found, tried
+    return found, tried
 
 
 def _best(layouts: Sequence[LoadedLayout], scores: Sequence[float]) -> tuple[LoadedLayout, float]:
@@ -102,7 +101,7 @@ def select_layout(
     stored = entry.load() if entry is not None else None
     if stored is not None:
         best, score = _best(fitting, stored)
-        return Selection(best, score, len(fitting), cached=True)
+        return Selection(best, score, len(fitting))
 
     frames, tried = _in_match_scores(path, info, fitting, jobs)
     if not frames:
@@ -121,7 +120,7 @@ def select_layout(
         )
     if entry is not None:
         entry.store(means)
-    return Selection(best, score, len(fitting), cached=False)
+    return Selection(best, score, len(fitting))
 
 
 def _names(layouts: Sequence[LoadedLayout]) -> str:
