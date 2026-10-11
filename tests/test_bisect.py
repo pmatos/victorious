@@ -228,7 +228,7 @@ def test_an_unreadable_second_after_the_new_value_does_not_block_the_bisect(
     [
         (((0.0, 0, 0, 80), (5.0, 0, 0, 82)), "players_left", [(10.0, 82)]),
         (((0.0, 0, 0, 99), (5.0, 0, 0, 69)), "players_left", [(10.0, 69)]),
-        (((0.0, 0, 0, 99), (5.0, 12, 0, 99)), "personal_eliminations", [(10.0, 12)]),
+        (((0.0, 0, 0, 99), (5.0, 6, 0, 99)), "personal_eliminations", [(10.0, 6)]),
     ],
     ids=["players-left-rising", "players-left-collapsing", "implausible-eliminations-jump"],
 )
@@ -260,6 +260,20 @@ def test_a_misread_sample_away_from_the_change_does_not_move_a_step() -> None:
     steps = resolve_jump(gap, samples)
 
     assert [(step.value, step.time) for step in steps] == [(1, 10.75), (2, 10.75)]
+
+
+def test_an_isolated_misread_between_agreeing_samples_is_ignored() -> None:
+    gap = Gap("team_eliminations", 31.0, 34.0, 2, 4, 0.5)
+    samples = [
+        (32.0, CounterReading(4, 0.9)),
+        (32.25, CounterReading(4, 0.9)),
+        (32.5, CounterReading(0, 0.2)),
+        (32.75, CounterReading(4, 0.9)),
+    ]
+
+    steps = resolve_jump(gap, samples)
+
+    assert [(step.value, step.time) for step in steps] == [(3, 32.0), (4, 32.0)]
 
 
 def test_steps_are_ordered_and_stay_inside_the_window() -> None:

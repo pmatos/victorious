@@ -15,11 +15,12 @@ Installable package in `src/victorious/` (hatchling build, console script `victo
 - `matcher.py`: internal multi-scale template matcher (scales 0.3-1.2) used as a detector for reference images such as the Victory Royale banner. Not a user-facing command.
 - `layout.py`: pydantic `Layout` (YAML, normalized rects) and `load_layout`.
 - `schema.py`: pydantic output models (`AnalysisOutput`, `Match`, `Event`), `SCHEMA_VERSION`, `json_schema()`.
-- `video.py`: `probe` (ffprobe) and `sample_frames` (one BGR frame per second through an ffmpeg raw pipe, serial).
+- `video.py`: `probe` (ffprobe), `sample_frames` (one BGR frame per second through an ffmpeg raw pipe, serial) and `sample_window` (a short seek-based decode at a higher rate, used to bisect counter jumps).
 - `references.py` and `data/`: reference images shipped in the package (HUD icons, Victory Royale banner, `#` glyph).
 - `screens.py`: pure per-frame detection, `hud_score`, `results_reading` and `counter_masks`; thresholds `HUD_THRESHOLD`/`RESULTS_THRESHOLD`.
 - `ocr.py`: per-glyph Tesseract reading of a binary mask (`tesseract` CLI via subprocess).
-- `counters.py`: `CounterReader` (Tesseract per HUD counter, reusing the last reading when the mask is unchanged) and `CounterTracker` (turns readings into change Events and `unreadable` spans).
+- `counters.py`: `CounterReader` (Tesseract per HUD counter, reusing the last reading when the mask is unchanged) and `CounterTracker` (turns readings into change Events and `unreadable` spans, and records jumps of more than one as `Gap`s for a resolver).
+- `resample.py`: `resolve_jump` (pure: times each step of a jump from 4 fps samples) and `JumpResolver` (decodes each Gap's window, pooled per Match close). `analyse` seeks only for ambiguous gaps.
 - `analysis.py`: `analyse(path, layout)`, the state machine that turns per-second scores into Matches and Events. A Match opens on the HUD and closes only on a results screen.
 
 | Subcommand | Purpose | Status |

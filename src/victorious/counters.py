@@ -18,7 +18,11 @@ RETRY_CONFIDENCE = 0.5
 MAX_COUNTER_DIGITS = 3
 UNREADABLE_SECONDS = 10.0
 REUSE_MISMATCH = 0.04
-MAX_RESOLVED_JUMP = 10
+MAX_RESOLVED_JUMP: dict[CounterElement, int] = {
+    "personal_eliminations": 3,
+    "team_eliminations": 3,
+    "players_left": 10,
+}
 MAX_GAP_SECONDS = 3.0
 RISING: dict[CounterElement, int] = {
     "personal_eliminations": 1,
@@ -58,7 +62,7 @@ Resolver = Callable[[Sequence[Gap]], list[list[Step]]]
 
 def is_ambiguous(element: CounterElement, old: int, new: int) -> bool:
     jump = new - old
-    return 1 < abs(jump) <= MAX_RESOLVED_JUMP and (jump > 0) == (RISING[element] > 0)
+    return 1 < abs(jump) <= MAX_RESOLVED_JUMP[element] and (jump > 0) == (RISING[element] > 0)
 
 
 @dataclass(frozen=True)

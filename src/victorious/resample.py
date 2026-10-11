@@ -14,6 +14,18 @@ MAX_WORKERS = 8
 CORES_PER_DECODE = 3
 
 
+def _without_spikes(
+    gap: Gap, samples: Sequence[tuple[float, CounterReading]]
+) -> list[tuple[float, CounterReading]]:
+    """Drop a sample that differs from both neighbours when the neighbours agree."""
+    values = [gap.old, *(reading.value for _, reading in samples), gap.new]
+    return [
+        sample
+        for index, sample in enumerate(samples, start=1)
+        if values[index - 1] != values[index + 1] or values[index] == values[index - 1]
+    ]
+
+
 def resolve_jump(gap: Gap, samples: Sequence[tuple[float, CounterReading | None]]) -> list[Step]:
     """One Step per value from just after `gap.old` through `gap.new`.
 
@@ -23,7 +35,7 @@ def resolve_jump(gap: Gap, samples: Sequence[tuple[float, CounterReading | None]
     """
     confirmed = (gap.end + 1 - 1 / RESAMPLE_RATE, CounterReading(gap.new, gap.confidence))
     readable = [(time, reading) for time, reading in samples if reading is not None]
-    readable.append(confirmed)
+    readable = [*_without_spikes(gap, readable), confirmed]
     direction = 1 if gap.new > gap.old else -1
     steps: list[Step] = []
     for value in range(gap.old + direction, gap.new + direction, direction):
