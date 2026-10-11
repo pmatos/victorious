@@ -23,18 +23,20 @@ Installable package in `src/victorious/` (hatchling build, console script `victo
 - `resample.py`: `resolve_jump` (pure: times each step of a jump from 4 fps samples) and `JumpResolver` (decodes each Gap's window, pooled per Match close). `analyse` seeks only for ambiguous gaps.
 - `observations.py`: `SecondObservation` (everything read at one second), per-chunk extraction with packed counter masks, JSON (de)serialisation and the `--observations` records.
 - `parallel.py`: the chunk plan and `spawn` process pool for frame facts (abort flag, error transport), and the OCR thread pool for counters.
+- `detect.py`: `find_hud` and `find_results` locate the HUD elements in one frame (icons by multi-scale template match over the whole frame, counters and placements anchored on the OCR'd digits) and return normalised rectangles with their scores.
+- `setup.py`: `run_setup(recording, at)` reads each `--at` second and its two neighbours, merges the best detection per element, builds the Layout and reads every element back with the `analyse` readers before accepting it; `preview.py` draws the annotated PNG.
 - `selection.py`: `select_layout` drops Layouts whose aspect ratio does not fit the Recording, scores each remaining `hud_anchor` on up to 20 in-match frames (at most 240 candidate seconds, read in time order so the choice does not depend on `--jobs`) and picks the best; none above `MIN_LAYOUT_SCORE` is a `LayoutSelectionError`.
 - `cache.py`: Observation cache keyed by Recording fingerprint, Layout hash and `OBSERVATION_VERSION` (bump it when readings or thresholds change), plus the bisect windows. The selection scores live beside it in `selection-*.json`, keyed by the Recording and the set of Layout hashes and by both `OBSERVATION_VERSION` and `SELECTION_VERSION` (bump the latter when `SCORED_FRAMES`, `MAX_CANDIDATE_FRAMES` or how a score is formed changes).
 - `analysis.py`: `analyse(path, layouts, jobs=, chunk_seconds=, cache=)` and `run_machine`, the state machine that turns per-second Observations into Matches and Events. A Match opens on the HUD and closes only on a results screen. Output must not depend on `jobs` or chunk size: the skip-OCR rule is replayed with `ReuseTracker` over the exact schedule of counter reads the machine produces, instead of running per chunk.
 
 | Subcommand | Purpose | Status |
 |------------|---------|--------|
-| `setup` | Produce a Layout from a Recording | stub, see epic #13 |
+| `setup` | Produce a Layout from a Recording | working: auto-detect from `--at hud=` and `--at results=`; `--manual` is a stub |
 | `analyse` | Turn a Recording and a Layout into Matches with Events | working: Matches, Win, placement, HUD counters (speech: later tickets) |
 | `review` | Inspect the Events found in a Recording | stub, see epic #13 |
 | `schema` | Print the JSON schema of the Analysis output | working |
 
-`setup` and `review` are stubs: they print `victorious <command>: not implemented yet` to stderr and exit 1. `analyse` takes `--jobs` (default: CPU count), `--cache-dir`/`--no-cache`, `--observations out.jsonl` and a hidden `--chunk-seconds`. Errors in `analyse` print `victorious analyse: <reason>` to stderr, exit 1 and write nothing.
+`review` is a stub: it prints `victorious review: not implemented yet` to stderr and exits 1. `setup` takes `RECORDING --at KIND=TIME ... -o LAYOUT [--preview PNG]`; it exits 2 when a kind is missing, 1 when a required element is not found (it names them and points to `--manual`, writing no Layout). `analyse` takes `--jobs` (default: CPU count), `--cache-dir`/`--no-cache`, `--observations out.jsonl` and a hidden `--chunk-seconds`. Errors in `analyse` print `victorious analyse: <reason>` to stderr, exit 1 and write nothing.
 
 ## Development Commands
 
