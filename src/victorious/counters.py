@@ -61,8 +61,7 @@ Resolver = Callable[[Sequence[Gap]], list[list[Step]]]
 
 
 def is_ambiguous(element: CounterElement, old: int, new: int) -> bool:
-    jump = new - old
-    return 1 < abs(jump) <= MAX_RESOLVED_JUMP[element] and (jump > 0) == (RISING[element] > 0)
+    return 1 < (new - old) * RISING[element] <= MAX_RESOLVED_JUMP[element]
 
 
 @dataclass(frozen=True)
@@ -116,14 +115,16 @@ def read_counter_series(
 ) -> list[tuple[float, CounterReading | None]]:
     """One counter read in each frame, skipping Tesseract while its pixels did not change."""
     rect = _rect(layout, element)
+    if rect is None:
+        return [(time, None) for time, _ in frames]
     series: list[tuple[float, CounterReading | None]] = []
-    seen: tuple[np.ndarray, CounterReading | None] | None = None
+    previous: np.ndarray | None = None
+    reading: CounterReading | None = None
     for time, frame in frames:
-        if rect is not None:
-            masks = counter_masks(frame, rect)
-            if seen is None or not _same_pixels(seen[0], masks[0]):
-                seen = (masks[0], _best_reading(masks))
-        series.append((time, seen[1] if seen is not None else None))
+        masks = counter_masks(frame, rect)
+        if previous is None or not _same_pixels(previous, masks[0]):
+            previous, reading = masks[0], _best_reading(masks)
+        series.append((time, reading))
     return series
 
 
@@ -163,7 +164,7 @@ class CounterReader:
 class _Pending:
     value: int
     time: float
-    blind: bool
+    start: float | None
     confidences: list[float] = field(default_factory=list)
 
 
@@ -173,7 +174,6 @@ class _State:
     pending: _Pending | None = None
     gap_start: float | None = None
     last_seen: float | None = None
-    none_since_seen: bool = False
 
 
 class CounterTracker:
@@ -192,7 +192,7 @@ class CounterTracker:
         for element, state in self._states.items():
             reading = readings.get(element)
             if reading is None:
-                state.none_since_seen = True
+                state.last_seen = None
                 if state.gap_start is None:
                     state.gap_start = second
                 continue
@@ -204,7 +204,6 @@ class CounterTracker:
         if start is None or end - start <= UNREADABLE_SECONDS:
             return
         state.pending = None
-        state.last_seen = None
         self._events.append(frame_event("unreadable", start, 0.0, end=end, element=element))
 
     def _accept(
@@ -213,13 +212,10 @@ class CounterTracker:
         if state.committed is not None and reading.value == state.committed:
             state.pending = None
             state.last_seen = second
-            state.none_since_seen = False
             return
         pending = state.pending
         if pending is None or pending.value != reading.value:
-            state.pending = _Pending(
-                reading.value, second, state.none_since_seen, [reading.confidence]
-            )
+            state.pending = _Pending(reading.value, second, state.last_seen, [reading.confidence])
             return
         pending.confidences.append(reading.confidence)
         if state.committed is not None:
@@ -229,15 +225,12 @@ class CounterTracker:
         state.committed = pending.value
         state.pending = None
         state.last_seen = second
-        state.none_since_seen = False
 
     def _record_gap(
         self, element: CounterElement, state: _State, pending: _Pending, confidence: float
     ) -> None:
-        start, old = state.last_seen, state.committed
-        if start is None or old is None or pending.blind:
-            return
-        if not 0 < pending.time - start <= MAX_GAP_SECONDS:
+        start, old = pending.start, state.committed
+        if start is None or old is None or pending.time - start > MAX_GAP_SECONDS:
             return
         if is_ambiguous(element, old, pending.value):
             gap = Gap(element, start, pending.time, old, pending.value, confidence)
@@ -248,19 +241,17 @@ class CounterTracker:
             self._close_gap(element, state, end)
         events = list(self._events)
         if self._gaps and resolver is not None:
-            indices = list(self._gaps)
-            resolved = dict(zip(indices, resolver([self._gaps[i] for i in indices]), strict=True))
+            resolved = dict(zip(self._gaps, resolver(list(self._gaps.values())), strict=True))
             events = []
             for index, event in enumerate(self._events):
                 steps = resolved.get(index)
-                if not steps:
+                if steps:
+                    events.extend(
+                        frame_event(event.kind, step.time, step.confidence, step.value)
+                        for step in steps
+                    )
+                else:
                     events.append(event)
-                    continue
-                gap = self._gaps[index]
-                events.extend(
-                    frame_event(gap.element, step.time, step.confidence, step.value)
-                    for step in steps
-                )
         personal = self._states.get("personal_eliminations")
         return TrackerResult(
             events=events,
