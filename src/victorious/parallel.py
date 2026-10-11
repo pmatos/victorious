@@ -68,9 +68,12 @@ def _run_in_pool(chunks: list[_Chunk], workers: int) -> list[list[ChunkSecond]]:
         initializer=_initialise_worker,
         initargs=(abort,),
     ) as pool:
-        futures: list[Future[list[ChunkSecond]]] = [pool.submit(_extract, c) for c in chunks]
+        futures: list[Future[list[ChunkSecond]]] = []
         try:
+            futures.extend(pool.submit(_extract, c) for c in chunks)
             wait(futures, return_when=FIRST_EXCEPTION)
+        except BrokenExecutor as broken:
+            raise RecordingError("a decoding worker died unexpectedly") from broken
         finally:
             abort.set()
             for future in futures:

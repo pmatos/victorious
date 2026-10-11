@@ -114,6 +114,11 @@ def _require_writable_directory(output: Path | None) -> None:
         raise FileNotFoundError(f"output directory does not exist: {output.parent}")
 
 
+def _require_distinct(observations: Path | None, output: Path | None) -> None:
+    if observations is not None and observations == output:
+        raise OSError("--observations and --output name the same file")
+
+
 def _run_analyse(args: argparse.Namespace) -> tuple[str, str | None]:
     layout = load_layout(args.layout)
     cache = None if args.no_cache else ObservationCache(args.cache_dir or default_cache_root())
@@ -143,6 +148,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             text = json.dumps(json_schema(), indent=2) + "\n"
         else:
             _require_writable_directory(args.observations)
+            _require_distinct(args.observations, args.output)
             text, sidecar = _run_analyse(args)
         if sidecar is not None:
             _emit(sidecar, args.observations)

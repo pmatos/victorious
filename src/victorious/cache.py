@@ -44,14 +44,14 @@ def layout_hash(layout: Layout) -> str:
 
 
 def _write_atomically(path: Path, text: str) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
+    """Best effort: a cache that cannot be written must not fail the analysis."""
     temporary = path.parent / f".{path.name}.{secrets.token_hex(4)}"
     try:
+        path.parent.mkdir(parents=True, exist_ok=True)
         temporary.write_text(text)
         temporary.replace(path)
-    except BaseException:
+    except OSError:
         temporary.unlink(missing_ok=True)
-        raise
 
 
 def _read_json(path: Path) -> Any:
