@@ -8,7 +8,7 @@ import pytest
 from tests.cli_runner import run_cli
 
 SUBCOMMANDS = ["setup", "analyse", "review", "schema"]
-STUBS = ["setup", "review"]
+STUBS = ["review"]
 
 
 def test_help_lists_the_four_subcommands() -> None:
@@ -30,7 +30,7 @@ def test_stub_subcommand_reports_not_implemented_on_stderr(command: str) -> None
 
 
 def test_stub_accepts_arguments_and_writes_no_output_file(tmp_path: Path) -> None:
-    result = run_cli("setup", "recording.mkv", "-o", "layout.yaml", cwd=tmp_path)
+    result = run_cli("review", "recording.mkv", "-o", "events.json", cwd=tmp_path)
 
     assert result.returncode == 1
     assert "not implemented" in result.stderr

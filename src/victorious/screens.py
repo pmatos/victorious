@@ -1,6 +1,6 @@
 """Pure per-frame detection of the in-match HUD and the results screen."""
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Literal
 
@@ -75,23 +75,32 @@ def hud_score(frame: np.ndarray, layout: Layout) -> float:
     return min(_score(region, name, True, height)[0] for name in ICON_NAMES)
 
 
-def _gold(region: np.ndarray) -> np.ndarray:
+def _band_masks(
+    region: np.ndarray, bands: Sequence[tuple[tuple[int, int, int], tuple[int, int, int]]]
+) -> list[np.ndarray]:
     hsv = cv2.cvtColor(region, cv2.COLOR_BGR2HSV)
-    return np.asarray(cv2.inRange(hsv, GOLD_LOW, GOLD_HIGH))
+    return [np.asarray(cv2.inRange(hsv, low, high)) for low, high in bands]
 
 
-def _white(region: np.ndarray) -> np.ndarray:
-    hsv = cv2.cvtColor(region, cv2.COLOR_BGR2HSV)
-    return np.asarray(cv2.inRange(hsv, WHITE_LOW, WHITE_HIGH))
+def gold_mask(region: np.ndarray) -> np.ndarray:
+    return _band_masks(region, [(GOLD_LOW, GOLD_HIGH)])[0]
 
 
-def counter_masks(frame: np.ndarray, rect: Rect) -> list[np.ndarray]:
-    """One HUD counter's white digits as binary masks, tightest white band first.
+def white_mask(region: np.ndarray) -> np.ndarray:
+    return _band_masks(region, [(WHITE_LOW, WHITE_HIGH)])[0]
+
+
+def counter_band_masks(region: np.ndarray) -> list[np.ndarray]:
+    """White digits in `region` as binary masks, tightest white band first.
 
     The tight band keeps digits apart from pale sky and cloud; the loose one keeps thin strokes.
     """
-    hsv = cv2.cvtColor(_crop(frame, rect, COUNTER_MARGIN), cv2.COLOR_BGR2HSV)
-    return [np.asarray(cv2.inRange(hsv, low, high)) for low, high in COUNTER_BANDS]
+    return _band_masks(region, COUNTER_BANDS)
+
+
+def counter_masks(frame: np.ndarray, rect: Rect) -> list[np.ndarray]:
+    """One HUD counter's white digits as binary masks, tightest white band first."""
+    return counter_band_masks(_crop(frame, rect, COUNTER_MARGIN))
 
 
 def _digits_right_of_hash(
@@ -116,12 +125,12 @@ class _HashStyle:
 
 
 HASH_STYLES = (
-    _HashStyle("placement", "hash", lambda layout: layout.screens.results.placement, _gold),
+    _HashStyle("placement", "hash", lambda layout: layout.screens.results.placement, gold_mask),
     _HashStyle(
         "elimination_placement",
         "hash_white",
         lambda layout: layout.screens.results.elimination_placement,
-        _white,
+        white_mask,
     ),
 )
 

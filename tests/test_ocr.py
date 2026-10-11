@@ -9,7 +9,7 @@ import cv2
 import numpy as np
 import pytest
 
-from victorious.ocr import OcrError, read_digits
+from victorious.ocr import OcrError, glyph_boxes, read_digits
 
 CROPS = Path(__file__).parent / "fixtures" / "crops"
 COUNTER_MASKS = sorted(CROPS.glob("counter_*.png"))
@@ -68,3 +68,17 @@ def test_real_counter_masks_are_read_as_what_the_hud_shows(path: Path) -> None:
 
     assert reading is not None
     assert reading.text == path.stem.split("_")[1]
+
+
+def test_glyph_boxes_of_an_empty_mask_is_empty_rather_than_a_crash() -> None:
+    assert glyph_boxes(np.zeros((10, 0), np.uint8)) == []
+
+
+def test_a_tall_blob_beyond_the_height_cap_does_not_hide_the_digits() -> None:
+    mask = np.zeros((40, 60), np.uint8)
+    mask[5:17, 10:18] = 255
+    mask[5:17, 20:28] = 255
+    mask[0:34, 40:46] = 255
+
+    assert glyph_boxes(mask) == [(40, 0, 6, 34)]
+    assert glyph_boxes(mask, max_height=20) == [(10, 5, 8, 12), (20, 5, 8, 12)]

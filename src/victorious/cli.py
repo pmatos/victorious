@@ -13,10 +13,12 @@ from pydantic import ValidationError
 
 from victorious.analysis import analyse_with_observations
 from victorious.cache import ObservationCache, default_cache_root
-from victorious.layout import LayoutError, load_layouts
+from victorious.layout import LayoutError, dump_layout, load_layouts
 from victorious.observations import records
 from victorious.ocr import OcrError
+from victorious.preview import render_preview
 from victorious.schema import json_schema
+from victorious.setup import AT_KINDS, TimeError, parse_at, run_setup
 from victorious.video import RecordingError
 
 SUBCOMMANDS: tuple[tuple[str, str], ...] = (
@@ -25,7 +27,7 @@ SUBCOMMANDS: tuple[tuple[str, str], ...] = (
     ("review", "inspect the Events found in a Recording"),
     ("schema", "print the JSON schema of the Analysis output"),
 )
-STUBS = frozenset({"setup", "review"})
+STUBS = frozenset({"review"})
 
 
 class _CommandParser(argparse.ArgumentParser):
@@ -50,6 +52,13 @@ def _positive_int(text: str) -> int:
     if value < 1:
         raise argparse.ArgumentTypeError(f"must be at least 1, got {value}")
     return value
+
+
+def _at_argument(text: str) -> tuple[str, int]:
+    try:
+        return parse_at(text)
+    except TimeError as error:
+        raise argparse.ArgumentTypeError(str(error)) from None
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -94,19 +103,44 @@ def build_parser() -> argparse.ArgumentParser:
                 type=Path,
                 help="write every raw reading here as JSON lines, one per HUD element per second",
             )
+        if name == "setup":
+            sub.add_argument("recording", type=Path, help="the Recording to read the HUD from")
+            sub.add_argument(
+                "--at",
+                action="append",
+                type=_at_argument,
+                default=[],
+                metavar="KIND=TIME",
+                help="a second showing the in-match HUD (hud=TIME) or the results screen "
+                "(results=TIME); both are required, each may repeat. TIME is seconds, "
+                "MM:SS or H:MM:SS",
+            )
+            sub.add_argument(
+                "-o", "--output", type=Path, required=True, help="write the Layout (YAML) here"
+            )
+            sub.add_argument(
+                "--preview",
+                type=Path,
+                help="write the annotated preview PNG here (default: next to the Layout)",
+            )
+            sub.add_argument(
+                "--manual",
+                action="store_true",
+                help="place the elements by hand in a browser (not implemented yet)",
+            )
         if name in {"analyse", "schema"}:
             sub.add_argument("-o", "--output", type=Path, help="write JSON here, not to stdout")
     return parser
 
 
-def _emit(text: str, output: Path | None) -> None:
+def _emit(text: str | bytes, output: Path | None) -> None:
     if output is None:
-        sys.stdout.write(text)
+        sys.stdout.write(text if isinstance(text, str) else text.decode())
         return
     temporary = output.parent / f".{output.name}.{secrets.token_hex(4)}"
     descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o666)
     try:
-        with os.fdopen(descriptor, "w") as handle:
+        with os.fdopen(descriptor, "w" if isinstance(text, str) else "wb") as handle:
             handle.write(text)
         temporary.replace(output)
     except BaseException:
@@ -154,12 +188,63 @@ def _run_analyse(args: argparse.Namespace) -> tuple[str, str | None]:
     return text, "".join(f"{line}\n" for line in lines)
 
 
+def _run_setup(args: argparse.Namespace) -> int:
+    layout_path: Path = args.output
+    preview_path: Path = args.preview or layout_path.with_name(f"{layout_path.stem}.preview.png")
+    _require_writable_directory(layout_path)
+    _require_writable_directory(preview_path)
+    if layout_path.resolve() == preview_path.resolve():
+        raise OSError("--preview and --output name the same file")
+    if args.recording.resolve() in (layout_path.resolve(), preview_path.resolve()):
+        raise OSError("--output and --preview must not name the Recording")
+    result = run_setup(args.recording, args.at)
+    if result.found:
+        encoded = cv2.imencode(".png", render_preview(result.panels))[1].tobytes()
+        _emit(encoded, preview_path)
+    if result.layout is None:
+        lines = "\n".join(f"  {name}: {reason}" for name, reason in result.missing.items())
+        print(
+            f"victorious setup: could not find {len(result.missing)} element"
+            f"{'s' if len(result.missing) != 1 else ''}:\n{lines}\n"
+            "pass other --at times that show them, or place them by hand with --manual",
+            file=sys.stderr,
+        )
+        return 1
+    _emit(dump_layout(result.layout), layout_path)
+    for warning in result.warnings:
+        print(f"victorious setup: warning: {warning}", file=sys.stderr)
+    print(
+        f"victorious setup: wrote {layout_path} ({result.layout.aspect_ratio}, "
+        f"{result.found} elements) and {preview_path}",
+        file=sys.stderr,
+    )
+    return 0
+
+
+def _setup_arguments_error(args: argparse.Namespace) -> str | None:
+    present = {kind for kind, _ in args.at}
+    missing = [kind for kind in AT_KINDS if kind not in present]
+    if not missing:
+        return None
+    hints = " and ".join(f"--at {kind}=TIME" for kind in missing)
+    return f"setup needs both screen kinds, but {hints} is missing"
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     if args.command in STUBS:
         print(f"victorious {args.command}: not implemented yet", file=sys.stderr)
         return 1
     try:
+        if args.command == "setup":
+            problem = _setup_arguments_error(args)
+            if problem is not None:
+                print(f"victorious setup: error: {problem}", file=sys.stderr)
+                return 2
+            if args.manual:
+                print("victorious setup: --manual is not implemented yet", file=sys.stderr)
+                return 1
+            return _run_setup(args)
         _require_writable_directory(args.output)
         sidecar: str | None = None
         if args.command == "schema":

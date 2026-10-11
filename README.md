@@ -2,7 +2,7 @@
 
 Turns long Fortnite gameplay Recordings into a timestamped record of what happened in each Match: Wins, final placement, eliminations and speech.
 
-`analyse` and `schema` work today. `setup` and `review` are placeholders that print a not-implemented message and exit 1 until their tickets in [epic #13](https://github.com/pmatos/victorious/issues/13) land.
+`setup`, `analyse` and `schema` work today. `review` is a placeholder that prints a not-implemented message and exits 1 until its ticket in [epic #13](https://github.com/pmatos/victorious/issues/13) lands.
 
 ## Installation
 
@@ -20,10 +20,29 @@ uv run victorious --help
 
 | Subcommand | Purpose | Status |
 |------------|---------|--------|
-| `setup` | Produce a Layout from a Recording | placeholder |
+| `setup` | Produce a Layout from a Recording | working (auto-detect; `--manual` is a placeholder) |
 | `analyse` | Turn a Recording and a Layout into Matches with Events | working (Matches, Win, final placement, HUD counters) |
 | `review` | Inspect the Events found in a Recording | placeholder |
 | `schema` | Print the JSON schema of the Analysis output | working |
+
+### Setup
+
+```bash
+uv run victorious setup recording.mkv --at hud=12:34 --at results=1:05:20 -o layout.yaml
+```
+
+Point `setup` at one second that shows the in-match HUD and one that shows a results screen. It finds the three HUD icons and the Victory Royale banner from the reference images that ship with the tool, anchors the counters and the placement on the digits it reads next to them, and writes a Layout `analyse` accepts. A second `layout.preview.png` (beside the Layout, or `--preview PATH`) shows each reference frame with every rectangle drawn and labelled, stacked in the order of the `--at` options, so a glance tells whether they sit where they should.
+
+| Option | Meaning |
+|--------|---------|
+| `--at hud=TIME`, `--at results=TIME` | required, once per kind at least; `TIME` is seconds (`754`, `754.5`) or `MM:SS` / `H:MM:SS`, floored to a whole second |
+| `-o`, `--output PATH` | where the Layout (YAML) goes; required, an existing file is replaced |
+| `--preview PATH` | where the preview PNG goes (default: `<output stem>.preview.png`) |
+| `--manual` | place the elements by hand; not implemented yet |
+
+Either kind may be repeated, and the best match of each element wins. A results frame shows only one style: a Win has the banner and the gold `#N` (`results_banner`, `placement`), an eliminated player sees a white `YOU PLACED #N` (`elimination_placement`). Pass one of each to get all three; without an eliminated frame the Layout is still written and a warning on stderr names `elimination_placement`. A counter that cannot be read on a frame is reported by name: try another `--at hud=` second where the digits are crisp. The seconds either side of each `--at` are also tried, so one unlucky video frame does not fail a counter.
+
+When a required element cannot be found, `setup` exits 1, names each one with the reason, points to `--manual` and writes no Layout (the preview is still written when anything was found). A missing `--at` kind, or a time that is not a time, is a usage error (exit 2). `setup` finds HUDs between 0.7x and 1.4x of the reference size, but `analyse` reads only 0.9x to 1.1x, so a Layout that would not read back is reported instead of written. The Victory Royale banner animates: pick a second just after it appears, while it is full size, since on some XP screens it shrinks below 0.9x and `setup` then reports it.
 
 ### Analyse
 
@@ -72,7 +91,7 @@ Counters are read only while a Match is open and the HUD is on screen, and only 
 
 ### Layout file
 
-Until `setup` exists, a Layout is written by hand; keep several in one directory and pass the directory to `--layout`. Coordinates are fractions of the frame (`x`, `y`, `w`, `h` in 0..1), so one Layout serves every resolution of the same HUD design:
+`setup` writes a Layout for you; one can also be written by hand. Keep several in one directory and pass the directory to `--layout`. Coordinates are fractions of the frame (`x`, `y`, `w`, `h` in 0..1), so one Layout serves every resolution of the same HUD design:
 
 ```yaml
 aspect_ratio: "16:9"

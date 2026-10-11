@@ -54,12 +54,19 @@ def find_tesseract() -> str:
     return path
 
 
-def _glyph_boxes(mask: np.ndarray) -> list[tuple[int, int, int, int]]:
+def glyph_boxes(mask: np.ndarray, max_height: int | None = None) -> list[tuple[int, int, int, int]]:
+    """The glyph-sized components of `mask`, left to right; none taller than `max_height`.
+
+    The height cap applies before the relative size filter, so a tall bright blob that is
+    no glyph cannot make the real digits next to it look small.
+    """
+    if mask.size == 0:
+        return []
     count, _, stats, _ = cv2.connectedComponentsWithStats(mask, connectivity=8)
     boxes = [
         (int(x), int(y), int(w), int(h))
         for x, y, w, h, area in (stats[i] for i in range(1, count))
-        if area >= MIN_GLYPH_AREA
+        if area >= MIN_GLYPH_AREA and (max_height is None or h <= max_height)
     ]
     if not boxes:
         return []
@@ -122,7 +129,7 @@ def read_digits(mask: np.ndarray) -> DigitReading | None:
     if mask.size == 0:
         return None
     tesseract = find_tesseract()
-    boxes = _glyph_boxes(mask)
+    boxes = glyph_boxes(mask)
     if not boxes:
         return None
     readings = [_read_glyph(mask[y : y + h, x : x + w], tesseract) for x, y, w, h in boxes]
