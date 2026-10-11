@@ -12,7 +12,7 @@ import yaml
 from tests.analyse_helpers import FPS, STEADY, FfmpegShim, analyse_text, small
 from tests.synthetic import RecordingSpec, build_recording, layout_document, match_shots
 from tests.synthetic import write_layout as write_layout_document
-from victorious import selection
+from victorious import selection, video
 from victorious.cache import ObservationCache
 from victorious.cli import main
 from victorious.schema import json_schema
@@ -273,14 +273,14 @@ def test_a_decode_error_after_the_scored_frames_does_not_fail_selection(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(selection, "SCORED_FRAMES", 3)
-    real = selection._frame_at
+    real = video.frame_at
 
     def truncated(path: Path, info: Any, second: int) -> Any:
         if second >= 8:
             raise RecordingError("truncated frame")
         return real(path, info, second)
 
-    monkeypatch.setattr(selection, "_frame_at", truncated)
+    monkeypatch.setattr(selection, "frame_at", truncated)
     recording = build_recording(two_matches(), tmp_path / "recording.mkv")
     layout = write_layout_document(tmp_path / "layout.yaml")
     produced = tmp_path / "out.json"
@@ -301,13 +301,13 @@ def test_candidate_frames_never_exceed_the_cap(
 ) -> None:
     monkeypatch.setattr(selection, "MAX_CANDIDATE_FRAMES", 4)
     seconds: list[int] = []
-    real = selection._frame_at
+    real = video.frame_at
 
     def counting(path: Path, info: Any, second: int) -> Any:
         seconds.append(second)
         return real(path, info, second)
 
-    monkeypatch.setattr(selection, "_frame_at", counting)
+    monkeypatch.setattr(selection, "frame_at", counting)
     recording = build_recording(small(10, ()), tmp_path / "recording.mkv")
     layout = write_layout_document(tmp_path / "layout.yaml")
 

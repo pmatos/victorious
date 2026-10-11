@@ -111,3 +111,10 @@ def sample_window(
     ]  # fmt: skip
     frames = _decode(path, info, command)
     return ((start + k / rate, frame) for k, frame in enumerate(frames))
+
+
+def frame_at(path: Path, info: VideoInfo, second: int) -> np.ndarray | None:
+    """The frame `sample_chunk` yields for `second`, or None when the Recording ends before."""
+    for _, frame in sample_chunk(path, info, second, 1, threads=1):
+        return frame
+    return None

@@ -50,7 +50,7 @@ class ResultsReading:
         return self.banner >= RESULTS_THRESHOLD or self.hash >= RESULTS_THRESHOLD
 
 
-def _crop(frame: np.ndarray, rect: Rect, margin: float) -> np.ndarray:
+def crop_region(frame: np.ndarray, rect: Rect, margin: float) -> np.ndarray:
     height, width = frame.shape[:2]
     x0 = max(0, int((rect.x - margin * rect.w) * width))
     y0 = max(0, int((rect.y - margin * rect.h) * height))
@@ -70,17 +70,17 @@ def _score(region: np.ndarray, name: str, color: bool, frame_height: int) -> tup
 
 def hud_score(frame: np.ndarray, layout: Layout) -> float:
     """How surely the in-match HUD is on screen: its weakest icon's match, 0..1."""
-    region = _crop(frame, layout.screens.hud.hud_anchor, ANCHOR_MARGIN)
+    region = crop_region(frame, layout.screens.hud.hud_anchor, ANCHOR_MARGIN)
     height = frame.shape[0]
     return min(_score(region, name, True, height)[0] for name in ICON_NAMES)
 
 
-def _gold(region: np.ndarray) -> np.ndarray:
+def gold_mask(region: np.ndarray) -> np.ndarray:
     hsv = cv2.cvtColor(region, cv2.COLOR_BGR2HSV)
     return np.asarray(cv2.inRange(hsv, GOLD_LOW, GOLD_HIGH))
 
 
-def _white(region: np.ndarray) -> np.ndarray:
+def white_mask(region: np.ndarray) -> np.ndarray:
     hsv = cv2.cvtColor(region, cv2.COLOR_BGR2HSV)
     return np.asarray(cv2.inRange(hsv, WHITE_LOW, WHITE_HIGH))
 
@@ -90,11 +90,11 @@ def counter_masks(frame: np.ndarray, rect: Rect) -> list[np.ndarray]:
 
     The tight band keeps digits apart from pale sky and cloud; the loose one keeps thin strokes.
     """
-    hsv = cv2.cvtColor(_crop(frame, rect, COUNTER_MARGIN), cv2.COLOR_BGR2HSV)
+    hsv = cv2.cvtColor(crop_region(frame, rect, COUNTER_MARGIN), cv2.COLOR_BGR2HSV)
     return [np.asarray(cv2.inRange(hsv, low, high)) for low, high in COUNTER_BANDS]
 
 
-def _digits_right_of_hash(
+def digits_right_of_hash(
     mask: np.ndarray, template: np.ndarray, scale: float
 ) -> DigitReading | None:
     size = (max(1, int(template.shape[1] * scale)), max(1, int(template.shape[0] * scale)))
@@ -116,12 +116,12 @@ class _HashStyle:
 
 
 HASH_STYLES = (
-    _HashStyle("placement", "hash", lambda layout: layout.screens.results.placement, _gold),
+    _HashStyle("placement", "hash", lambda layout: layout.screens.results.placement, gold_mask),
     _HashStyle(
         "elimination_placement",
         "hash_white",
         lambda layout: layout.screens.results.elimination_placement,
-        _white,
+        white_mask,
     ),
 )
 
@@ -129,7 +129,7 @@ HASH_STYLES = (
 def results_reading(frame: np.ndarray, layout: Layout, read_placement: bool) -> ResultsReading:
     """The Victory Royale banner and "#" scores, and the placement digits when asked for."""
     height = frame.shape[0]
-    banner_region = _crop(frame, layout.screens.results.results_banner, RESULTS_MARGIN)
+    banner_region = crop_region(frame, layout.screens.results.results_banner, RESULTS_MARGIN)
     banner = max(_score(banner_region, name, True, height)[0] for name in BANNER_NAMES)
     best: tuple[float, np.ndarray, float, _HashStyle] | None = None
     scores: dict[str, float] = {}
@@ -137,7 +137,7 @@ def results_reading(frame: np.ndarray, layout: Layout, read_placement: bool) -> 
         rect = style.rect(layout)
         if rect is None:
             continue
-        mask = style.mask(_crop(frame, rect, RESULTS_MARGIN))
+        mask = style.mask(crop_region(frame, rect, RESULTS_MARGIN))
         score, scale = _score(mask, style.template, False, height)
         scores[style.element] = score
         if best is None or score > best[0]:
@@ -149,9 +149,7 @@ def results_reading(frame: np.ndarray, layout: Layout, read_placement: bool) -> 
     hash_score, mask, scale, style = best
     wanted = read_placement and banner < RESULTS_THRESHOLD and hash_score >= RESULTS_THRESHOLD
     digits = (
-        _digits_right_of_hash(mask, load_reference(style.template, False), scale)
-        if wanted
-        else None
+        digits_right_of_hash(mask, load_reference(style.template, False), scale) if wanted else None
     )
     return ResultsReading(
         banner=banner,

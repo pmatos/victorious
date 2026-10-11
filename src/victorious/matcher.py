@@ -6,6 +6,7 @@ Used for reference-image matching such as the Victory Royale banner.
 import logging
 import math
 from collections.abc import Iterable, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 
 import cv2
@@ -67,15 +68,25 @@ def load_template(image_path: Path, grayscale: bool = False) -> np.ndarray:
     return template
 
 
-def match_template_in_frame_multiscale(
-    frame: np.ndarray,
-    template: np.ndarray,
-    threshold: float,
-    scales: Sequence[float] | None = None,
-) -> tuple[bool, float, float]:
+@dataclass(frozen=True)
+class TemplateHit:
+    """Where a template matched best: top-left corner and size in frame pixels."""
+
+    x: int
+    y: int
+    w: int
+    h: int
+    score: float
+    scale: float
+
+
+def locate_template_multiscale(
+    frame: np.ndarray, template: np.ndarray, scales: Sequence[float] | None = None
+) -> TemplateHit | None:
     """
-    Multi-scale template matching.
-    Returns: (is_match, best_confidence, best_scale)
+    Multi-scale template matching that keeps the location of the best match.
+
+    Returns None when no scale produced a positive confidence.
 
     Raises cv2.error if OpenCV rejected every scale that was attempted (for
     example a colour frame matched against a grayscale template), since that is
@@ -87,8 +98,7 @@ def match_template_in_frame_multiscale(
     template_h, template_w = template.shape[:2]
     frame_h, frame_w = frame.shape[:2]
 
-    best_confidence = 0.0
-    best_scale = 1.0
+    best: TemplateHit | None = None
     attempted = 0
     errors: list[cv2.error] = []
 
@@ -116,13 +126,12 @@ def match_template_in_frame_multiscale(
             scaled_template = cv2.resize(template, (new_w, new_h))
 
             result = cv2.matchTemplate(frame, scaled_template, cv2.TM_CCOEFF_NORMED)
-            _, max_val, _, _ = cv2.minMaxLoc(result)
+            _, max_val, _, max_loc = cv2.minMaxLoc(result)
 
             logger.debug("Scale %.2fx: confidence %.4f", scale, max_val)
 
-            if max_val > best_confidence:
-                best_confidence = max_val
-                best_scale = scale
+            if max_val > (best.score if best is not None else 0.0):
+                best = TemplateHit(max_loc[0], max_loc[1], new_w, new_h, max_val, scale)
 
                 if max_val > 0.95:
                     logger.debug(
@@ -137,6 +146,26 @@ def match_template_in_frame_multiscale(
     if errors and len(errors) == attempted:
         raise errors[-1]
 
+    return best
+
+
+def match_template_in_frame_multiscale(
+    frame: np.ndarray,
+    template: np.ndarray,
+    threshold: float,
+    scales: Sequence[float] | None = None,
+) -> tuple[bool, float, float]:
+    """
+    Multi-scale template matching.
+    Returns: (is_match, best_confidence, best_scale)
+
+    Raises cv2.error if OpenCV rejected every scale that was attempted (for
+    example a colour frame matched against a grayscale template), since that is
+    a misuse rather than a genuine absence of a match.
+    """
+    hit = locate_template_multiscale(frame, template, scales)
+    best_confidence = hit.score if hit is not None else 0.0
+    best_scale = hit.scale if hit is not None else 1.0
     is_match = best_confidence >= threshold
     logger.debug(
         "Multi-scale result: best_confidence=%.4f, best_scale=%.2fx, is_match=%s",

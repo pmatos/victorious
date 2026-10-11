@@ -11,7 +11,7 @@ import numpy as np
 from victorious.cache import ObservationCache, layout_hash
 from victorious.layout import LayoutError, LoadedLayout
 from victorious.screens import HUD_THRESHOLD, hud_score
-from victorious.video import VideoInfo, sample_chunk
+from victorious.video import VideoInfo, frame_at
 
 SCORED_FRAMES = 20
 MAX_CANDIDATE_FRAMES = 240
@@ -29,16 +29,10 @@ class Selection:
     fitting: int
 
 
-def _frame_at(path: Path, info: VideoInfo, second: int) -> np.ndarray | None:
-    for _, frame in sample_chunk(path, info, second, 1, threads=1):
-        return frame
-    return None
-
-
 def _scores_at(
     path: Path, info: VideoInfo, second: int, layouts: Sequence[LoadedLayout]
 ) -> list[float] | None:
-    frame = _frame_at(path, info, second)
+    frame = frame_at(path, info, second)
     if frame is None:
         return None
     return [hud_score(frame, loaded.layout) for loaded in layouts]
