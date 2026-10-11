@@ -90,7 +90,7 @@ def sample_frames(path: Path, info: VideoInfo) -> Iterator[tuple[int, np.ndarray
 
 def sample_window(
     path: Path, info: VideoInfo, start: float, end: float, rate: int
-) -> list[tuple[float, np.ndarray]]:
+) -> Iterator[tuple[float, np.ndarray]]:
     """The frames of [start, end) at `rate` per second with the start of their slot.
 
     Like `sample_frames`, each frame is the last one of its slot, so the frame of the slot
@@ -102,4 +102,4 @@ def sample_window(
         "-f", "rawvideo", "-pix_fmt", "bgr24", "-",
     ]  # fmt: skip
     frames = _decode(path, info, command)
-    return [(start + k / rate, frame) for k, frame in enumerate(frames)]
+    return ((start + k / rate, frame) for k, frame in enumerate(frames))

@@ -1,6 +1,6 @@
 """Reading the HUD counters and turning their readings into Events."""
 
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from typing import get_args
@@ -111,11 +111,20 @@ def _best_reading(masks: list[np.ndarray]) -> CounterReading | None:
     return best
 
 
-def read_counter(
-    frame: np.ndarray, layout: Layout, element: CounterElement
-) -> CounterReading | None:
+def read_counter_series(
+    frames: Iterable[tuple[float, np.ndarray]], layout: Layout, element: CounterElement
+) -> list[tuple[float, CounterReading | None]]:
+    """One counter read in each frame, skipping Tesseract while its pixels did not change."""
     rect = _rect(layout, element)
-    return None if rect is None else _best_reading(counter_masks(frame, rect))
+    series: list[tuple[float, CounterReading | None]] = []
+    seen: tuple[np.ndarray, CounterReading | None] | None = None
+    for time, frame in frames:
+        if rect is not None:
+            masks = counter_masks(frame, rect)
+            if seen is None or not _same_pixels(seen[0], masks[0]):
+                seen = (masks[0], _best_reading(masks))
+        series.append((time, seen[1] if seen is not None else None))
+    return series
 
 
 class CounterReader:

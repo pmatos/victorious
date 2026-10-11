@@ -163,6 +163,25 @@ def test_bisect_only_re_samples_the_ambiguous_gaps(tmp_path: Path, shim: FfmpegS
     assert sorted(shim.windows()) == [(10.0, 1.0), (20.0, 1.0)]
 
 
+def test_a_jump_spanning_more_than_three_seconds_is_not_bisected(
+    tmp_path: Path, shim: FfmpegShim
+) -> None:
+    steps = (
+        (0.0, 0, 0, 100),
+        (5.0, 0, 0, 99),
+        (6.0, 0, 0, 98),
+        (7.0, 0, 0, 97),
+        (8.0, 0, 0, 96),
+    )
+    shots = match_shots(5, steps, results_at=30, placement=3)
+
+    output = run(tmp_path, shim, 40, shots)
+
+    (match,) = output["matches"]
+    assert counter(match, "players_left") == [(13.0, 96)]
+    assert shim.windows() == []
+
+
 def test_an_unreadable_second_inside_the_gap_is_not_bisected(
     tmp_path: Path, shim: FfmpegShim
 ) -> None:
@@ -292,3 +311,17 @@ def test_steps_are_ordered_and_stay_inside_the_window() -> None:
     assert [step.value for step in steps] == [89, 88, 87]
     assert times == sorted(times)
     assert all(10.0 <= time <= 11.75 for time in times)
+
+
+def test_a_misread_outside_the_jump_next_to_differing_samples_does_not_move_a_step() -> None:
+    gap = Gap("personal_eliminations", 9.0, 10.0, 2, 4, 0.5)
+    samples = [
+        (10.0, CounterReading(2, 0.9)),
+        (10.25, CounterReading(9, 0.2)),
+        (10.5, CounterReading(4, 0.9)),
+        (10.75, CounterReading(4, 0.9)),
+    ]
+
+    steps = resolve_jump(gap, samples)
+
+    assert [(step.value, step.time) for step in steps] == [(3, 10.5), (4, 10.5)]

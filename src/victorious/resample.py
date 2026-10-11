@@ -5,7 +5,7 @@ from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-from victorious.counters import CounterReading, Gap, Step, read_counter
+from victorious.counters import CounterReading, Gap, Step, read_counter_series
 from victorious.layout import Layout
 from victorious.video import VideoInfo, sample_window
 
@@ -34,7 +34,12 @@ def resolve_jump(gap: Gap, samples: Sequence[tuple[float, CounterReading | None]
     that confirmed `gap.new`, so every step has a time.
     """
     confirmed = (gap.end + 1 - 1 / RESAMPLE_RATE, CounterReading(gap.new, gap.confidence))
-    readable = [(time, reading) for time, reading in samples if reading is not None]
+    low, high = sorted((gap.old, gap.new))
+    readable = [
+        (time, reading)
+        for time, reading in samples
+        if reading is not None and low <= reading.value <= high
+    ]
     readable = [*_without_spikes(gap, readable), confirmed]
     direction = 1 if gap.new > gap.old else -1
     steps: list[Step] = []
@@ -62,5 +67,4 @@ class JumpResolver:
 
     def _resolve(self, gap: Gap) -> list[Step]:
         frames = sample_window(self._path, self._info, gap.start + 1, gap.end + 1, RESAMPLE_RATE)
-        samples = [(time, read_counter(frame, self._layout, gap.element)) for time, frame in frames]
-        return resolve_jump(gap, samples)
+        return resolve_jump(gap, read_counter_series(frames, self._layout, gap.element))
