@@ -2,7 +2,7 @@
 
 Turns long Fortnite gameplay Recordings into a timestamped record of what happened in each Match: Wins, final placement, eliminations and speech.
 
-`setup`, `analyse` and `schema` work today. `review` is a placeholder that prints a not-implemented message and exits 1 until its ticket in [epic #13](https://github.com/pmatos/victorious/issues/13) lands.
+All four subcommands work. The remaining work is tracked in [epic #13](https://github.com/pmatos/victorious/issues/13).
 
 ## Installation
 
@@ -22,7 +22,7 @@ uv run victorious --help
 |------------|---------|--------|
 | `setup` | Produce a Layout from a Recording | working (auto-detect, or `--manual` in a local browser page) |
 | `analyse` | Turn a Recording and a Layout into Matches with Events | working (Matches, Win, final placement, HUD counters, speech with Speakers) |
-| `review` | Inspect the Events found in a Recording | placeholder |
+| `review` | Confirm or reject the detected Matches into a labels file, or compare a run against one | working |
 | `schema` | Print the JSON schema of the Analysis output | working |
 
 ### Setup
@@ -130,6 +130,37 @@ Without a key, or when Jev fails, the category is `null` and the run still succe
 Speech needs a Hugging Face token (`HF_TOKEN`, `HUGGING_FACE_HUB_TOKEN` or `hf auth login`); without one `analyse` exits 1 before reading the Recording and says so. The token is only checked for presence here. The audio tagger, the diarization pipeline and the `--voices` clips are loaded (the models downloaded on first use) at the same point, so a missing or corrupt model or clip also fails before the Recording is read. The Whisper model is public: it is downloaded on first use into the Hugging Face cache (about 480 MB) and loaded from it afterwards. A Recording without audio, or an `--audio-stream` it does not have, is an error that names `--no-speech`.
 
 `--no-speech` skips all of this (setting `VICTORIOUS_NO_SPEECH` to `1`, `true` or `yes` makes it the default): no token is needed and no speech library is imported. Transcripts are not part of the Observation cache; a cached rerun still transcribes.
+
+### Review
+
+```bash
+uv run victorious review analysis.json                       # serve the page, save analysis.labels.json
+uv run victorious review analysis.json --against labels.json # compare, exit 1 when they differ
+```
+
+`review` reads the JSON `analyse` wrote and serves a page on `http://127.0.0.1:PORT/TOKEN/` (printed on stderr, opened in your browser unless `--no-browser`). Each Match is a card with its start and end, whether it was a Win, the placement and the counters read, and two frames of the Recording: the one at its start and the results screen two seconds after the first results second (the banner is still animating at that second). A Match that never reached a results screen says so and shows its last in-match frame. Confirm a Match when what was read is right and reject it when it is not a real Match or a value is wrong; `c` and `r` decide the focused card. `Save labels` is enabled once every Match has a verdict. It writes the labels file, then the server exits 0; `Ctrl-C` cancels (exit 1, nothing written).
+
+| Option | Meaning |
+|--------|---------|
+| `--recording PATH` | the Recording, when it is not at the path written in the JSON (relative to the working directory) |
+| `-o`, `--output PATH` | where the labels go (default: `<analysis stem>.labels.json` beside the JSON); an existing file is replaced |
+| `--no-browser`, `--port N` | only print the address; listen on this port instead of a free one |
+| `--against LABELS` | compare the analysis with a labels file instead of serving a page |
+| `--tolerance SECONDS` | with `--against`, how far a Match boundary may move (default 2, since analysis samples at one frame per second) |
+
+The labels file is JSON with its own `labels_version` (`1.0`), separate from the analysis schema: the Recording (`path`, `duration`), the analysis it came from, and one entry per Match with `start`, `end`, `verdict` (`confirmed` or `rejected`) and the `win`, `placement` and `personal_eliminations` that were shown. It is meant to be kept beside a Recording as a regression fixture.
+
+`--against` pairs each Match with a label by time, not by index: spans that overlap by at least half are the same Match. It prints one line per difference, `kind  start-end  detail`, then a summary:
+
+| Kind | Meaning |
+|------|---------|
+| `missing` | a confirmed Match is no longer found |
+| `changed` | `win`, `placement` or `personal_eliminations` differ from a confirmed label; or a rejected Match is now read differently and needs a new review |
+| `shifted` | start or end moved by more than `--tolerance` |
+| `reappeared` | a rejected Match is found again with the same values |
+| `unlabelled` | a Match with no label, for example a new detection |
+
+It prints `no differences (N matches)` and exits 0 when clean, and exits 1 when there are differences. Labels for another Recording (a different file name, or a duration more than 1 s apart), a corrupt labels file or an analysis of another schema version exit 1 with a message on stderr. `--against` with `-o`, `--recording`, `--no-browser` or `--port` is a usage error (exit 2). Known limits: only detected Matches can be labelled (a Match the analysis missed cannot be added), and a Match split in two by a HUD dropout shows as `missing` plus `unlabelled`.
 
 ### Layout file
 

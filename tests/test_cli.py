@@ -8,7 +8,6 @@ import pytest
 from tests.cli_runner import run_cli
 
 SUBCOMMANDS = ["setup", "analyse", "review", "schema"]
-STUBS = ["review"]
 
 
 def test_help_lists_the_four_subcommands() -> None:
@@ -28,22 +27,20 @@ def test_setup_help_describes_the_manual_editor() -> None:
     assert "not implemented" not in result.stdout
 
 
-@pytest.mark.parametrize("command", STUBS)
-def test_stub_subcommand_reports_not_implemented_on_stderr(command: str) -> None:
-    result = run_cli(command)
+def test_review_help_describes_the_review_and_the_comparison() -> None:
+    result = run_cli("review", "--help")
 
-    assert result.returncode == 1
-    assert "not implemented" in result.stderr
-    assert command in result.stderr
-    assert result.stdout == ""
+    assert result.returncode == 0
+    for option in ("--against", "--tolerance", "--output", "--recording", "--no-browser", "--port"):
+        assert option in result.stdout
+    assert "not implemented" not in result.stdout
 
 
-def test_stub_accepts_arguments_and_writes_no_output_file(tmp_path: Path) -> None:
-    result = run_cli("review", "recording.mkv", "-o", "events.json", cwd=tmp_path)
+def test_review_needs_an_analysis_file() -> None:
+    result = run_cli("review")
 
-    assert result.returncode == 1
-    assert "not implemented" in result.stderr
-    assert list(tmp_path.iterdir()) == []
+    assert result.returncode == 2
+    assert "analysis" in result.stderr
 
 
 def test_missing_subcommand_is_a_usage_error() -> None:

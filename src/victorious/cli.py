@@ -1,12 +1,12 @@
 import argparse
 import json
+import math
 import os
 import secrets
 import sys
 import time
 from collections.abc import Sequence
 from pathlib import Path
-from typing import Any
 
 import cv2
 from pydantic import ValidationError
@@ -15,11 +15,20 @@ from victorious.analysis import analyse_with_observations
 from victorious.cache import ObservationCache, default_cache_root
 from victorious.categorize import KEY_VARIABLE, jev_from_env
 from victorious.errors import SpeechError
+from victorious.labels import (
+    DEFAULT_TOLERANCE,
+    Labels,
+    LabelsError,
+    compare,
+    format_differences,
+    load_labels,
+)
 from victorious.layout import LayoutError, dump_layout, load_layouts
 from victorious.manual import serve_manual
 from victorious.observations import records
 from victorious.ocr import OcrError
 from victorious.preview import render_preview
+from victorious.review import ReviewError, extract_frames, load_analysis, serve_review
 from victorious.schema import MaskedAudioRecord, json_schema
 from victorious.setup import AT_KINDS, SetupResult, TimeError, parse_at, run_setup
 from victorious.speakers import DIARIZATION_REPO
@@ -29,24 +38,9 @@ from victorious.video import RecordingError
 SUBCOMMANDS: tuple[tuple[str, str], ...] = (
     ("setup", "produce a Layout from a Recording"),
     ("analyse", "turn a Recording and a Layout into a list of Events"),
-    ("review", "inspect the Events found in a Recording"),
+    ("review", "confirm or reject the detected Matches into a labels file"),
     ("schema", "print the JSON schema of the Analysis output"),
 )
-STUBS = frozenset({"review"})
-
-
-class _CommandParser(argparse.ArgumentParser):
-    """Subcommand parser; an unimplemented command tolerates any arguments."""
-
-    def __init__(self, *args: Any, tolerant: bool = False, **kwargs: Any) -> None:
-        super().__init__(*args, **kwargs)
-        self._tolerant = tolerant
-
-    def parse_known_args(  # type: ignore[override]
-        self, args: Sequence[str] | None = None, namespace: argparse.Namespace | None = None
-    ) -> tuple[argparse.Namespace, list[str]]:
-        parsed, extras = super().parse_known_args(args, namespace)
-        return parsed, [] if self._tolerant else extras
 
 
 def _whole_number(text: str, low: int, high: int | None = None) -> int:
@@ -73,6 +67,16 @@ def _port(text: str) -> int:
     return _whole_number(text, 0, 65535)
 
 
+def _non_negative_seconds(text: str) -> float:
+    try:
+        value = float(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"not a number of seconds: {text!r}") from None
+    if not math.isfinite(value) or value < 0:
+        raise argparse.ArgumentTypeError(f"must be zero or more seconds, got {text}")
+    return value
+
+
 def _at_argument(text: str) -> tuple[str, int]:
     try:
         return parse_at(text)
@@ -85,13 +89,9 @@ def build_parser() -> argparse.ArgumentParser:
         prog="victorious",
         description="Find Matches, Wins and speech in long Fortnite gameplay Recordings.",
     )
-    subparsers = parser.add_subparsers(
-        dest="command", metavar="<command>", required=True, parser_class=_CommandParser
-    )
+    subparsers = parser.add_subparsers(dest="command", metavar="<command>", required=True)
     for name, help_text in SUBCOMMANDS:
-        sub = subparsers.add_parser(
-            name, help=help_text, description=help_text, tolerant=name in STUBS
-        )
+        sub = subparsers.add_parser(name, help=help_text, description=help_text)
         if name == "analyse":
             sub.add_argument("recording", type=Path, help="the Recording to analyse")
             sub.add_argument(
@@ -185,6 +185,45 @@ def build_parser() -> argparse.ArgumentParser:
                 type=_port,
                 default=None,
                 help="with --manual, listen on this port of 127.0.0.1 (default: a free one)",
+            )
+        if name == "review":
+            sub.add_argument("analysis", type=Path, help="the JSON `analyse` wrote")
+            sub.add_argument(
+                "--recording",
+                type=Path,
+                help="the Recording the analysis is of (default: the path written in the JSON)",
+            )
+            sub.add_argument(
+                "-o",
+                "--output",
+                type=Path,
+                help="write the labels file here (default: <analysis>.labels.json beside it)",
+            )
+            sub.add_argument(
+                "--no-browser",
+                action="store_true",
+                help="only print the address instead of opening a browser",
+            )
+            sub.add_argument(
+                "--port",
+                type=_port,
+                default=None,
+                help="listen on this port of 127.0.0.1 (default: a free one)",
+            )
+            sub.add_argument(
+                "--against",
+                type=Path,
+                metavar="LABELS",
+                help="compare the Matches of the analysis with this labels file instead of "
+                "reviewing them; exits 1 when they differ",
+            )
+            sub.add_argument(
+                "--tolerance",
+                type=_non_negative_seconds,
+                default=None,
+                metavar="SECONDS",
+                help=f"with --against, how far a Match boundary may move "
+                f"(default: {DEFAULT_TOLERANCE:g})",
             )
         if name in {"analyse", "schema"}:
             sub.add_argument("-o", "--output", type=Path, help="write JSON here, not to stdout")
@@ -394,11 +433,74 @@ def _setup_arguments_error(args: argparse.Namespace) -> str | None:
     return f"setup needs both screen kinds, but {hints} is missing"
 
 
+def _review_arguments_error(args: argparse.Namespace) -> str | None:
+    if args.against is None:
+        if args.tolerance is not None:
+            return "--tolerance only applies with --against"
+        return None
+    applied = [
+        flag
+        for flag, given in (
+            ("-o", args.output is not None),
+            ("--recording", args.recording is not None),
+            ("--no-browser", args.no_browser),
+            ("--port", args.port is not None),
+        )
+        if given
+    ]
+    if applied:
+        return f"--against compares without serving a page, so {', '.join(applied)} do not apply"
+    return None
+
+
+def _run_review(args: argparse.Namespace) -> int:
+    output = load_analysis(args.analysis)
+    labels_path: Path = args.output or args.analysis.with_name(f"{args.analysis.stem}.labels.json")
+    recording: Path = args.recording or Path(output.recording.path)
+    _require_writable_directory(labels_path)
+    if not recording.is_file():
+        raise RecordingError(
+            f"Recording not found: {recording} (pass --recording PATH to say where it is)"
+        )
+    if labels_path.resolve() in (args.analysis.resolve(), recording.resolve()):
+        raise OSError(f"--output must not name the analysis or the Recording: {labels_path}")
+    frames = extract_frames(recording, output)
+
+    def write(labels: Labels) -> None:
+        _emit(labels.model_dump_json(indent=2) + "\n", labels_path)
+        confirmed = sum(item.verdict == "confirmed" for item in labels.matches)
+        print(
+            f"victorious review: wrote {labels_path} ({confirmed} confirmed, "
+            f"{len(labels.matches) - confirmed} rejected)",
+            file=sys.stderr,
+        )
+
+    saved = serve_review(
+        output,
+        frames,
+        port=args.port or 0,
+        open_browser=not args.no_browser,
+        announce=lambda url: print(
+            f"victorious review: serving {url} (Ctrl-C to cancel)", file=sys.stderr, flush=True
+        ),
+        commit=write,
+    )
+    if saved is None:
+        print("victorious review: cancelled, nothing written", file=sys.stderr)
+        return 1
+    return 0
+
+
+def _run_compare(args: argparse.Namespace) -> int:
+    output = load_analysis(args.analysis)
+    tolerance = DEFAULT_TOLERANCE if args.tolerance is None else args.tolerance
+    differences = compare(load_labels(args.against), output, tolerance)
+    sys.stdout.write(format_differences(differences, len(output.matches)))
+    return 1 if differences else 0
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    if args.command in STUBS:
-        print(f"victorious {args.command}: not implemented yet", file=sys.stderr)
-        return 1
     try:
         if args.command == "setup":
             problem = _setup_arguments_error(args)
@@ -406,6 +508,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                 print(f"victorious setup: error: {problem}", file=sys.stderr)
                 return 2
             return _run_manual(args) if args.manual else _run_setup(args)
+        if args.command == "review":
+            problem = _review_arguments_error(args)
+            if problem is not None:
+                print(f"victorious review: error: {problem}", file=sys.stderr)
+                return 2
+            return _run_compare(args) if args.against is not None else _run_review(args)
         _require_writable_directory(args.output)
         sidecar: str | None = None
         if args.command == "schema":
@@ -418,7 +526,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             _emit(sidecar, args.observations)
         _emit(text, args.output)
     except (
+        LabelsError,
         LayoutError,
+        ReviewError,
         RecordingError,
         OcrError,
         SpeechError,
