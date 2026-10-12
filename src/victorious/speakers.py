@@ -14,7 +14,7 @@ from victorious.video import AUDIO_RATE, RecordingError, sample_audio
 
 DIARIZATION_REPO = "pyannote-community/speaker-diarization-community-1"
 DIARIZATION_REVISION = "8a527374977391da736e0daaef26855d949d9685"
-MATCH_DISTANCE = 0.5
+MATCH_DISTANCE = 0.6
 SEGMENT_PAD = 1.0
 JOIN_GAP = 0.5
 MIN_TURN = 0.5
