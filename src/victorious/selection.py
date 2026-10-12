@@ -9,7 +9,7 @@ from pathlib import Path
 import numpy as np
 
 from victorious.cache import ObservationCache, layout_hash
-from victorious.detect import find_hud
+from victorious.detect import shows_hud
 from victorious.layout import LayoutError, LoadedLayout
 from victorious.screens import HUD_THRESHOLD, hud_score
 from victorious.video import VideoInfo, frame_at
@@ -79,12 +79,14 @@ def _in_match_scores(
     found: list[list[float]] = []
     tried = 0
     batch = max(1, jobs)
+    offset = 0
     with ThreadPoolExecutor(max_workers=batch) as pool:
-        for offset in range(0, len(seconds), batch):
+        while offset < len(seconds):
             if not found and offset >= opening:
                 break
-            end = offset + batch if found or offset >= opening else min(offset + batch, opening)
-            group = list(seconds[offset:end])
+            stop = offset + batch if found else min(offset + batch, opening)
+            group = list(seconds[offset:stop])
+            offset = stop
             for scores in pool.map(lambda s: _scores_at(path, info, s, layouts), group):
                 tried += 1
                 if scores is not None and max(scores) >= HUD_THRESHOLD:
@@ -96,7 +98,7 @@ def _in_match_scores(
 
 def _shows_hud(path: Path, info: VideoInfo, second: int) -> bool:
     frame = frame_at(path, info, second)
-    return frame is not None and "hud_anchor" in find_hud(frame).found
+    return frame is not None and shows_hud(frame)
 
 
 def _any_hud(path: Path, info: VideoInfo, seconds: Sequence[int], jobs: int) -> bool:

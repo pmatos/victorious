@@ -307,6 +307,28 @@ def test_candidate_frames_never_exceed_the_cap(
     assert set(seconds) == {0, 3, 6, 9}
 
 
+@pytest.mark.parametrize("jobs", [1, 2, 3, 4, 7])
+def test_the_scan_reads_every_candidate_in_order_whatever_the_jobs(
+    monkeypatch: pytest.MonkeyPatch, jobs: int
+) -> None:
+    info = video.VideoInfo(100, 100, 900.0)
+    seconds, opening = selection._candidate_seconds(info)
+    last_opening = seconds[opening - 1]
+    read: list[int] = []
+
+    def scores(path: Path, info: Any, second: int, layouts: Any) -> list[float]:
+        read.append(second)
+        return [0.9 if second >= last_opening else 0.0]
+
+    monkeypatch.setattr(selection, "_scores_at", scores)
+
+    found, tried = selection._in_match_scores(Path("r.mkv"), info, [], seconds, opening, jobs)
+
+    assert len(found) == selection.SCORED_FRAMES
+    assert tried <= len(read)
+    assert sorted(read) == seconds[: len(read)]
+
+
 @pytest.mark.parametrize("stored", [1.7, -0.1, float("nan"), float("inf"), True, "0.9", None])
 def test_a_selection_entry_with_an_impossible_score_is_not_used(
     tmp_path: Path, stored: Any

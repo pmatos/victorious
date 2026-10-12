@@ -276,6 +276,7 @@ def analyse_with_observations(
     observations = entry.load() if entry is not None else None
     cached = observations is not None
     if observations is None:
+        require_complete(path, info)
         observations = _with_counters(path, info, layout, jobs, chunk_seconds)
     resolver = JumpResolver(path, info, layout, entry)
     matches = run_machine(layout, observations, _Readings(observations), resolver)

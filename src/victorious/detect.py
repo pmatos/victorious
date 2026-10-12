@@ -174,6 +174,11 @@ def _counter(frame: np.ndarray, icon: _Icon) -> tuple[Rect | None, str]:
     return None, f"no readable digits left of {icon.name}"
 
 
+def shows_hud(frame: np.ndarray) -> bool:
+    """Whether all the reference HUD icons are on screen, without reading the counters."""
+    return not _locate_icons(frame)[1]
+
+
 def find_hud(frame: np.ndarray) -> Detection:
     """The HUD anchor and the three counters in one in-match frame."""
     height = frame.shape[0]
