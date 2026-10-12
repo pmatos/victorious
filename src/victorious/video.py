@@ -1,6 +1,7 @@
 """Reading a Recording: its properties and one frame per second."""
 
 import json
+import math
 import shutil
 import subprocess
 import tempfile
@@ -9,6 +10,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
+
+TAIL_TOLERANCE = 2
 
 
 class RecordingError(Exception):
@@ -20,6 +23,7 @@ class VideoInfo:
     width: int
     height: int
     duration: float
+    creation_time: str | None = None
 
 
 def _tool(name: str) -> str:
@@ -47,7 +51,14 @@ def probe(path: Path) -> VideoInfo:
         document = json.loads(result.stdout)
         stream = next(s for s in document["streams"] if s.get("codec_type") == "video")
         duration = float(stream.get("duration") or document["format"]["duration"])
-        return VideoInfo(int(stream["width"]), int(stream["height"]), duration)
+        tags = {str(k).lower(): v for k, v in (document["format"].get("tags") or {}).items()}
+        created = tags.get("creation_time")
+        return VideoInfo(
+            int(stream["width"]),
+            int(stream["height"]),
+            duration,
+            created if isinstance(created, str) else None,
+        )
     except (StopIteration, KeyError, ValueError, TypeError) as error:
         raise RecordingError(f"cannot read Recording {path}: no video stream") from error
 
@@ -118,3 +129,13 @@ def frame_at(path: Path, info: VideoInfo, second: int) -> np.ndarray | None:
     for _, frame in sample_chunk(path, info, second, 1, threads=1):
         return frame
     return None
+
+
+def require_complete(path: Path, info: VideoInfo) -> None:
+    """Raises when the Recording ends well before the duration its header claims."""
+    last = max(0, math.floor(info.duration) - TAIL_TOLERANCE)
+    if frame_at(path, info, last) is None:
+        raise RecordingError(
+            f"cannot read Recording {path}: it is truncated (no frame at {last} s, "
+            f"its header claims {info.duration:.0f} s)"
+        )

@@ -227,17 +227,6 @@ def test_placements_with_repeated_and_similar_digits_are_read(tmp_path: Path) ->
     assert not any(m["win"] for m in output["matches"])
 
 
-def test_recording_without_a_hud_is_refused_not_reported_empty(tmp_path: Path) -> None:
-    recording = build_recording(small(10, ()), tmp_path / "recording.mkv")
-    layout = write_layout(tmp_path / "layout.yaml")
-
-    result = run_cli("analyse", str(recording), "--layout", str(layout))
-
-    assert result.returncode == 1
-    assert "no Layout matches" in result.stderr
-    assert result.stdout == ""
-
-
 def test_recording_ending_mid_match_reports_an_unfinished_match(tmp_path: Path) -> None:
     output = analyse(tmp_path, small(30, (Shot(Hud(), 5, 30),)))
 

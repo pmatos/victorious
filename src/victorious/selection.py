@@ -1,7 +1,7 @@
 """Choosing which Layout fits a Recording by scoring each HUD anchor on in-match frames."""
 
 import math
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
@@ -9,6 +9,7 @@ from pathlib import Path
 import numpy as np
 
 from victorious.cache import ObservationCache, layout_hash
+from victorious.detect import shows_hud
 from victorious.layout import LayoutError, LoadedLayout
 from victorious.screens import HUD_THRESHOLD, hud_score
 from victorious.video import VideoInfo, frame_at
@@ -16,6 +17,9 @@ from victorious.video import VideoInfo, frame_at
 SCORED_FRAMES = 20
 MAX_CANDIDATE_FRAMES = 240
 MIN_LAYOUT_SCORE = HUD_THRESHOLD
+NOT_FORTNITE_WINDOW = 600
+OPENING_STRIDE = 10
+ICON_SCAN_FRAMES = 12
 
 
 class LayoutSelectionError(LayoutError):
@@ -29,6 +33,14 @@ class Selection:
     fitting: int
 
 
+@dataclass(frozen=True)
+class NoHud:
+    """No in-match HUD of any kind in the opening window: the Recording is not Fortnite."""
+
+    tried: list[LoadedLayout]
+    frames: int
+
+
 def _scores_at(
     path: Path, info: VideoInfo, second: int, layouts: Sequence[LoadedLayout]
 ) -> list[float] | None:
@@ -38,26 +50,71 @@ def _scores_at(
     return [hud_score(frame, loaded.layout) for loaded in layouts]
 
 
-def _in_match_scores(
-    path: Path, info: VideoInfo, layouts: Sequence[LoadedLayout], jobs: int
-) -> tuple[list[list[float]], int]:
-    """The scores of the first in-match frames in time order, and how many frames were tried."""
+def _candidate_seconds(info: VideoInfo) -> tuple[list[int], list[int]]:
+    """The seconds to sample in the opening window and in the rest of the Recording.
+
+    The opening window is sampled at least every OPENING_STRIDE seconds however long the
+    Recording is, the rest at the stride that keeps the total near MAX_CANDIDATE_FRAMES.
+    """
     whole = math.floor(info.duration)
     stride = max(1, math.ceil(whole / MAX_CANDIDATE_FRAMES))
-    seconds = list(range(0, whole, stride))
+    window = min(max(whole, 1), NOT_FORTNITE_WINDOW)
+    opening = list(range(0, window, min(stride, OPENING_STRIDE)))
+    rest = list(range(NOT_FORTNITE_WINDOW, whole, stride))
+    return opening, rest
+
+
+def _groups(seconds: Sequence[int], jobs: int) -> Iterator[Sequence[int]]:
+    size = max(1, jobs)
+    for offset in range(0, len(seconds), size):
+        yield seconds[offset : offset + size]
+
+
+def _in_match_scores(
+    path: Path,
+    info: VideoInfo,
+    layouts: Sequence[LoadedLayout],
+    opening: Sequence[int],
+    rest: Sequence[int],
+    jobs: int,
+) -> tuple[list[list[float]], int]:
+    """The scores of the first in-match frames in time order, and how many frames were tried.
+
+    The rest of the Recording is only scanned when a frame in the opening window showed a HUD.
+    """
     found: list[list[float]] = []
     tried = 0
-    batch = max(1, jobs)
-    with ThreadPoolExecutor(max_workers=batch) as pool:
-        for offset in range(0, len(seconds), batch):
-            group = seconds[offset : offset + batch]
-            for scores in pool.map(lambda s: _scores_at(path, info, s, layouts), group):
-                tried += 1
-                if scores is not None and max(scores) >= HUD_THRESHOLD:
-                    found.append(scores)
-                    if len(found) >= SCORED_FRAMES:
-                        return found, tried
+    with ThreadPoolExecutor(max_workers=max(1, jobs)) as pool:
+        for segment in (opening, rest):
+            for group in _groups(segment, jobs):
+                for scores in pool.map(lambda s: _scores_at(path, info, s, layouts), group):
+                    tried += 1
+                    if scores is not None and max(scores) >= HUD_THRESHOLD:
+                        found.append(scores)
+                        if len(found) >= SCORED_FRAMES:
+                            return found, tried
+            if not found:
+                break
     return found, tried
+
+
+def _shows_hud(path: Path, info: VideoInfo, second: int) -> bool:
+    frame = frame_at(path, info, second)
+    return frame is not None and shows_hud(frame)
+
+
+def _any_hud(path: Path, info: VideoInfo, seconds: Sequence[int], jobs: int) -> bool:
+    """Whether the reference HUD icons appear in up to ICON_SCAN_FRAMES evenly spread frames.
+
+    Whatever the Layout. Locating the icons costs seconds a frame, and a HUD that is up at all
+    is up for minutes, so a sparse look is enough.
+    """
+    spread = seconds[:: max(1, math.ceil(len(seconds) / ICON_SCAN_FRAMES))]
+    with ThreadPoolExecutor(max_workers=max(1, jobs)) as pool:
+        return any(
+            any(pool.map(lambda s: _shows_hud(path, info, s), group))
+            for group in _groups(spread, jobs)
+        )
 
 
 def _best(layouts: Sequence[LoadedLayout], scores: Sequence[float]) -> tuple[LoadedLayout, float]:
@@ -79,7 +136,7 @@ def select_layout(
     *,
     jobs: int,
     cache: ObservationCache | None,
-) -> Selection:
+) -> Selection | NoHud:
     fitting = sorted(
         (loaded for loaded in layouts if loaded.layout.fits(info.width, info.height)),
         key=lambda loaded: str(loaded.path),
@@ -94,11 +151,15 @@ def select_layout(
         best, score = _best(fitting, stored)
         return Selection(best, score, len(fitting))
 
-    frames, tried = _in_match_scores(path, info, fitting, jobs)
+    opening, rest = _candidate_seconds(info)
+    frames, tried = _in_match_scores(path, info, fitting, opening, rest, jobs)
     if not frames:
+        if not _any_hud(path, info, opening, jobs):
+            return NoHud(fitting, tried)
         raise LayoutSelectionError(
             f"no Layout matches this Recording's HUD: none of {tried} sampled frames shows "
-            f"a HUD at the anchor of {', '.join(str(loaded.path) for loaded in fitting)}"
+            f"a HUD at the anchor of {', '.join(str(loaded.path) for loaded in fitting)}; "
+            f"run `victorious setup {path}` to produce a Layout for this HUD"
         )
     means = [min(1.0, max(0.0, float(np.mean(column)))) for column in zip(*frames, strict=True)]
     best, score = _best(fitting, means)

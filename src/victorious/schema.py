@@ -6,7 +6,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from victorious.layout import Rect
 
-SCHEMA_VERSION = "1.2"
+SCHEMA_VERSION = "1.3"
 
 CounterElement = Literal["personal_eliminations", "team_eliminations", "players_left"]
 EventKind = Literal[
@@ -83,6 +83,12 @@ class Match(_Model):
 class RecordingInfo(_Model):
     path: str
     duration: float = Field(ge=0, description="Seconds.")
+    started_at: str | None = Field(
+        description=(
+            "ISO 8601 time the Recording started: the local time in its file name (no offset), "
+            "else the container's creation time (with its UTC offset), else null."
+        )
+    )
 
 
 class ObservationRecord(_Model):
@@ -103,10 +109,18 @@ class ChosenLayout(_Model):
     )
 
 
+class AnalysisWarning(_Model):
+    code: Literal["not_fortnite"]
+    message: str
+
+
 class AnalysisOutput(_Model):
-    schema_version: Literal["1.2"] = SCHEMA_VERSION  # type: ignore[assignment]
+    schema_version: Literal["1.3"] = SCHEMA_VERSION  # type: ignore[assignment]
     recording: RecordingInfo
-    layout: ChosenLayout
+    layout: ChosenLayout | None = Field(
+        description="The Layout used, null when no in-match HUD was found to choose one."
+    )
+    warnings: list[AnalysisWarning]
     matches: list[Match]
 
 
