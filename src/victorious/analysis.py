@@ -245,6 +245,8 @@ class Analysis:
     candidates: int
     speech_segments: int | None = None
     masked: list[MaskedWindow] = field(default_factory=list)
+    speakers: int = 0
+    enrolled: int = 0
 
 
 def analyse_with_observations(
@@ -291,9 +293,11 @@ def analyse_with_observations(
         entry.store(observations)
     segments = None
     masked: list[MaskedWindow] = []
+    speakers = enrolled = 0
     if speech is not None:
         spoken = transcribe_matches(path, info, matches, speech)
         matches, segments, masked = spoken.matches, spoken.segments, spoken.masked
+        speakers, enrolled = spoken.speakers, spoken.enrolled
     output = AnalysisOutput(
         recording=recording,
         layout=ChosenLayout(path=str(selection.chosen.path), score=selection.score),
@@ -301,7 +305,15 @@ def analyse_with_observations(
         matches=matches,
     )
     return Analysis(
-        output, observations, cached, selection.chosen, selection.fitting, segments, masked
+        output,
+        observations,
+        cached,
+        selection.chosen,
+        selection.fitting,
+        segments,
+        masked,
+        speakers,
+        enrolled,
     )
 
 

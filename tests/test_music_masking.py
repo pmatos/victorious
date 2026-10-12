@@ -12,6 +12,7 @@ from pydantic import Field, TypeAdapter
 from tests.analyse_helpers import analyse_text
 from tests.synthetic import AudioClip, music_bed, music_with_speech, write_layout, write_wav
 from tests.test_speech import ENGLISH, PORTUGUESE, recording, run, transcripts
+from victorious.errors import SpeechError
 from victorious.music import (
     MODEL_FILE,
     MaskedWindow,
@@ -23,7 +24,6 @@ from victorious.music import (
     unmasked,
 )
 from victorious.schema import MaskedAudioRecord, ObservationRecord
-from victorious.speech import SpeechError
 
 CLIP_SECONDS = 4.0
 SIDECAR_RECORD: TypeAdapter[ObservationRecord | MaskedAudioRecord] = TypeAdapter(

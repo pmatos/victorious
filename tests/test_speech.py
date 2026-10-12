@@ -125,7 +125,8 @@ def test_no_speech_skips_transcription_and_models(tmp_path: Path) -> None:
     program = (
         "import sys; from victorious.cli import main; "
         "code = main(sys.argv[1:]); "
-        "print(code, 'faster_whisper' in sys.modules, 'onnxruntime' in sys.modules)"
+        "print(code, *(name in sys.modules "
+        "for name in ('faster_whisper', 'onnxruntime', 'pyannote', 'torch')))"
     )
 
     result = subprocess.run(
@@ -139,7 +140,7 @@ def test_no_speech_skips_transcription_and_models(tmp_path: Path) -> None:
         check=False,
     )  # fmt: skip
 
-    assert result.stdout.split() == ["0", "False", "False"], result.stderr
+    assert result.stdout.split() == ["0", "False", "False", "False", "False"], result.stderr
     document = json.loads(output.read_text())
     assert [transcripts(match) for match in document["matches"]] == [[], []]
     assert not (tmp_path / "no-models").exists()
