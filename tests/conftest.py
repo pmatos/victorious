@@ -48,3 +48,10 @@ def speech_is_off_and_models_are_kept(monkeypatch: pytest.MonkeyPatch) -> None:
     """
     monkeypatch.setenv("VICTORIOUS_NO_SPEECH", "1")
     monkeypatch.setenv("HF_HOME", REAL_HF_HOME)
+
+
+@pytest.fixture(autouse=True)
+def jev_is_not_configured(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A developer's real TypeSafe key must never reach a test."""
+    monkeypatch.delenv("TYPESAFE_API_KEY", raising=False)
+    monkeypatch.delenv("VICTORIOUS_JEV_URL", raising=False)
