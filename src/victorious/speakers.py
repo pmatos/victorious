@@ -238,7 +238,9 @@ class Diarizer:
 
     def diarize(self, audio: np.ndarray) -> list[Turn]:
         try:
-            result = self._pipeline(self._input(audio))
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", UserWarning)
+                result = self._pipeline(self._input(audio))
         except Exception as error:
             raise SpeechError(
                 f"the diarization model failed: {error}; pass --no-speech to skip speech"
