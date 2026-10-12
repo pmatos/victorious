@@ -17,6 +17,7 @@ from victorious.counters import (
 )
 from victorious.layout import Layout, LoadedLayout
 from victorious.metadata import started_at
+from victorious.music import MaskedWindow
 from victorious.observations import Counters, SecondObservation
 from victorious.ocr import find_tesseract
 from victorious.parallel import extract_seconds, read_counters
@@ -243,6 +244,7 @@ class Analysis:
     layout: LoadedLayout | None
     candidates: int
     speech_segments: int | None = None
+    masked: list[MaskedWindow] = field(default_factory=list)
 
 
 def analyse_with_observations(
@@ -288,15 +290,19 @@ def analyse_with_observations(
     if entry is not None and not cached:
         entry.store(observations)
     segments = None
+    masked: list[MaskedWindow] = []
     if speech is not None:
-        matches, segments = transcribe_matches(path, info, matches, speech)
+        spoken = transcribe_matches(path, info, matches, speech)
+        matches, segments, masked = spoken.matches, spoken.segments, spoken.masked
     output = AnalysisOutput(
         recording=recording,
         layout=ChosenLayout(path=str(selection.chosen.path), score=selection.score),
         warnings=[],
         matches=matches,
     )
-    return Analysis(output, observations, cached, selection.chosen, selection.fitting, segments)
+    return Analysis(
+        output, observations, cached, selection.chosen, selection.fitting, segments, masked
+    )
 
 
 def analyse(

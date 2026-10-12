@@ -8,14 +8,18 @@ import re
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
 from victorious.schema import Event, Match, SpeechLanguage, transcript_event
 from victorious.video import AUDIO_RATE, VideoInfo, sample_audio
 
+if TYPE_CHECKING:
+    from victorious.music import MaskedWindow
+
 MARGIN = 10.0
+TAG_SECONDS = 300
 LANGUAGES: tuple[SpeechLanguage, ...] = ("en", "pt")
 MAX_CHUNK = 30.0
 MAX_GAP = 5.0
@@ -247,14 +251,61 @@ def _merged(events: list[Event], transcripts: list[Event]) -> list[Event]:
     return list(heapq.merge(events, ordered, key=lambda event: event.time))
 
 
+@dataclass(frozen=True)
+class SpeechResult:
+    matches: list[Match]
+    segments: int
+    masked: list["MaskedWindow"]
+
+
+def _merged_spans(windows: Sequence[tuple[float, float]]) -> list[tuple[float, float]]:
+    spans: list[tuple[float, float]] = []
+    for begin, end in sorted(window for window in windows if window[1] > window[0]):
+        if spans and begin <= spans[-1][1]:
+            spans[-1] = (spans[-1][0], max(spans[-1][1], end))
+        else:
+            spans.append((begin, end))
+    return spans
+
+
+def _music_masks(
+    path: Path, spans: Sequence[tuple[float, float]], options: SpeechOptions
+) -> list["MaskedWindow"]:
+    """Where each span of audio is music-dominant, scored one second at a time."""
+    from victorious.music import MusicTagger, SecondScore, masked_windows, merge_windows, shifted
+
+    tagger: MusicTagger | None = None
+    found: list[MaskedWindow] = []
+    for begin, end in spans:
+        scores: list[SecondScore] = []
+        length = 0.0
+        piece = begin
+        while piece < end:
+            stop = min(end, piece + TAG_SECONDS)
+            audio = sample_audio(path, piece, stop, options.audio_stream)
+            if len(audio) == 0:
+                break
+            if tagger is None:
+                tagger = MusicTagger.load()
+            scores += shifted(tagger.tag(audio), round(piece - begin))
+            length += len(audio) / AUDIO_RATE
+            piece = stop
+        found += masked_windows(scores, begin, length)
+    return merge_windows(found)
+
+
 def transcribe_matches(
     path: Path, info: VideoInfo, matches: list[Match], options: SpeechOptions
-) -> tuple[list[Match], int]:
+) -> SpeechResult:
     """The Matches with a `transcript` Event per segment spoken within [start - 10, end + 10].
 
-    Also returns how many segments were kept. The model is loaded on the first window only.
+    Music-dominant seconds of each window are silenced before it is transcribed, one decision
+    per Recording second, and returned. Each model is loaded on the first window it needs.
     """
     windows = [_window(match, info.duration) for match in matches]
+    from victorious.music import silence
+
+    masked = _music_masks(path, _merged_spans(windows), options)
     segments: list[list[Segment]] = [[] for _ in matches]
     model: Any = None
     for index, (begin, end) in enumerate(windows):
@@ -265,7 +316,7 @@ def transcribe_matches(
             continue
         if model is None:
             model = _load_model(options.model)
-        for segment in _transcribe_window(model, audio, begin):
+        for segment in _transcribe_window(model, silence(audio, masked, begin), begin):
             if _owner(segment, index, windows, matches) == index:
                 segments[index].append(segment)
     result = [
@@ -282,4 +333,4 @@ def transcribe_matches(
         )
         for match, found in zip(matches, segments, strict=True)
     ]
-    return result, sum(len(found) for found in segments)
+    return SpeechResult(result, sum(len(found) for found in segments), masked)

@@ -1,8 +1,8 @@
 """The structure of `analyse` output, and its exported JSON Schema."""
 
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
 from victorious.layout import Rect
 
@@ -131,6 +131,20 @@ class ObservationRecord(_Model):
     confidence: float = Field(ge=0, le=1, description="OCR confidence of the digits, else 0.")
     score: float | None = Field(description="Template match score; null for counters.")
     region: Rect
+
+
+class MaskedAudioRecord(_Model):
+    """One line of the `--observations` file: a span of audio withheld from transcription."""
+
+    element: Literal["music_mask"]
+    start: float = Field(ge=0, description="Seconds from the start of the Recording.")
+    end: float = Field(ge=0, description="Seconds from the start of the Recording.")
+    music: float = Field(ge=0, le=1, description="Mean per-second music score over the span.")
+    speech: float = Field(ge=0, le=1, description="Mean per-second speech score over the span.")
+
+
+SidecarRecord = Annotated[ObservationRecord | MaskedAudioRecord, Field(discriminator="element")]
+SIDECAR_RECORD: TypeAdapter[ObservationRecord | MaskedAudioRecord] = TypeAdapter(SidecarRecord)
 
 
 class ChosenLayout(_Model):

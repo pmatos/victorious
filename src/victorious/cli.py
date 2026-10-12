@@ -18,7 +18,7 @@ from victorious.manual import serve_manual
 from victorious.observations import records
 from victorious.ocr import OcrError
 from victorious.preview import render_preview
-from victorious.schema import json_schema
+from victorious.schema import MaskedAudioRecord, json_schema
 from victorious.setup import AT_KINDS, SetupResult, TimeError, parse_at, run_setup
 from victorious.speech import DEFAULT_MODEL, SpeechError, SpeechOptions, require_ready
 from victorious.video import RecordingError
@@ -233,6 +233,9 @@ def _run_analyse(args: argparse.Namespace) -> tuple[str, str | None]:
     else:
         count = analysis.speech_segments
         spoken = "" if count is None else f", speech {count} segment{'s' if count != 1 else ''}"
+        silenced = round(sum(window.end - window.start for window in analysis.masked))
+        if silenced:
+            spoken += f", music masked {silenced} s"
         print(
             f"victorious analyse: layout {chosen.path} (score {chosen.score:.2f}, "
             f"{analysis.candidates} candidate{'s' if analysis.candidates != 1 else ''}), "
@@ -244,10 +247,20 @@ def _run_analyse(args: argparse.Namespace) -> tuple[str, str | None]:
         return text, None
     if analysis.layout is None:
         return text, ""
-    lines = (
+    lines = [
         record.model_dump_json()
         for record in records(analysis.observations, analysis.layout.layout)
-    )
+    ]
+    lines += [
+        MaskedAudioRecord(
+            element="music_mask",
+            start=window.start,
+            end=window.end,
+            music=window.music,
+            speech=window.speech,
+        ).model_dump_json()
+        for window in analysis.masked
+    ]
     return text, "".join(f"{line}\n" for line in lines)
 
 
