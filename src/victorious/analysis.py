@@ -33,6 +33,7 @@ from victorious.schema import (
 )
 from victorious.screens import HUD_THRESHOLD, RESULTS_THRESHOLD, ResultsReading
 from victorious.selection import NOT_FORTNITE_WINDOW, NoHud, select_layout
+from victorious.speech import SpeechOptions, require_audio_stream, transcribe_matches
 from victorious.video import VideoInfo, probe, require_complete
 
 PLACEMENT_READINGS_PER_RUN = 5
@@ -241,6 +242,7 @@ class Analysis:
     cached: bool
     layout: LoadedLayout | None
     candidates: int
+    speech_segments: int | None = None
 
 
 def analyse_with_observations(
@@ -250,8 +252,11 @@ def analyse_with_observations(
     jobs: int = 1,
     chunk_seconds: int = 60,
     cache: ObservationCache | None = None,
+    speech: SpeechOptions | None = None,
 ) -> Analysis:
     info = probe(path)
+    if speech is not None:
+        require_audio_stream(info, speech)
     find_tesseract()
     recording = RecordingInfo(
         path=str(path), duration=info.duration, started_at=started_at(path, info.creation_time)
@@ -282,13 +287,16 @@ def analyse_with_observations(
     matches = run_machine(layout, observations, _Readings(observations), resolver)
     if entry is not None and not cached:
         entry.store(observations)
+    segments = None
+    if speech is not None:
+        matches, segments = transcribe_matches(path, info, matches, speech)
     output = AnalysisOutput(
         recording=recording,
         layout=ChosenLayout(path=str(selection.chosen.path), score=selection.score),
         warnings=[],
         matches=matches,
     )
-    return Analysis(output, observations, cached, selection.chosen, selection.fitting)
+    return Analysis(output, observations, cached, selection.chosen, selection.fitting, segments)
 
 
 def analyse(
@@ -298,7 +306,8 @@ def analyse(
     jobs: int = 1,
     chunk_seconds: int = 60,
     cache: ObservationCache | None = None,
+    speech: SpeechOptions | None = None,
 ) -> AnalysisOutput:
     return analyse_with_observations(
-        path, layouts, jobs=jobs, chunk_seconds=chunk_seconds, cache=cache
+        path, layouts, jobs=jobs, chunk_seconds=chunk_seconds, cache=cache, speech=speech
     ).output

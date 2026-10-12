@@ -6,7 +6,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from victorious.layout import Rect
 
-SCHEMA_VERSION = "1.3"
+SCHEMA_VERSION = "1.4"
 
 CounterElement = Literal["personal_eliminations", "team_eliminations", "players_left"]
 EventKind = Literal[
@@ -18,8 +18,10 @@ EventKind = Literal[
     "team_eliminations",
     "players_left",
     "unreadable",
+    "transcript",
 ]
 EventSource = Literal["frame", "speech"]
+SpeechLanguage = Literal["en", "pt"]
 ObservedElement = Literal[
     "hud_anchor",
     "personal_eliminations",
@@ -44,9 +46,20 @@ class Event(_Model):
         description="The placement for final_placement, the new count for a counter, else null."
     )
     end: float | None = Field(
-        ge=0, description="Seconds from the start of the Recording the span ends, for unreadable."
+        ge=0,
+        description=(
+            "Seconds from the start of the Recording the span ends, for unreadable and transcript."
+        ),
     )
     element: CounterElement | None = Field(description="Which counter, for unreadable only.")
+    text: str | None = Field(description="What was said, for transcript only.")
+    language: SpeechLanguage | None = Field(
+        description="The language spoken, English or Portuguese, for transcript only."
+    )
+
+
+def _unit(value: float) -> float:
+    return min(1.0, max(0.0, value))
 
 
 def frame_event(
@@ -61,10 +74,28 @@ def frame_event(
         kind=kind,
         time=time,
         source="frame",
-        confidence=min(1.0, max(0.0, confidence)),
+        confidence=_unit(confidence),
         value=value,
         end=end,
         element=element,
+        text=None,
+        language=None,
+    )
+
+
+def transcript_event(
+    text: str, language: SpeechLanguage, start: float, end: float, confidence: float
+) -> Event:
+    return Event(
+        kind="transcript",
+        time=start,
+        source="speech",
+        confidence=_unit(confidence),
+        value=None,
+        end=end,
+        element=None,
+        text=text,
+        language=language,
     )
 
 
@@ -115,7 +146,7 @@ class AnalysisWarning(_Model):
 
 
 class AnalysisOutput(_Model):
-    schema_version: Literal["1.3"] = SCHEMA_VERSION  # type: ignore[assignment]
+    schema_version: Literal["1.4"] = SCHEMA_VERSION  # type: ignore[assignment]
     recording: RecordingInfo
     layout: ChosenLayout | None = Field(
         description="The Layout used, null when no in-match HUD was found to choose one."

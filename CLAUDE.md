@@ -15,7 +15,7 @@ Installable package in `src/victorious/` (hatchling build, console script `victo
 - `matcher.py`: internal multi-scale template matcher (scales 0.3-1.2) used as a detector for reference images such as the Victory Royale banner. Not a user-facing command.
 - `layout.py`: pydantic `Layout` (YAML, normalized rects), `Layout.fits` (aspect ratio), `load_layout` and `load_layouts` (a file or a directory of Layouts, as `LoadedLayout`s).
 - `schema.py`: pydantic output models (`AnalysisOutput`, `Match`, `Event`), `SCHEMA_VERSION`, `json_schema()`.
-- `video.py`: `probe` (ffprobe, with the container `creation_time`), `require_complete` (one tail seek that fails a truncated Recording), `sample_chunk` (one BGR frame per second of a whole-second chunk through an ffmpeg raw pipe) and `sample_window` (a short seek-based decode at a higher rate, used to bisect counter jumps).
+- `video.py`: `probe` (ffprobe, with the container `creation_time` and the number of audio streams), `sample_audio` (one window of one audio stream as 16 kHz mono float32 through an ffmpeg pipe), `require_complete` (one tail seek that fails a truncated Recording), `sample_chunk` (one BGR frame per second of a whole-second chunk through an ffmpeg raw pipe) and `sample_window` (a short seek-based decode at a higher rate, used to bisect counter jumps).
 - `metadata.py`: `started_at(path, creation_time)`, the Recording's start from its file name, else the container tag, else `None`.
 - `references.py` and `data/`: reference images shipped in the package (HUD icons, Victory Royale banner, `#` glyph).
 - `screens.py`: pure per-frame detection, `hud_score`, `results_reading` and `counter_masks`; thresholds `HUD_THRESHOLD`/`RESULTS_THRESHOLD`.
@@ -29,16 +29,17 @@ Installable package in `src/victorious/` (hatchling build, console script `victo
 - `manual.py` and `data/manual.html`: `setup --manual` serves a stdlib `ThreadingHTTPServer` on 127.0.0.1 under a random token path; the page posts `{elements: {name: {panel, x, y, w, h}}}` to `layout`, `setup.manual_result` validates it (hard errors are 400, read-back failures are warnings) and the CLI's `_write_layout` writes the files before the server shuts itself down.
 - `selection.py`: `select_layout` drops Layouts whose aspect ratio does not fit the Recording, scores each remaining `hud_anchor` on up to 20 in-match frames (about 240 candidate seconds, plus at most 60 more from the dense opening window, read in time order so the choice does not depend on `--jobs`) and picks the best; none above `MIN_LAYOUT_SCORE` is a `LayoutSelectionError`. The first `NOT_FORTNITE_WINDOW` seconds are sampled at least every `OPENING_STRIDE` s; when none shows an in-match HUD and `detect.find_hud` finds no reference icons either, it returns `NoHud` (the `not_fortnite` warning) instead of raising.
 - `cache.py`: Observation cache keyed by Recording fingerprint, Layout hash and `OBSERVATION_VERSION` (bump it when readings or thresholds change), plus the bisect windows. The selection scores live beside it in `selection-*.json`, keyed by the Recording and the set of Layout hashes and by both `OBSERVATION_VERSION` and `SELECTION_VERSION` (bump the latter when `SCORED_FRAMES`, `MAX_CANDIDATE_FRAMES`, `NOT_FORTNITE_WINDOW`, `OPENING_STRIDE` or how a score is formed changes).
-- `analysis.py`: `analyse(path, layouts, jobs=, chunk_seconds=, cache=)` and `run_machine`, the state machine that turns per-second Observations into Matches and Events. A Match opens on the HUD and closes only on a results screen. Output must not depend on `jobs` or chunk size: the skip-OCR rule is replayed with `ReuseTracker` over the exact schedule of counter reads the machine produces, instead of running per chunk.
+- `speech.py`: `transcribe_matches` (per Match window: ffmpeg audio, faster-whisper VAD, per-chunk language over `en`/`pt` (both decoded when detection is unsure, `pick_reading` keeps the more confident), `is_speech` drop rule and `drop_repeated` loop filter, nearest-Match ownership of margin segments, merge into the Match's Events without moving existing ones), `require_ready` (Hugging Face token present) and `require_audio_stream`. `faster_whisper` is imported only when the model is loaded, so `--no-speech` never imports it.
+- `analysis.py`: `analyse(path, layouts, jobs=, chunk_seconds=, cache=, speech=)` and `run_machine`, the state machine that turns per-second Observations into Matches and Events. A Match opens on the HUD and closes only on a results screen. Output must not depend on `jobs` or chunk size: the skip-OCR rule is replayed with `ReuseTracker` over the exact schedule of counter reads the machine produces, instead of running per chunk.
 
 | Subcommand | Purpose | Status |
 |------------|---------|--------|
 | `setup` | Produce a Layout from a Recording | working: auto-detect from `--at hud=` and `--at results=`; `--manual` serves a local browser editor |
-| `analyse` | Turn a Recording and a Layout into Matches with Events | working: Matches, Win, placement, HUD counters (speech: later tickets) |
+| `analyse` | Turn a Recording and a Layout into Matches with Events | working: Matches, Win, placement, HUD counters, speech transcripts (music masking, speakers and categories: later tickets) |
 | `review` | Inspect the Events found in a Recording | stub, see epic #13 |
 | `schema` | Print the JSON schema of the Analysis output | working |
 
-`review` is a stub: it prints `victorious review: not implemented yet` to stderr and exits 1. `setup` takes `RECORDING --at KIND=TIME ... -o LAYOUT [--preview PNG] [--manual [--no-browser] [--port N]]`; it exits 2 when a kind is missing, 1 when a required element is not found (it names them and points to `--manual`, writing no Layout). `analyse` takes `--jobs` (default: CPU count), `--cache-dir`/`--no-cache`, `--observations out.jsonl` and a hidden `--chunk-seconds`. Errors in `analyse` print `victorious analyse: <reason>` to stderr, exit 1 and write nothing.
+`review` is a stub: it prints `victorious review: not implemented yet` to stderr and exits 1. `setup` takes `RECORDING --at KIND=TIME ... -o LAYOUT [--preview PNG] [--manual [--no-browser] [--port N]]`; it exits 2 when a kind is missing, 1 when a required element is not found (it names them and points to `--manual`, writing no Layout). `analyse` takes `--jobs` (default: CPU count), `--cache-dir`/`--no-cache`, `--observations out.jsonl`, `--audio-stream N`, `--no-speech` (default on when `VICTORIOUS_NO_SPEECH` is set; the tests set it) and hidden `--chunk-seconds` and `--whisper-model`. Without `--no-speech` a Hugging Face token must be set or it exits 1 before any decode. Errors in `analyse` print `victorious analyse: <reason>` to stderr, exit 1 and write nothing.
 
 ## Development Commands
 
@@ -69,7 +70,7 @@ Tests import the installed package (no `pythonpath` shim), so run them through `
 
 ## Test fixtures
 
-Tests build their Recordings on demand with `tests.synthetic`; no video is committed.
+Tests build their Recordings on demand with `tests.synthetic`; no video is committed. `tests/fixtures/speech/` holds two short synthetic speech clips (`make_speech.py` regenerates them). `tests/test_speech.py` runs the real `small` Whisper model, so a cold Hugging Face cache needs network once; `conftest.py` pins `HF_HOME` so the isolated XDG cache does not hide it.
 
 ```python
 from tests.synthetic import RecordingSpec, build_recording, match_shots

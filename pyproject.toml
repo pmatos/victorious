@@ -5,6 +5,8 @@ description = "Find Matches, Wins and speech in long Fortnite gameplay Recording
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
+    "faster-whisper>=1.2.1",
+    "huggingface-hub>=2.2.0",
     "numpy>=2.5.1",
     "opencv-python>=5.0.0.93",
     "pydantic>=2.14.0",
@@ -38,7 +40,7 @@ files = ["."]
 strict = true
 
 [[tool.mypy.overrides]]
-module = ["cv2.*"]
+module = ["cv2.*", "faster_whisper.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]
