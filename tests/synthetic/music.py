@@ -1,12 +1,14 @@
 """A deterministic synthetic music bed, and speech mixed over it, written as WAV files."""
 
-import shutil
-import subprocess
+import wave
 from pathlib import Path
 
 import numpy as np
 
-RATE = 16000
+from victorious.video import AUDIO_RATE, sample_audio
+
+RATE = AUDIO_RATE
+MAX_CLIP = 600.0
 PEAK = 0.7
 CHORDS = (
     (220.0, 277.2, 329.6),
@@ -75,30 +77,7 @@ def music_bed(seconds: float, seed: int = 0) -> np.ndarray:
     return np.asarray(out / np.abs(out).max() * PEAK, dtype="<f4")
 
 
-def decode(path: Path) -> np.ndarray:
-    ffmpeg = shutil.which("ffmpeg")
-    assert ffmpeg is not None
-    command = [
-        ffmpeg,
-        "-v",
-        "error",
-        "-i",
-        str(path),
-        "-ac",
-        "1",
-        "-ar",
-        str(RATE),
-        "-f",
-        "f32le",
-        "-",
-    ]
-    raw = subprocess.run(command, capture_output=True, check=True).stdout
-    return np.frombuffer(raw, dtype="<f4").copy()
-
-
 def write_wav(path: Path, samples: np.ndarray) -> Path:
-    import wave
-
     pcm = (np.clip(samples, -1.0, 1.0) * 32767).astype("<i2")
     with wave.open(str(path), "wb") as handle:
         handle.setnchannels(1)
@@ -113,7 +92,7 @@ def music_with_speech(
 ) -> Path:
     """`speech` starting `at` seconds into a music bed of `seconds`, mixed at the given gains."""
     mix = music_bed(seconds) * music_gain
-    voice = decode(speech) * speech_gain
+    voice = sample_audio(speech, 0.0, MAX_CLIP, 0) * speech_gain
     start = int(at * RATE)
     mix[start : start + len(voice)] += voice[: len(mix) - start]
     return write_wav(path, mix)

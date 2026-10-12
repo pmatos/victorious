@@ -11,7 +11,6 @@ from typing import Any
 
 import numpy as np
 
-from victorious.speech import SpeechError
 from victorious.video import AUDIO_RATE
 
 MODEL_REPO = "audiomagic/yamnet-onnx"
@@ -191,6 +190,8 @@ class MusicTagger:
         from huggingface_hub import hf_hub_download
         from huggingface_hub.errors import LocalEntryNotFoundError
 
+        from victorious.speech import SpeechError
+
         def fetch(name: str, local_only: bool) -> Path:
             return Path(
                 hf_hub_download(
@@ -234,6 +235,8 @@ class MusicTagger:
                 0
             ]
         except Exception as error:
+            from victorious.speech import SpeechError
+
             raise SpeechError(
                 f"the audio tagger {MODEL_REPO!r} failed: {error}; pass --no-speech to skip speech"
             ) from error

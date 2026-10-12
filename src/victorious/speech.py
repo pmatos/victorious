@@ -8,15 +8,21 @@ import re
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 import numpy as np
 
+from victorious.music import (
+    MaskedWindow,
+    SecondScore,
+    load_tagger,
+    masked_windows,
+    merge_windows,
+    silence,
+    unmasked,
+)
 from victorious.schema import Event, Match, SpeechLanguage, transcript_event
 from victorious.video import AUDIO_RATE, VideoInfo, sample_audio
-
-if TYPE_CHECKING:
-    from victorious.music import MaskedWindow
 
 MARGIN = 10.0
 TAG_SECONDS = 300
@@ -60,8 +66,6 @@ def require_ready() -> None:
             "no Hugging Face token found: set HF_TOKEN (or run `hf auth login`), "
             "or pass --no-speech to skip speech"
         )
-    from victorious.music import load_tagger
-
     load_tagger()
 
 
@@ -177,7 +181,7 @@ def group_speech(
 
 
 def _transcribe_window(
-    model: Any, audio: np.ndarray, offset: float, masked: Sequence["MaskedWindow"] = ()
+    model: Any, audio: np.ndarray, offset: float, masked: Sequence[MaskedWindow] = ()
 ) -> list[Segment]:
     from faster_whisper import BatchedInferencePipeline
     from faster_whisper.vad import VadOptions, get_speech_timestamps
@@ -185,8 +189,6 @@ def _transcribe_window(
     vad = VadOptions(max_speech_duration_s=MAX_CHUNK)
     spans = [(t["start"], t["end"]) for t in get_speech_timestamps(audio, vad, AUDIO_RATE)]
     if masked:
-        from victorious.music import silence, unmasked
-
         spans = unmasked(spans, masked, offset)
         audio = silence(audio, masked, offset)
     groups = group_speech(spans, int(MAX_CHUNK * AUDIO_RATE), int(MAX_GAP * AUDIO_RATE))
@@ -265,7 +267,7 @@ def _merged(events: list[Event], transcripts: list[Event]) -> list[Event]:
 class SpeechResult:
     matches: list[Match]
     segments: int
-    masked: list["MaskedWindow"]
+    masked: list[MaskedWindow]
 
 
 def _merged_spans(windows: Sequence[tuple[float, float]]) -> list[tuple[float, float]]:
@@ -280,10 +282,9 @@ def _merged_spans(windows: Sequence[tuple[float, float]]) -> list[tuple[float, f
 
 def _music_masks(
     path: Path, spans: Sequence[tuple[float, float]], options: SpeechOptions
-) -> list["MaskedWindow"]:
+) -> list[MaskedWindow]:
     """Where each span of audio is music-dominant, scored one second at a time."""
-    from victorious.music import SecondScore, load_tagger, masked_windows, merge_windows
-
+    tagger = load_tagger()
     found: list[MaskedWindow] = []
     for begin, end in spans:
         scores: list[SecondScore] = []
@@ -294,7 +295,7 @@ def _music_masks(
             audio = sample_audio(path, piece, stop, options.audio_stream)
             if len(audio) == 0:
                 break
-            scores += load_tagger().tag(audio, round(piece - begin))
+            scores += tagger.tag(audio, round(piece - begin))
             length += len(audio) / AUDIO_RATE
             piece = stop
         found += masked_windows(scores, begin, length)
