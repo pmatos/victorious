@@ -15,8 +15,10 @@ from victorious.video import AUDIO_RATE, VideoInfo, sample_audio
 MARGIN = 10.0
 LANGUAGES: tuple[SpeechLanguage, ...] = ("en", "pt")
 MAX_CHUNK = 30.0
+MAX_GAP = 5.0
+BATCH_SIZE = 16
 MAX_NO_SPEECH_PROB = 0.9
-MIN_AVG_LOGPROB = -1.0
+MIN_AVG_LOGPROB = -1.5
 DEFAULT_MODEL = "small"
 
 
@@ -96,34 +98,57 @@ def _language(model: Any, audio: np.ndarray) -> SpeechLanguage:
     return max(LANGUAGES, key=lambda code: scores.get(code, 0.0))
 
 
+def group_speech(
+    spans: Sequence[tuple[int, int]], max_length: int, max_gap: int
+) -> list[tuple[int, int]]:
+    """Joins neighbouring spans of speech (in samples) into stretches of at most `max_length`."""
+    groups: list[tuple[int, int]] = []
+    for start, end in spans:
+        if groups:
+            first, last = groups[-1]
+            if end - first <= max_length and start - last <= max_gap:
+                groups[-1] = (first, end)
+                continue
+        groups.append((start, end))
+    return groups
+
+
 def _transcribe_window(model: Any, audio: np.ndarray, offset: float) -> list[Segment]:
+    from faster_whisper import BatchedInferencePipeline
     from faster_whisper.vad import VadOptions, get_speech_timestamps
 
-    options = VadOptions(max_speech_duration_s=MAX_CHUNK)
-    segments: list[Segment] = []
-    for span in get_speech_timestamps(audio, options, AUDIO_RATE):
-        chunk = audio[span["start"] : span["end"]]
-        language = _language(model, chunk)
-        spoken, _ = model.transcribe(
-            chunk,
-            language=language,
-            condition_on_previous_text=False,
-            no_speech_threshold=None,
-            vad_filter=False,
+    vad = VadOptions(max_speech_duration_s=MAX_CHUNK)
+    spans = [(t["start"], t["end"]) for t in get_speech_timestamps(audio, vad, AUDIO_RATE)]
+    groups = group_speech(spans, int(MAX_CHUNK * AUDIO_RATE), int(MAX_GAP * AUDIO_RATE))
+    by_language: dict[SpeechLanguage, list[dict[str, float]]] = {}
+    for start, end in groups:
+        language = _language(model, audio[start:end])
+        by_language.setdefault(language, []).append(
+            {"start": start / AUDIO_RATE, "end": end / AUDIO_RATE}
         )
-        shift = offset + span["start"] / AUDIO_RATE
+    pipeline = BatchedInferencePipeline(model)
+    segments: list[Segment] = []
+    for language, clips in by_language.items():
+        spoken, _ = pipeline.transcribe(
+            audio,
+            language=language,
+            clip_timestamps=clips,
+            condition_on_previous_text=False,
+            without_timestamps=False,
+            batch_size=BATCH_SIZE,
+        )
         for part in spoken:
             if is_speech(part.no_speech_prob, part.avg_logprob, part.text):
                 segments.append(
                     Segment(
                         text=part.text.strip(),
                         language=language,
-                        start=shift + part.start,
-                        end=shift + part.end,
+                        start=offset + part.start,
+                        end=offset + part.end,
                         confidence=math.exp(part.avg_logprob),
                     )
                 )
-    return segments
+    return sorted(segments, key=lambda segment: segment.start)
 
 
 def _window(match: Match, duration: float) -> tuple[float, float]:

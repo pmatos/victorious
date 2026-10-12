@@ -15,7 +15,7 @@ import pytest
 from tests.analyse_helpers import STEADY, FfmpegShim, analyse_text, small
 from tests.synthetic import AudioClip, build_recording, match_shots, write_layout
 from victorious.schema import json_schema
-from victorious.speech import is_speech
+from victorious.speech import group_speech, is_speech
 
 pytestmark = pytest.mark.usefixtures("require_ffmpeg", "require_tesseract")
 
@@ -229,7 +229,8 @@ def test_speech_does_not_change_the_frame_events(tmp_path: Path) -> None:
     [
         (0.85, -0.5, " Nice shot", True),
         (0.5, -0.3, " Nice shot", True),
-        (0.5, -1.9, " Thanks for watching", False),
+        (0.4, -1.3, " Nice shot", True),
+        (0.3, -1.95, " the", False),
         (0.97, -0.4, " Nice shot", False),
         (0.2, -0.2, "   ", False),
     ],
@@ -238,3 +239,19 @@ def test_low_confidence_segments_are_dropped(
     no_speech_prob: float, avg_logprob: float, text: str, kept: bool
 ) -> None:
     assert is_speech(no_speech_prob, avg_logprob, text) is kept
+
+
+def test_nearby_speech_is_grouped_up_to_one_window() -> None:
+    spans = [(0, 100), (150, 300), (320, 900), (1000, 1100), (5000, 5100)]
+
+    assert group_speech(spans, max_length=1000, max_gap=200) == [
+        (0, 900),
+        (1000, 1100),
+        (5000, 5100),
+    ]
+    assert group_speech(spans, max_length=500, max_gap=200) == [
+        (0, 300),
+        (320, 900),
+        (1000, 1100),
+        (5000, 5100),
+    ]
