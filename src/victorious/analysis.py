@@ -304,11 +304,8 @@ def analyse_with_observations(
         matches, segments, masked = spoken.matches, spoken.segments, spoken.masked
         speakers, enrolled = spoken.speakers, spoken.enrolled
         judged = categorize_matches(matches, categorizer)
-        matches, categorized, category_failure = (
-            judged.matches,
-            judged.categorized,
-            judged.first_failure,
-        )
+        matches = judged.matches
+        categorized, category_failure = judged.categorized, judged.first_failure
     output = AnalysisOutput(
         recording=recording,
         layout=ChosenLayout(path=str(selection.chosen.path), score=selection.score),

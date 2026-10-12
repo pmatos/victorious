@@ -54,22 +54,16 @@ def analyse_with(
     return result.returncode, document, result.stderr
 
 
+def events(document: dict[str, Any]) -> list[dict[str, Any]]:
+    return [event for match in document["matches"] for event in match["events"]]
+
+
 def transcripts(document: dict[str, Any]) -> list[dict[str, Any]]:
-    return [
-        event
-        for match in document["matches"]
-        for event in match["events"]
-        if event["kind"] == "transcript"
-    ]
+    return [event for event in events(document) if event["kind"] == "transcript"]
 
 
 def others(document: dict[str, Any]) -> list[dict[str, Any]]:
-    return [
-        event
-        for match in document["matches"]
-        for event in match["events"]
-        if event["kind"] != "transcript"
-    ]
+    return [event for event in events(document) if event["kind"] != "transcript"]
 
 
 def configured(stub: JevStub, key: str = KEY) -> dict[str, str]:

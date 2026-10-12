@@ -17,7 +17,7 @@ from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from victorious.schema import Category, Match
+from victorious.schema import Category, Event, Match
 
 KEY_VARIABLE = "TYPESAFE_API_KEY"
 URL_VARIABLE = "VICTORIOUS_JEV_URL"
@@ -62,10 +62,6 @@ class JevError(Exception):
 
 class _Stopped(JevError):
     """The run was cut off by an earlier failure, so this segment was not asked about."""
-
-
-class _Transient(JevError):
-    """Jev could not be reached or kept failing after the retries."""
 
 
 class _Answer(BaseModel):
@@ -152,11 +148,10 @@ class JevClient:
             raise _Stopped(halted)
         try:
             judgment = self._ask(text)
-        except JevError:
-            self._note(failed=True)
-            raise
         except Exception as error:
             self._note(failed=True)
+            if isinstance(error, JevError):
+                raise
             raise JevError(f"{type(error).__name__}: {error}") from error
         self._note(failed=False)
         return judgment
@@ -181,7 +176,7 @@ class JevClient:
             self._halt(reason)
             raise JevError(reason)
         body = json.dumps(_request(text)).encode()
-        last: JevError = _Transient("no attempt was made")
+        last = JevError("no attempt was made")
         retry_after = 0.0
         for attempt in range(ATTEMPTS):
             if attempt:
@@ -205,12 +200,12 @@ class JevClient:
                     reason = f"Jev rejected the API key (HTTP {error.code})"
                     self._halt(f"{reason}, so it was not asked about the remaining segments")
                     raise JevError(reason) from error
-                last = _Transient(f"HTTP {error.code}")
+                last = JevError(f"HTTP {error.code}")
                 if error.code not in RETRYABLE_STATUSES and error.code < 500:
                     raise JevError(f"HTTP {error.code}") from error
-            except (urllib.error.URLError, TimeoutError, OSError, http.client.HTTPException) as e:
+            except (OSError, http.client.HTTPException) as e:
                 detail = str(e.reason) if isinstance(e, urllib.error.URLError) else str(e)
-                last = _Transient(f"{type(e).__name__}: {detail}")
+                last = JevError(f"{type(e).__name__}: {detail}")
         raise last
 
 
@@ -228,13 +223,15 @@ class CategorizeResult:
     first_failure: str | None = None
 
 
+def _spoken(event: Event) -> str | None:
+    return event.text if event.kind == "transcript" else None
+
+
 def categorize_matches(matches: list[Match], client: JevClient | None) -> CategorizeResult:
     """The Matches with each transcript Event judged; every other Event is left as it is."""
-    texts: list[str] = []
-    for match in matches:
-        for event in match.events:
-            if event.kind == "transcript" and event.text is not None:
-                texts.append(event.text)
+    texts = [
+        text for match in matches for event in match.events if (text := _spoken(event)) is not None
+    ]
     if client is None or not texts:
         return CategorizeResult(matches)
 
@@ -262,7 +259,8 @@ def categorize_matches(matches: list[Match], client: JevClient | None) -> Catego
     for match in matches:
         events = []
         for event in match.events:
-            judgment = judgments.get(event.text or "") if event.kind == "transcript" else None
+            text = _spoken(event)
+            judgment = judgments.get(text) if text is not None else None
             if judgment is not None:
                 categorized += 1
                 event = event.model_copy(

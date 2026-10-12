@@ -279,19 +279,20 @@ def _run_analyse(args: argparse.Namespace) -> tuple[str, str | None]:
             f"cache {state}{spoken}, {elapsed:.1f} s",
             file=sys.stderr,
         )
-        if count and categorizer is None:
-            print(
-                f"victorious analyse: note: no {KEY_VARIABLE} set, so the categories of the "
-                f"{count} segment{'s' if count != 1 else ''} are null",
-                file=sys.stderr,
-            )
-        if count and categorizer is not None and analysis.categorized < count:
-            missed = count - analysis.categorized
-            print(
-                f"victorious analyse: warning: Jev did not categorize {missed} of {count} "
-                f"segment{'s' if count != 1 else ''}: {analysis.category_failure}",
-                file=sys.stderr,
-            )
+        if count:
+            segments = f"{count} segment{'s' if count != 1 else ''}"
+            if categorizer is None:
+                print(
+                    f"victorious analyse: note: no {KEY_VARIABLE} set, so the categories of the "
+                    f"{segments} are null",
+                    file=sys.stderr,
+                )
+            elif analysis.categorized < count:
+                print(
+                    f"victorious analyse: warning: Jev did not categorize "
+                    f"{count - analysis.categorized} of {segments}: {analysis.category_failure}",
+                    file=sys.stderr,
+                )
     text = analysis.output.model_dump_json(indent=2) + "\n"
     if args.observations is None:
         return text, None
