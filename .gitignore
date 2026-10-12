@@ -18,3 +18,6 @@ wheels/
 
 # Large asset files
 assets/
+
+# Enrollment clips
+voices/
