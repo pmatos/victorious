@@ -23,7 +23,7 @@ from victorious.counters import CounterReading, best_reading
 from victorious.layout import Layout
 from victorious.observations import Aborted, ChunkSecond, extract_chunk
 from victorious.ocr import PASSES
-from victorious.video import RecordingError, VideoInfo, sample_chunk
+from victorious.video import TAIL_TOLERANCE, RecordingError, VideoInfo, sample_chunk
 
 _ABORT: Event | None = None
 _WORKER_DIED = "a decoding worker died unexpectedly"
@@ -109,6 +109,11 @@ def extract_seconds(
     seconds = [second for chunk in results for second in chunk]
     if [second.observation.second for second in seconds] != list(range(len(seconds))):
         raise RecordingError(f"cannot decode Recording {path}: frames are missing")
+    if len(seconds) < math.floor(info.duration) - TAIL_TOLERANCE:
+        raise RecordingError(
+            f"cannot read Recording {path}: it is truncated (decoded {len(seconds)} s, "
+            f"its header claims {info.duration:.0f} s)"
+        )
     return seconds
 
 
