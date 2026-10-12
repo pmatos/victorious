@@ -96,7 +96,7 @@ def test_output_with_the_chosen_layout_validates_against_the_schema(tmp_path: Pa
     assert result.returncode == 0, result.stderr
     document = json.loads(result.stdout)
     jsonschema.Draft202012Validator(json_schema()).validate(document)
-    assert document["schema_version"] == "1.3"
+    assert document["schema_version"] == "1.4"
     assert document["layout"]["path"] == str(layout)
     assert 0.7 <= document["layout"]["score"] <= 1.0
 

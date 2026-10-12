@@ -12,6 +12,7 @@ from pathlib import Path
 import numpy as np
 
 TAIL_TOLERANCE = 2
+AUDIO_RATE = 16000
 
 
 class RecordingError(Exception):
@@ -24,6 +25,7 @@ class VideoInfo:
     height: int
     duration: float
     creation_time: str | None = None
+    audio_streams: int = 0
 
 
 def _tool(name: str) -> str:
@@ -58,6 +60,7 @@ def probe(path: Path) -> VideoInfo:
             int(stream["height"]),
             duration,
             created if isinstance(created, str) else None,
+            sum(s.get("codec_type") == "audio" for s in document["streams"]),
         )
     except (StopIteration, KeyError, ValueError, TypeError) as error:
         raise RecordingError(f"cannot read Recording {path}: no video stream") from error
@@ -122,6 +125,21 @@ def sample_window(
     ]  # fmt: skip
     frames = _decode(path, info, command)
     return ((start + k / rate, frame) for k, frame in enumerate(frames))
+
+
+def sample_audio(path: Path, start: float, end: float, stream: int) -> np.ndarray:
+    """Mono 16 kHz samples of [start, end) of audio stream `stream`, as float32 in [-1, 1]."""
+    command = [
+        _tool("ffmpeg"), "-v", "error", "-nostdin", "-ss", f"{start:g}", "-t", f"{end - start:g}",
+        "-i", str(path), "-map", f"0:a:{stream}", "-vn", "-sn", "-ac", "1",
+        "-ar", str(AUDIO_RATE), "-f", "f32le", "-",
+    ]  # fmt: skip
+    result = subprocess.run(command, capture_output=True, check=False)
+    if result.returncode != 0:
+        detail = result.stderr.decode(errors="replace").strip()
+        raise RecordingError(f"cannot decode the audio of Recording {path}: {detail}")
+    usable = len(result.stdout) // 4 * 4
+    return np.frombuffer(result.stdout[:usable], dtype="<f4").astype(np.float32)
 
 
 def frame_at(path: Path, info: VideoInfo, second: int) -> np.ndarray | None:
