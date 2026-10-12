@@ -23,6 +23,7 @@ VOWELS = ((800, 1200, 2500), (400, 2000, 2600), (500, 900, 2400), (350, 800, 240
 PITCHES = (220.0, 247.0, 196.0, 262.0)
 SYLLABLE = 0.4
 LEAD_GAIN = 0.7
+LEAD_FADE = 1.5
 
 
 def _lead(seconds: float) -> np.ndarray:
@@ -52,7 +53,11 @@ def _lead(seconds: float) -> np.ndarray:
 
 
 def music_bed(seconds: float, seed: int = 0) -> np.ndarray:
-    """Chords, a kick on even beats, a noise hat on odd ones and a sung vowel line, at 0.7 peak."""
+    """Chords, a kick on even beats, a noise hat on odd ones and a sung vowel line, at 0.7 peak.
+
+    The vowel line fades in and out, since a tagger and a voice detector hear speech in one that
+    starts or stops abruptly, and which of the bed's edge seconds they flag depends on the codec.
+    """
     rng = np.random.default_rng(seed)
     out = np.zeros(int(seconds * RATE))
     for beat in range(int(seconds / BEAT)):
@@ -73,7 +78,11 @@ def music_bed(seconds: float, seed: int = 0) -> np.ndarray:
         else:
             noise = rng.standard_normal(length) * np.exp(-hit * 80)
             out[start : start + length] += 0.15 * noise
-    out = out / np.abs(out).max() + LEAD_GAIN * _lead(seconds)[: len(out)]
+    lead = _lead(seconds)[: len(out)]
+    ramp = min(len(out) // 2, int(LEAD_FADE * RATE))
+    lead[:ramp] *= np.linspace(0.0, 1.0, ramp)
+    lead[len(lead) - ramp :] *= np.linspace(1.0, 0.0, ramp)
+    out = out / np.abs(out).max() + LEAD_GAIN * lead
     return np.asarray(out / np.abs(out).max() * PEAK, dtype="<f4")
 
 
