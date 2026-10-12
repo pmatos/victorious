@@ -16,6 +16,7 @@ from victorious.music import (
     masked_windows,
     merge_windows,
     silence,
+    unmasked,
 )
 from victorious.schema import SIDECAR_RECORD, MaskedAudioRecord, ObservationRecord
 
@@ -151,7 +152,7 @@ def test_music_outside_matches_is_neither_tagged_nor_reported(tmp_path: Path) ->
 
 
 def test_overlapping_margins_make_one_mask_decision(tmp_path: Path) -> None:
-    across = speech_over_music(tmp_path, ENGLISH, start=27, speech_at=4, name="across", seconds=12)
+    across = speech_over_music(tmp_path, ENGLISH, start=26, speech_at=7, name="across", seconds=16)
     source = recording(tmp_path, across, second=40)
 
     matches = run(source, tmp_path)["matches"]
@@ -200,13 +201,15 @@ SILENT = (0.0, 0.0)
         pytest.param([MUSIC] * 2, [], id="a stinger is not masked"),
         pytest.param([SILENT, *[MUSIC] * 4, SILENT], [(1, 5)], id="silence is not taken in"),
         pytest.param([MUSIC] * 3 + [DIP] + [MUSIC] * 3, [(0, 7)], id="a dip is bridged"),
-        pytest.param([MUSIC] * 3 + [CALL] + [MUSIC] * 3, [(0, 3), (4, 7)], id="a call is kept"),
+        pytest.param([MUSIC] * 4 + [CALL] + [MUSIC] * 4, [(0, 3), (6, 9)], id="a call is kept"),
+        pytest.param([CALL, *[MUSIC] * 4, CALL], [], id="speech on both sides of a short run"),
+        pytest.param([CALL, *[MUSIC] * 5, CALL], [(2, 5)], id="speech on both sides is spared"),
         pytest.param([MUSIC] * 3 + [SILENT] * 2 + [MUSIC] * 3, [(0, 3), (5, 8)], id="long gap"),
         pytest.param([(0.5, 0.24)] * 3, [(0, 3)], id="just music"),
         pytest.param([(0.5, 0.25)] * 3, [], id="just speech"),
         pytest.param([(0.49, 0.0)] * 3, [], id="just not music"),
         pytest.param([(0.3, 0.0), *[MUSIC] * 3, (0.3, 0.0)], [(0, 5)], id="music at the edges"),
-        pytest.param([(0.3, 0.3), *[MUSIC] * 3, (0.1, 0.0)], [(1, 4)], id="no edge near speech"),
+        pytest.param([(0.3, 0.3), *[MUSIC] * 4, (0.1, 0.0)], [(2, 5)], id="no edge near speech"),
     ],
 )
 def test_masked_windows_follow_the_music(
@@ -249,3 +252,13 @@ def test_silence_zeroes_exactly_the_masked_samples() -> None:
     assert quiet[: 2 * rate].all()
     assert quiet[5 * rate :].all()
     assert audio.all()
+
+
+def test_spans_are_cut_at_the_masked_seconds() -> None:
+    rate = 16000
+    masked = [MaskedWindow(102.0, 104.0, 0.9, 0.0), MaskedWindow(110.0, 111.0, 0.9, 0.0)]
+    spans = [(0, rate), (rate, 5 * rate), (3 * rate, 9 * rate), (10 * rate, 10 * rate + 1000)]
+
+    kept = unmasked(spans, masked, offset=100.0)
+
+    assert kept == [(0, rate), (rate, 2 * rate), (4 * rate, 5 * rate), (4 * rate, 9 * rate)]

@@ -173,12 +173,19 @@ def group_speech(
     return groups
 
 
-def _transcribe_window(model: Any, audio: np.ndarray, offset: float) -> list[Segment]:
+def _transcribe_window(
+    model: Any, audio: np.ndarray, offset: float, masked: Sequence["MaskedWindow"] = ()
+) -> list[Segment]:
     from faster_whisper import BatchedInferencePipeline
     from faster_whisper.vad import VadOptions, get_speech_timestamps
 
     vad = VadOptions(max_speech_duration_s=MAX_CHUNK)
     spans = [(t["start"], t["end"]) for t in get_speech_timestamps(audio, vad, AUDIO_RATE)]
+    if masked:
+        from victorious.music import silence, unmasked
+
+        spans = unmasked(spans, masked, offset)
+        audio = silence(audio, masked, offset)
     groups = group_speech(spans, int(MAX_CHUNK * AUDIO_RATE), int(MAX_GAP * AUDIO_RATE))
     candidates = [
         candidate_languages(dict(model.detect_language(audio[start:end])[2]))
@@ -299,12 +306,12 @@ def transcribe_matches(
 ) -> SpeechResult:
     """The Matches with a `transcript` Event per segment spoken within [start - 10, end + 10].
 
-    Music-dominant seconds of each window are silenced before it is transcribed, one decision
-    per Recording second, and returned. Each model is loaded on the first window it needs.
+    Music-dominant seconds are decided once per Recording second and returned. Each window's
+    speech spans are found on its own audio, then cut at the masked seconds, which are
+    silenced before the language is detected and the speech is read. Each model is loaded on
+    the first window it needs.
     """
     windows = [_window(match, info.duration) for match in matches]
-    from victorious.music import silence
-
     masked = _music_masks(path, _merged_spans(windows), options)
     segments: list[list[Segment]] = [[] for _ in matches]
     model: Any = None
@@ -316,7 +323,7 @@ def transcribe_matches(
             continue
         if model is None:
             model = _load_model(options.model)
-        for segment in _transcribe_window(model, silence(audio, masked, begin), begin):
+        for segment in _transcribe_window(model, audio, begin, masked):
             if _owner(segment, index, windows, matches) == index:
                 segments[index].append(segment)
     result = [
