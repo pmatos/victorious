@@ -312,8 +312,9 @@ def test_the_scan_reads_every_candidate_in_order_whatever_the_jobs(
     monkeypatch: pytest.MonkeyPatch, jobs: int
 ) -> None:
     info = video.VideoInfo(100, 100, 900.0)
-    seconds, opening = selection._candidate_seconds(info)
-    last_opening = seconds[opening - 1]
+    opening, rest = selection._candidate_seconds(info)
+    seconds = opening + rest
+    last_opening = opening[-1]
     read: list[int] = []
 
     def scores(path: Path, info: Any, second: int, layouts: Any) -> list[float]:
@@ -322,7 +323,7 @@ def test_the_scan_reads_every_candidate_in_order_whatever_the_jobs(
 
     monkeypatch.setattr(selection, "_scores_at", scores)
 
-    found, tried = selection._in_match_scores(Path("r.mkv"), info, [], seconds, opening, jobs)
+    found, tried = selection._in_match_scores(Path("r.mkv"), info, [], opening, rest, jobs)
 
     assert len(found) == selection.SCORED_FRAMES
     assert tried <= len(read)
