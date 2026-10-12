@@ -6,7 +6,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from victorious.layout import Rect
 
-SCHEMA_VERSION = "1.5"
+SCHEMA_VERSION = "1.6"
 
 CounterElement = Literal["personal_eliminations", "team_eliminations", "players_left"]
 EventKind = Literal[
@@ -22,6 +22,7 @@ EventKind = Literal[
 ]
 EventSource = Literal["frame", "speech"]
 SpeechLanguage = Literal["en", "pt"]
+Category = Literal["personal", "game_related"]
 ObservedElement = Literal[
     "hud_anchor",
     "personal_eliminations",
@@ -62,6 +63,17 @@ class Event(_Model):
             "unknown_N, numbered from 1 in order of first appearance within the Recording."
         )
     )
+    category: Category | None = Field(
+        description=(
+            "Whether what was said is personal or about the game, for transcript only; null "
+            "when it was not judged (no API key, or the categorization failed)."
+        )
+    )
+    category_confidence: float | None = Field(
+        ge=0,
+        le=1,
+        description="The categorization model's confidence in `category`, null when it is null.",
+    )
 
 
 def _unit(value: float) -> float:
@@ -87,6 +99,8 @@ def frame_event(
         text=None,
         language=None,
         speaker=None,
+        category=None,
+        category_confidence=None,
     )
 
 
@@ -109,6 +123,8 @@ def transcript_event(
         text=text,
         language=language,
         speaker=speaker,
+        category=None,
+        category_confidence=None,
     )
 
 
@@ -169,7 +185,7 @@ class AnalysisWarning(_Model):
 
 
 class AnalysisOutput(_Model):
-    schema_version: Literal["1.5"] = SCHEMA_VERSION  # type: ignore[assignment]
+    schema_version: Literal["1.6"] = SCHEMA_VERSION  # type: ignore[assignment]
     recording: RecordingInfo
     layout: ChosenLayout | None = Field(
         description="The Layout used, null when no in-match HUD was found to choose one."
