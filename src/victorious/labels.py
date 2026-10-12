@@ -14,6 +14,7 @@ LABELS_VERSION = "1.0"
 MIN_OVERLAP = 0.5
 DEFAULT_TOLERANCE = 2.0
 DURATION_TOLERANCE = 1.0
+VALUE_NAMES = ("win", "placement", "personal_eliminations")
 
 Verdict = Literal["confirmed", "rejected"]
 DifferenceKind = Literal["missing", "changed", "shifted", "reappeared", "unlabelled"]
@@ -102,7 +103,7 @@ def load_labels(path: Path) -> Labels:
         document = json.loads(path.read_text())
     except OSError as error:
         raise LabelsError(f"cannot read labels {path}: {error.strerror or error}") from error
-    except ValueError as error:
+    except (ValueError, RecursionError) as error:
         raise LabelsError(f"labels {path} are not JSON: {error}") from error
     version = document.get("labels_version") if isinstance(document, dict) else None
     if version != LABELS_VERSION:
@@ -164,8 +165,7 @@ def _clock(seconds: float) -> str:
 
 def _compare_confirmed(label: LabelledMatch, match: Match, tolerance: float) -> list[Difference]:
     found: list[Difference] = []
-    for name in ("win", "placement", "personal_eliminations"):
-        expected, actual = getattr(label, name), getattr(match, name)
+    for name, expected, actual in zip(VALUE_NAMES, _values(label), _values(match), strict=True):
         if expected != actual:
             found.append(
                 Difference("changed", label, match, f"{name}: expected {expected}, found {actual}")

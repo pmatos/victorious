@@ -8,12 +8,12 @@ from dataclasses import dataclass
 from http import HTTPStatus
 from importlib.resources import files
 from pathlib import Path
-from typing import Any
+from typing import Any, get_args
 
 import cv2
 from pydantic import ValidationError
 
-from victorious.labels import Labels, Verdict, labels_from
+from victorious.labels import DURATION_TOLERANCE, Labels, Verdict, labels_from
 from victorious.localpage import Resource, serve_until_saved
 from victorious.preview import scaled_frame
 from victorious.schema import SCHEMA_VERSION, AnalysisOutput, Match
@@ -22,7 +22,7 @@ from victorious.video import RecordingError, VideoInfo, frame_at, probe
 RESULTS_SETTLE = 2
 JPEG_QUALITY = 85
 MAX_WORKERS = 8
-VERDICTS: tuple[Verdict, ...] = ("confirmed", "rejected")
+VERDICTS: tuple[Verdict, ...] = get_args(Verdict)
 
 
 class ReviewError(Exception):
@@ -34,7 +34,7 @@ def load_analysis(path: Path) -> AnalysisOutput:
         document = json.loads(path.read_text())
     except OSError as error:
         raise ReviewError(f"cannot read analysis {path}: {error.strerror or error}") from error
-    except ValueError as error:
+    except (ValueError, RecursionError) as error:
         raise ReviewError(f"analysis {path} is not JSON: {error}") from error
     version = document.get("schema_version") if isinstance(document, dict) else None
     if version != SCHEMA_VERSION:
@@ -104,11 +104,16 @@ def extract_frames(recording: Path, output: AnalysisOutput) -> list[MatchFrames]
     if not matches:
         return []
     info = probe(recording)
+    if abs(info.duration - output.recording.duration) > DURATION_TOLERANCE:
+        raise ReviewError(
+            f"the analysis is of a Recording of {output.recording.duration:.0f} s, but "
+            f"{recording} is {info.duration:.0f} s; pass the --recording it was made from"
+        )
     followers = [*matches[1:], None]
     jobs = [
         (
             (int(match.start),),
-            (_results_second(match, following), int(match.end)),
+            tuple(dict.fromkeys((_results_second(match, following), int(match.end)))),
         )
         for match, following in zip(matches, followers, strict=True)
     ]
@@ -118,7 +123,11 @@ def extract_frames(recording: Path, output: AnalysisOutput) -> list[MatchFrames]
             (pool.submit(_grab, recording, info, begun), pool.submit(_grab, recording, info, ended))
             for begun, ended in jobs
         ]
-        return [MatchFrames(*first.result(), *second.result()) for first, second in pending]
+        try:
+            return [MatchFrames(*first.result(), *second.result()) for first, second in pending]
+        except BaseException:
+            pool.shutdown(wait=False, cancel_futures=True)
+            raise
 
 
 def _last_value(match: Match, kind: str) -> int | None:

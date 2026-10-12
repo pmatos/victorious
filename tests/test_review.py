@@ -347,6 +347,20 @@ def test_a_missing_recording_is_reported_before_serving(workdir: Path, start: St
     assert "http://" not in running.stderr_text
 
 
+def test_a_recording_of_another_length_than_the_analysed_one_is_refused(
+    workdir: Path, start: Starter
+) -> None:
+    def lengthen(document: dict[str, Any]) -> None:
+        document["recording"]["duration"] += 60
+
+    running = start(analysis=edited(workdir, lengthen))
+
+    assert running.wait(timeout=60) == 1
+    assert "--recording" in running.stderr_text
+    assert "Traceback" not in running.stderr_text
+    assert "http://" not in running.stderr_text
+
+
 def test_a_relative_recording_path_is_read_from_the_working_directory(
     recording: Path, workdir: Path, start: Starter
 ) -> None:

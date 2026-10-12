@@ -57,5 +57,5 @@ A person's judgement of one detected Match during review: confirmed (what was re
 _Avoid_: Label (the label is the Match with its verdict), tag
 
 **Labels file**:
-The saved Verdicts of a review, with the values shown for each Match, kept beside a Recording and compared against later runs as a regression fixture.
+The saved Verdicts of a review, with the Win, placement and personal eliminations shown for each Match, kept beside a Recording and compared against later runs as a regression fixture.
 _Avoid_: Ground truth, annotations, gold file
