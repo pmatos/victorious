@@ -115,7 +115,7 @@ Unless `--no-speech` is given, `analyse` transcribes the audio of every Match wi
 
 Speech needs a Hugging Face token (`HF_TOKEN`, `HUGGING_FACE_HUB_TOKEN` or `hf auth login`); without one `analyse` exits 1 before reading the Recording and says so. The token is only checked for presence here. The Whisper model is public: it is downloaded on first use into the Hugging Face cache (about 480 MB) and loaded from it afterwards. A Recording without audio, or an `--audio-stream` it does not have, is an error that names `--no-speech`.
 
-`--no-speech` (or `VICTORIOUS_NO_SPEECH=1` (or `true`, `yes`) in the environment, which turns it on by default) skips all of this: no token is needed and no speech library is imported. Transcripts are not part of the Observation cache; a cached rerun still transcribes.
+`--no-speech` skips all of this (setting `VICTORIOUS_NO_SPEECH` to `1`, `true` or `yes` makes it the default): no token is needed and no speech library is imported. Transcripts are not part of the Observation cache; a cached rerun still transcribes.
 
 ### Layout file
 
