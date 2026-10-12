@@ -111,8 +111,6 @@ class JevClient:
         timeout: float = TIMEOUT,
         workers: int = WORKERS,
     ) -> None:
-        if not url.startswith(("http://", "https://")):
-            raise ValueError(f"the Jev URL must be http or https, got {url}")
         self.api_key = api_key
         self.url = url
         self.timeout = timeout
@@ -150,6 +148,10 @@ class JevClient:
                 self._halted = reason
 
     def _ask(self, text: str) -> Judgment:
+        if not self.url.startswith(("http://", "https://")):
+            reason = f"the Jev URL must be http or https, got {self.url!r}"
+            self._halt(reason)
+            raise JevError(reason)
         body = json.dumps(_request(text)).encode()
         last: JevError = _Transient("no attempt was made")
         for attempt in range(ATTEMPTS):
@@ -219,6 +221,8 @@ def categorize_matches(matches: list[Match], client: JevClient | None) -> Catego
             return client.judge(text)
         except JevError as error:
             return error
+        except Exception as error:
+            return JevError(f"{type(error).__name__}: {error}")
 
     with ThreadPoolExecutor(max_workers=min(client.workers, len(distinct))) as pool:
         for text, outcome in zip(distinct, pool.map(ask, distinct), strict=True):

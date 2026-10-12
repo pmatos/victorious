@@ -372,6 +372,17 @@ def test_a_success_between_failures_keeps_the_run_going() -> None:
     assert result.categorized == 4
 
 
+@pytest.mark.parametrize("url", ["not a url", "file:///etc/passwd"])
+def test_a_url_that_is_not_http_leaves_the_categories_null(url: str) -> None:
+    matches = [speech_match(said("Go left"), said("Nice", 5.0))]
+
+    result = categorize.categorize_matches(matches, categorize.JevClient("key", url=url))
+
+    assert categories(result) == [(None, None)] * 2
+    assert result.first_failure is not None
+    assert "http" in result.first_failure
+
+
 def test_no_client_leaves_every_event_as_it_was() -> None:
     matches = [speech_match(said("Go left"))]
 
