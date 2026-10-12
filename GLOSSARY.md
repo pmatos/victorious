@@ -51,3 +51,11 @@ _Avoid_: Music filter, noise gate
 **Speaker**:
 A distinct voice in a Recording, named through enrollment or labelled `unknown_N` when not enrolled. Enrollment is one short clip per person in a `voices/` folder, named by file (`voices/alice.wav` is `alice`); `unknown_N` is numbered from 1 by first appearance and is stable only within one Recording.
 _Avoid_: Voice, participant
+
+**Verdict**:
+A person's judgement of one detected Match during review: confirmed (what was read is right) or rejected (not a real Match, or a value is wrong).
+_Avoid_: Label (the label is the Match with its verdict), tag
+
+**Labels file**:
+The saved Verdicts of a review, with the values shown for each Match, kept beside a Recording and compared against later runs as a regression fixture.
+_Avoid_: Ground truth, annotations, gold file
