@@ -12,7 +12,8 @@ import urllib.request
 from collections.abc import Mapping
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
-from typing import Any, Literal, get_args
+from typing import Any, Literal
+from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
@@ -28,7 +29,9 @@ WORKERS = 8
 ATTEMPTS = 3
 BACKOFF = 0.5
 MAX_CONSECUTIVE_FAILURES = 5
+MAX_RETRY_AFTER = 10.0
 RETRYABLE_STATUSES = frozenset({429, 529})
+LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
 REJECTED_STATUSES = frozenset({401, 403})
 
 INSTRUCTIONS = (
@@ -69,7 +72,7 @@ class _Answer(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     type: Literal["choice"]
-    choice: str
+    choice: Category
     confidence: float = Field(ge=0, le=1)
 
 
@@ -97,10 +100,32 @@ def _parse(raw: bytes) -> Judgment:
     answer = reply.answers.get(QUESTION)
     if answer is None:
         raise JevError("unexpected reply from Jev: no answer to the question")
-    if answer.choice not in get_args(Category):
-        raise JevError(f"unexpected reply from Jev: unknown category {answer.choice!r}")
-    category: Category = "personal" if answer.choice == "personal" else "game_related"
-    return Judgment(category, answer.confidence)
+    return Judgment(answer.choice, answer.confidence)
+
+
+class _NoRedirects(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, *args: Any, **kwargs: Any) -> None:
+        return None
+
+
+_OPENER = urllib.request.build_opener(_NoRedirects)
+
+
+def _usable_url(url: str) -> bool:
+    try:
+        parts = urlsplit(url)
+    except ValueError:
+        return False
+    if not parts.hostname:
+        return False
+    return parts.scheme == "https" or (parts.scheme == "http" and parts.hostname in LOOPBACK_HOSTS)
+
+
+def _retry_after(header: str | None) -> float:
+    try:
+        return min(max(float(header or 0), 0.0), MAX_RETRY_AFTER)
+    except ValueError:
+        return 0.0
 
 
 class JevClient:
@@ -127,9 +152,12 @@ class JevClient:
             raise _Stopped(halted)
         try:
             judgment = self._ask(text)
-        except JevError as error:
-            self._note(failed=isinstance(error, _Transient))
+        except JevError:
+            self._note(failed=True)
             raise
+        except Exception as error:
+            self._note(failed=True)
+            raise JevError(f"{type(error).__name__}: {error}") from error
         self._note(failed=False)
         return judgment
 
@@ -148,15 +176,16 @@ class JevClient:
                 self._halted = reason
 
     def _ask(self, text: str) -> Judgment:
-        if not self.url.startswith(("http://", "https://")):
-            reason = f"the Jev URL must be http or https, got {self.url!r}"
+        if not _usable_url(self.url):
+            reason = f"the Jev URL must be https (http only to localhost), got {self.url!r}"
             self._halt(reason)
             raise JevError(reason)
         body = json.dumps(_request(text)).encode()
         last: JevError = _Transient("no attempt was made")
+        retry_after = 0.0
         for attempt in range(ATTEMPTS):
             if attempt:
-                time.sleep(BACKOFF * 2 ** (attempt - 1))
+                time.sleep(max(BACKOFF * 2 ** (attempt - 1), retry_after))
             request = urllib.request.Request(  # noqa: S310
                 self.url,
                 data=body,
@@ -167,9 +196,11 @@ class JevClient:
                 },
             )
             try:
-                with urllib.request.urlopen(request, timeout=self.timeout) as response:  # noqa: S310
+                with _OPENER.open(request, timeout=self.timeout) as response:
                     return _parse(response.read())
             except urllib.error.HTTPError as error:
+                retry_after = _retry_after(error.headers.get("Retry-After"))
+                error.close()
                 if error.code in REJECTED_STATUSES:
                     reason = f"Jev rejected the API key (HTTP {error.code})"
                     self._halt(f"{reason}, so it was not asked about the remaining segments")
@@ -187,19 +218,14 @@ def jev_from_env(environ: Mapping[str, str]) -> JevClient | None:
     key = environ.get(KEY_VARIABLE, "").strip()
     if not key:
         return None
-    return JevClient(key, url=environ.get(URL_VARIABLE) or DEFAULT_URL)
+    return JevClient(key, url=environ.get(URL_VARIABLE, "").strip() or DEFAULT_URL)
 
 
 @dataclass(frozen=True)
 class CategorizeResult:
     matches: list[Match]
-    segments: int = 0
     categorized: int = 0
     first_failure: str | None = None
-
-    @property
-    def failures(self) -> int:
-        return self.segments - self.categorized
 
 
 def categorize_matches(matches: list[Match], client: JevClient | None) -> CategorizeResult:
@@ -210,7 +236,7 @@ def categorize_matches(matches: list[Match], client: JevClient | None) -> Catego
             if event.kind == "transcript" and event.text is not None:
                 texts.append(event.text)
     if client is None or not texts:
-        return CategorizeResult(matches, segments=len(texts))
+        return CategorizeResult(matches)
 
     distinct = list(dict.fromkeys(texts))
     judgments: dict[str, Judgment] = {}
@@ -221,8 +247,6 @@ def categorize_matches(matches: list[Match], client: JevClient | None) -> Catego
             return client.judge(text)
         except JevError as error:
             return error
-        except Exception as error:
-            return JevError(f"{type(error).__name__}: {error}")
 
     with ThreadPoolExecutor(max_workers=min(client.workers, len(distinct))) as pool:
         for text, outcome in zip(distinct, pool.map(ask, distinct), strict=True):
@@ -249,6 +273,4 @@ def categorize_matches(matches: list[Match], client: JevClient | None) -> Catego
                 )
             events.append(event)
         rewritten.append(match.model_copy(update={"events": events}))
-    return CategorizeResult(
-        rewritten, len(texts), categorized, str(first_failure) if first_failure else None
-    )
+    return CategorizeResult(rewritten, categorized, str(first_failure) if first_failure else None)

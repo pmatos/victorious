@@ -6,18 +6,19 @@ import subprocess
 import sys
 from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import jsonschema
 import pytest
 
 from tests.analyse_helpers import STEADY, analyse_text, small
-from tests.jev_stub import JevStub, Recorded, Responder, always, choice
+from tests.jev_stub import JevStub, Recorded, Reply, Responder, always, choice
 from tests.synthetic import AudioClip, build_recording, match_shots, write_layout
 from victorious import categorize
 from victorious.schema import Event, Match, frame_event, json_schema, transcript_event
 
-pytestmark = pytest.mark.usefixtures("require_ffmpeg", "require_tesseract")
+end_to_end = pytest.mark.usefixtures("require_ffmpeg", "require_tesseract", "speech_on")
 
 SPEECH = Path(__file__).parent / "fixtures" / "speech"
 ENGLISH = SPEECH / "en.opus"
@@ -25,7 +26,7 @@ PORTUGUESE = SPEECH / "pt.opus"
 KEY = "test-key"
 
 
-@pytest.fixture(autouse=True)
+@pytest.fixture
 def speech_on(speech_is_off_and_models_are_kept: None, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("VICTORIOUS_NO_SPEECH")
     monkeypatch.setenv("HF_TOKEN", "test-token")
@@ -75,7 +76,7 @@ def configured(stub: JevStub, key: str = KEY) -> dict[str, str]:
     return {"TYPESAFE_API_KEY": key, "VICTORIOUS_JEV_URL": stub.url}
 
 
-def verdict(text: str) -> tuple[int, Any]:
+def verdict(text: str) -> Reply:
     if "players" in text.lower():
         return choice("game_related", 0.82)
     return choice("personal", 0.64)
@@ -107,6 +108,7 @@ def judged(tmp_path_factory: pytest.TempPathFactory) -> Run:
     return Run(document, stub, result.stderr)
 
 
+@end_to_end
 def test_segments_get_the_returned_category_and_confidence(judged: Run) -> None:
     english, portuguese = transcripts(judged.document)
 
@@ -121,6 +123,7 @@ def test_segments_get_the_returned_category_and_confidence(judged: Run) -> None:
     assert "categories 2 of 2" in judged.stderr
 
 
+@end_to_end
 def test_only_the_transcript_text_is_sent(judged: Run) -> None:
     spoken = {event["text"] for event in transcripts(judged.document)}
 
@@ -134,6 +137,7 @@ def test_only_the_transcript_text_is_sent(judged: Run) -> None:
         assert request.size < 4096
 
 
+@end_to_end
 def test_without_the_key_categories_are_null_and_the_run_succeeds(tmp_path: Path) -> None:
     with JevStub(verdict) as stub:
         code, document, stderr = analyse_with(
@@ -150,8 +154,9 @@ def test_without_the_key_categories_are_null_and_the_run_succeeds(tmp_path: Path
     assert "Traceback" not in stderr
 
 
+@end_to_end
 def test_a_jev_failure_nulls_only_the_affected_segment(tmp_path: Path) -> None:
-    def respond(text: str) -> tuple[int, Any]:
+    def respond(text: str) -> Reply:
         if "players" in text.lower():
             return choice("game_related", 0.82)
         return 500, {"error": "boom"}
@@ -169,6 +174,7 @@ def test_a_jev_failure_nulls_only_the_affected_segment(tmp_path: Path) -> None:
     assert "Traceback" not in stderr
 
 
+@end_to_end
 def test_an_unreachable_jev_does_not_abort_the_run(tmp_path: Path) -> None:
     with JevStub() as stub:
         url = stub.url
@@ -184,6 +190,7 @@ def test_an_unreachable_jev_does_not_abort_the_run(tmp_path: Path) -> None:
     assert "Traceback" not in stderr
 
 
+@end_to_end
 def test_no_speech_sends_nothing(tmp_path: Path) -> None:
     with JevStub() as stub:
         code, document, _ = analyse_with(tmp_path, "--no-speech", env=configured(stub))
@@ -194,6 +201,7 @@ def test_no_speech_sends_nothing(tmp_path: Path) -> None:
     assert stub.requests == []
 
 
+@end_to_end
 def test_no_speech_without_a_key_does_not_mention_the_key(tmp_path: Path) -> None:
     layout = write_layout(tmp_path / "layout.yaml")
     program = "import sys; from victorious.cli import main; print(main(sys.argv[1:]))"
@@ -277,9 +285,8 @@ def test_events_other_than_transcripts_and_their_order_are_untouched() -> None:
     assert match.events[2] == frames[1]
     assert [e.text for e in match.events] == [e.text for e in original]
     assert all(e.confidence == o.confidence for e, o in zip(match.events, original, strict=True))
-    assert result.segments == 2
     assert result.categorized == 2
-    assert result.failures == 0
+    assert result.first_failure is None
 
 
 @pytest.mark.parametrize("status", [401, 403])
@@ -295,7 +302,7 @@ def test_a_rejected_key_stops_further_requests(status: int) -> None:
 
 
 def test_a_rejected_request_is_not_retried_and_does_not_affect_other_segments() -> None:
-    def respond(text: str) -> tuple[int, Any]:
+    def respond(text: str) -> Reply:
         return (422, {"detail": "bad"}) if text == "bad" else choice("personal", 0.9)
 
     matches = [speech_match(said("bad"), said("fine", 5.0))]
@@ -330,7 +337,7 @@ def test_an_unusable_reply_leaves_the_category_null(reply: Any) -> None:
 def test_a_rate_limited_request_is_retried() -> None:
     calls: list[str] = []
 
-    def respond(text: str) -> tuple[int, Any]:
+    def respond(text: str) -> Reply:
         calls.append(text)
         return (429, {}) if len(calls) == 1 else choice("game_related", 0.8)
 
@@ -362,7 +369,7 @@ def test_five_failures_in_a_row_cut_the_run_off() -> None:
 
 @pytest.mark.usefixtures("no_backoff")
 def test_a_success_between_failures_keeps_the_run_going() -> None:
-    def respond(text: str) -> tuple[int, Any]:
+    def respond(text: str) -> Reply:
         return (500, {}) if int(text.split()[-1]) % 3 else choice("personal", 0.9)
 
     matches = [speech_match(*(said(f"line {i}", i) for i in range(12)))]
@@ -372,7 +379,10 @@ def test_a_success_between_failures_keeps_the_run_going() -> None:
     assert result.categorized == 4
 
 
-@pytest.mark.parametrize("url", ["not a url", "file:///etc/passwd"])
+@pytest.mark.parametrize(
+    "url",
+    ["not a url", "file:///etc/passwd", "http://example.com/v1", "https:///v1", "http://"],
+)
 def test_a_url_that_is_not_http_leaves_the_categories_null(url: str) -> None:
     matches = [speech_match(said("Go left"), said("Nice", 5.0))]
 
@@ -380,7 +390,68 @@ def test_a_url_that_is_not_http_leaves_the_categories_null(url: str) -> None:
 
     assert categories(result) == [(None, None)] * 2
     assert result.first_failure is not None
-    assert "http" in result.first_failure
+    assert "https" in result.first_failure
+
+
+@pytest.mark.usefixtures("no_backoff")
+def test_five_unusable_replies_in_a_row_cut_the_run_off() -> None:
+    matches = [speech_match(*(said(f"line {i}", i) for i in range(12)))]
+
+    result, requests = categorized(matches, lambda _t: (404, {}), workers=1)
+
+    assert len(requests) == 5
+    assert categories(result) == [(None, None)] * 12
+    assert result.first_failure == "HTTP 404"
+
+
+def test_a_redirect_is_not_followed_so_the_key_stays_put() -> None:
+    with JevStub() as elsewhere:
+        target = elsewhere.url
+
+        result, requests = categorized(
+            [speech_match(said("Go left"))],
+            lambda _t: (302, {}, {"Location": target}),
+            workers=1,
+        )
+
+    assert len(requests) == 1
+    assert elsewhere.requests == []
+    assert categories(result) == [(None, None)]
+    assert result.first_failure == "HTTP 302"
+
+
+def test_retry_after_is_waited_out(monkeypatch: pytest.MonkeyPatch) -> None:
+    slept: list[float] = []
+    monkeypatch.setattr("victorious.categorize.time", SimpleNamespace(sleep=slept.append))
+    calls: list[str] = []
+
+    def respond(text: str) -> Reply:
+        calls.append(text)
+        if len(calls) == 1:
+            return 429, {}, {"Retry-After": "3"}
+        return choice("personal", 0.7)
+
+    result, _ = categorized([speech_match(said("Go left"))], respond)
+
+    assert slept == [3.0]
+    assert categories(result) == [("personal", 0.7)]
+
+
+def test_an_exception_outside_the_client_counts_toward_the_halt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def explode(self: categorize.JevClient, text: str) -> categorize.Judgment:
+        raise ValueError("bad header")
+
+    monkeypatch.setattr(categorize.JevClient, "_ask", explode)
+    matches = [speech_match(*(said(f"line {i}", i) for i in range(8)))]
+
+    client = categorize.JevClient("key", workers=1)
+    result = categorize.categorize_matches(matches, client)
+
+    assert categories(result) == [(None, None)] * 8
+    assert result.first_failure == "ValueError: bad header"
+    assert client._halted is not None
 
 
 def test_no_client_leaves_every_event_as_it_was() -> None:
@@ -389,7 +460,6 @@ def test_no_client_leaves_every_event_as_it_was() -> None:
     result = categorize.categorize_matches(matches, None)
 
     assert result.matches == matches
-    assert result.segments == 1
     assert result.categorized == 0
 
 
@@ -404,3 +474,8 @@ def test_the_client_is_built_from_the_environment() -> None:
     )
     assert override is not None
     assert override.url == "http://localhost:9/x"
+    padded = categorize.jev_from_env(
+        {"TYPESAFE_API_KEY": "k", "VICTORIOUS_JEV_URL": " https://a/b "}
+    )
+    assert padded is not None
+    assert padded.url == "https://a/b"
