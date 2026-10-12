@@ -46,34 +46,28 @@ class _CommandParser(argparse.ArgumentParser):
         return parsed, [] if self._tolerant else extras
 
 
-def _positive_int(text: str) -> int:
+def _whole_number(text: str, low: int, high: int | None = None) -> int:
     try:
         value = int(text)
     except ValueError:
         raise argparse.ArgumentTypeError(f"not a whole number: {text!r}") from None
-    if value < 1:
-        raise argparse.ArgumentTypeError(f"must be at least 1, got {value}")
+    if high is None and value < low:
+        raise argparse.ArgumentTypeError(f"must be at least {low}, got {value}")
+    if high is not None and not low <= value <= high:
+        raise argparse.ArgumentTypeError(f"must be between {low} and {high}, got {value}")
     return value
+
+
+def _positive_int(text: str) -> int:
+    return _whole_number(text, 1)
 
 
 def _non_negative_int(text: str) -> int:
-    try:
-        value = int(text)
-    except ValueError:
-        raise argparse.ArgumentTypeError(f"not a whole number: {text!r}") from None
-    if value < 0:
-        raise argparse.ArgumentTypeError(f"must be at least 0, got {value}")
-    return value
+    return _whole_number(text, 0)
 
 
 def _port(text: str) -> int:
-    try:
-        value = int(text)
-    except ValueError:
-        raise argparse.ArgumentTypeError(f"not a whole number: {text!r}") from None
-    if not 0 <= value <= 65535:
-        raise argparse.ArgumentTypeError(f"must be between 0 and 65535, got {value}")
-    return value
+    return _whole_number(text, 0, 65535)
 
 
 def _at_argument(text: str) -> tuple[str, int]:
@@ -213,13 +207,10 @@ def _require_distinct(observations: Path | None, output: Path | None) -> None:
 
 
 def _run_analyse(args: argparse.Namespace) -> tuple[str, str | None]:
-    speech = (
-        None
-        if args.no_speech
-        else SpeechOptions(audio_stream=args.audio_stream, model=args.whisper_model)
-    )
-    if speech is not None:
+    speech = None
+    if not args.no_speech:
         require_ready()
+        speech = SpeechOptions(audio_stream=args.audio_stream, model=args.whisper_model)
     layouts = load_layouts(args.layout)
     cache = None if args.no_cache else ObservationCache(args.cache_dir or default_cache_root())
     started = time.monotonic()

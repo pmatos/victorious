@@ -1,5 +1,6 @@
 """Transcribing what is said within each Match, in English or Portuguese."""
 
+import heapq
 import math
 import os
 from collections.abc import Sequence
@@ -179,18 +180,8 @@ def _owner(
 
 def _merged(events: list[Event], transcripts: list[Event]) -> list[Event]:
     """The Events in time order, never moving an Event that was already there."""
-    merged: list[Event] = []
-    pending = iter(sorted(transcripts, key=lambda event: event.time))
-    upcoming = next(pending, None)
-    for event in events:
-        while upcoming is not None and upcoming.time < event.time:
-            merged.append(upcoming)
-            upcoming = next(pending, None)
-        merged.append(event)
-    while upcoming is not None:
-        merged.append(upcoming)
-        upcoming = next(pending, None)
-    return merged
+    ordered = sorted(transcripts, key=lambda event: event.time)
+    return list(heapq.merge(events, ordered, key=lambda event: event.time))
 
 
 def transcribe_matches(

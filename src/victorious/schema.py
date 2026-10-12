@@ -58,6 +58,10 @@ class Event(_Model):
     )
 
 
+def _unit(value: float) -> float:
+    return min(1.0, max(0.0, value))
+
+
 def frame_event(
     kind: EventKind,
     time: float,
@@ -70,7 +74,7 @@ def frame_event(
         kind=kind,
         time=time,
         source="frame",
-        confidence=min(1.0, max(0.0, confidence)),
+        confidence=_unit(confidence),
         value=value,
         end=end,
         element=element,
@@ -86,7 +90,7 @@ def transcript_event(
         kind="transcript",
         time=start,
         source="speech",
-        confidence=min(1.0, max(0.0, confidence)),
+        confidence=_unit(confidence),
         value=None,
         end=end,
         element=None,
