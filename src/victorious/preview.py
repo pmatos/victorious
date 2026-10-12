@@ -15,13 +15,17 @@ LABEL_PADDING = 3
 BORDER = 2
 
 
+def scaled_frame(frame: np.ndarray) -> np.ndarray:
+    """A copy of `frame`, shrunk to at most `MAX_PANEL_WIDTH` wide."""
+    height, width = frame.shape[:2]
+    if width <= MAX_PANEL_WIDTH:
+        return frame.copy()
+    size = (MAX_PANEL_WIDTH, max(1, round(height * MAX_PANEL_WIDTH / width)))
+    return np.asarray(cv2.resize(frame, size, interpolation=cv2.INTER_AREA))
+
+
 def _panel_image(panel: Panel) -> np.ndarray:
-    height, width = panel.frame.shape[:2]
-    if width > MAX_PANEL_WIDTH:
-        size = (MAX_PANEL_WIDTH, max(1, round(height * MAX_PANEL_WIDTH / width)))
-        image = cv2.resize(panel.frame, size, interpolation=cv2.INTER_AREA)
-    else:
-        image = panel.frame.copy()
+    image = scaled_frame(panel.frame)
     color = KIND_COLORS[panel.kind]
     side, rows = image.shape[1], image.shape[0]
     for name, found in panel.found.items():

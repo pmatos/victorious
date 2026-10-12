@@ -14,11 +14,12 @@ from pydantic import ValidationError
 from victorious.analysis import analyse_with_observations
 from victorious.cache import ObservationCache, default_cache_root
 from victorious.layout import LayoutError, dump_layout, load_layouts
+from victorious.manual import serve_manual
 from victorious.observations import records
 from victorious.ocr import OcrError
 from victorious.preview import render_preview
 from victorious.schema import json_schema
-from victorious.setup import AT_KINDS, TimeError, parse_at, run_setup
+from victorious.setup import AT_KINDS, SetupResult, TimeError, parse_at, run_setup
 from victorious.video import RecordingError
 
 SUBCOMMANDS: tuple[tuple[str, str], ...] = (
@@ -51,6 +52,16 @@ def _positive_int(text: str) -> int:
         raise argparse.ArgumentTypeError(f"not a whole number: {text!r}") from None
     if value < 1:
         raise argparse.ArgumentTypeError(f"must be at least 1, got {value}")
+    return value
+
+
+def _port(text: str) -> int:
+    try:
+        value = int(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"not a whole number: {text!r}") from None
+    if not 0 <= value <= 65535:
+        raise argparse.ArgumentTypeError(f"must be between 0 and 65535, got {value}")
     return value
 
 
@@ -126,7 +137,19 @@ def build_parser() -> argparse.ArgumentParser:
             sub.add_argument(
                 "--manual",
                 action="store_true",
-                help="place the elements by hand in a browser (not implemented yet)",
+                help="place the elements by hand on a page served locally, pre-filled with "
+                "what auto-detect found",
+            )
+            sub.add_argument(
+                "--no-browser",
+                action="store_true",
+                help="with --manual, only print the address instead of opening a browser",
+            )
+            sub.add_argument(
+                "--port",
+                type=_port,
+                default=None,
+                help="with --manual, listen on this port of 127.0.0.1 (default: a free one)",
             )
         if name in {"analyse", "schema"}:
             sub.add_argument("-o", "--output", type=Path, help="write JSON here, not to stdout")
@@ -188,7 +211,7 @@ def _run_analyse(args: argparse.Namespace) -> tuple[str, str | None]:
     return text, "".join(f"{line}\n" for line in lines)
 
 
-def _run_setup(args: argparse.Namespace) -> int:
+def _setup_paths(args: argparse.Namespace) -> tuple[Path, Path]:
     layout_path: Path = args.output
     preview_path: Path = args.preview or layout_path.with_name(f"{layout_path.stem}.preview.png")
     _require_writable_directory(layout_path)
@@ -197,19 +220,20 @@ def _run_setup(args: argparse.Namespace) -> int:
         raise OSError("--preview and --output name the same file")
     if args.recording.resolve() in (layout_path.resolve(), preview_path.resolve()):
         raise OSError("--output and --preview must not name the Recording")
-    result = run_setup(args.recording, args.at)
+    return layout_path, preview_path
+
+
+def _write_preview(result: SetupResult, preview_path: Path) -> None:
     if result.found:
         encoded = cv2.imencode(".png", render_preview(result.panels))[1].tobytes()
         _emit(encoded, preview_path)
+
+
+def _write_layout(result: SetupResult, layout_path: Path, preview_path: Path) -> None:
+    """Writes the preview and the Layout of a `result` that has one, then reports on stderr."""
     if result.layout is None:
-        lines = "\n".join(f"  {name}: {reason}" for name, reason in result.missing.items())
-        print(
-            f"victorious setup: could not find {len(result.missing)} element"
-            f"{'s' if len(result.missing) != 1 else ''}:\n{lines}\n"
-            "pass other --at times that show them, or place them by hand with --manual",
-            file=sys.stderr,
-        )
-        return 1
+        raise ValueError("there is no Layout to write")
+    _write_preview(result, preview_path)
     _emit(dump_layout(result.layout), layout_path)
     for warning in result.warnings:
         print(f"victorious setup: warning: {warning}", file=sys.stderr)
@@ -218,10 +242,46 @@ def _run_setup(args: argparse.Namespace) -> int:
         f"{result.found} elements) and {preview_path}",
         file=sys.stderr,
     )
+
+
+def _run_setup(args: argparse.Namespace) -> int:
+    layout_path, preview_path = _setup_paths(args)
+    result = run_setup(args.recording, args.at)
+    if result.layout is None:
+        _write_preview(result, preview_path)
+        lines = "\n".join(f"  {name}: {reason}" for name, reason in result.missing.items())
+        print(
+            f"victorious setup: could not find {len(result.missing)} element"
+            f"{'s' if len(result.missing) != 1 else ''}:\n{lines}\n"
+            "pass other --at times that show them, or place them by hand with --manual",
+            file=sys.stderr,
+        )
+        return 1
+    _write_layout(result, layout_path, preview_path)
+    return 0
+
+
+def _run_manual(args: argparse.Namespace) -> int:
+    layout_path, preview_path = _setup_paths(args)
+    result = run_setup(args.recording, args.at)
+    saved = serve_manual(
+        result,
+        port=args.port or 0,
+        open_browser=not args.no_browser,
+        announce=lambda url: print(
+            f"victorious setup: serving {url} (Ctrl-C to cancel)", file=sys.stderr, flush=True
+        ),
+        commit=lambda drawn: _write_layout(drawn, layout_path, preview_path),
+    )
+    if saved is None:
+        print("victorious setup: cancelled, nothing written", file=sys.stderr)
+        return 1
     return 0
 
 
 def _setup_arguments_error(args: argparse.Namespace) -> str | None:
+    if not args.manual and (args.no_browser or args.port is not None):
+        return "--no-browser and --port only apply with --manual"
     present = {kind for kind, _ in args.at}
     missing = [kind for kind in AT_KINDS if kind not in present]
     if not missing:
@@ -241,10 +301,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             if problem is not None:
                 print(f"victorious setup: error: {problem}", file=sys.stderr)
                 return 2
-            if args.manual:
-                print("victorious setup: --manual is not implemented yet", file=sys.stderr)
-                return 1
-            return _run_setup(args)
+            return _run_manual(args) if args.manual else _run_setup(args)
         _require_writable_directory(args.output)
         sidecar: str | None = None
         if args.command == "schema":

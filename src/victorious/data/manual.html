@@ -1,0 +1,409 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>victorious setup</title>
+<link rel="icon" href="data:,">
+<style>
+:root {
+  color-scheme: light dark;
+  --bg: #f6f7f9; --panel: #ffffff; --text: #16181d; --muted: #5c6370; --line: #cdd2da;
+  --accent: #0b6bcb; --hud: #1f9d3a; --results: #d9730d; --bad: #c0262d; --ok: #1f7a35;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #14161a; --panel: #1d2026; --text: #e8eaee; --muted: #9aa1ad; --line: #3a3f48;
+    --accent: #5aa7ff; --hud: #4ade6b; --results: #ffa24a; --bad: #ff7b80; --ok: #6fdc8c;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text);
+  font: 15px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+header, main { max-width: 1680px; margin: 0 auto; padding: 0 16px; }
+h1 { font-size: 20px; margin: 16px 0 4px; }
+p { margin: 4px 0; color: var(--muted); }
+.bar { position: sticky; top: 0; z-index: 5; background: var(--bg); padding: 10px 0;
+  border-bottom: 1px solid var(--line); }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 6px 0; }
+.group { color: var(--muted); font-size: 13px; margin-right: 4px; }
+.chip { border: 1px solid var(--line); background: var(--panel); color: var(--text);
+  border-radius: 999px; padding: 4px 10px; cursor: pointer; font: inherit; }
+.chip[data-kind="hud"] { border-left: 4px solid var(--hud); }
+.chip[data-kind="results"] { border-left: 4px solid var(--results); }
+.chip[aria-pressed="true"] { outline: 2px solid var(--accent); background: color-mix(in srgb, var(--accent) 14%, var(--panel)); }
+.chip .state { color: var(--muted); font-size: 12px; margin-left: 6px; }
+.chip.placed .state { color: var(--ok); }
+.chip.missing .state { color: var(--bad); }
+.fields { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 6px 0; }
+.fields label { color: var(--muted); font-size: 13px; }
+.fields input { width: 6.5em; padding: 3px 6px; background: var(--panel); color: var(--text);
+  border: 1px solid var(--line); border-radius: 6px; font: inherit; }
+button.action { border: 1px solid var(--line); background: var(--panel); color: var(--text);
+  border-radius: 6px; padding: 5px 12px; cursor: pointer; font: inherit; }
+button.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+button:disabled { opacity: 0.5; cursor: not-allowed; }
+#status { margin-left: 8px; }
+#status.bad { color: var(--bad); }
+#status.ok { color: var(--ok); }
+ul#problems { margin: 6px 0 0; padding-left: 20px; color: var(--bad); }
+ul#notes { margin: 4px 0 0; padding-left: 20px; color: var(--muted); font-size: 13px; }
+section { margin: 16px 0; }
+section h2 { font-size: 15px; margin: 0 0 6px; }
+.stage { position: relative; line-height: 0; background: #000; border: 1px solid var(--line); }
+.stage img { width: 100%; height: auto; display: block; user-select: none; -webkit-user-drag: none; }
+.overlay { position: absolute; inset: 0; touch-action: none; cursor: crosshair; }
+.box { position: absolute; border: 2px solid var(--hud); cursor: move;
+  background: color-mix(in srgb, var(--hud) 12%, transparent); }
+.box[data-kind="results"] { border-color: var(--results);
+  background: color-mix(in srgb, var(--results) 12%, transparent); }
+.box.active { outline: 2px solid var(--accent); outline-offset: 1px; }
+.box .name { position: absolute; left: -2px; bottom: 100%; padding: 1px 5px; font-size: 12px;
+  line-height: 1.3; color: #000; background: var(--hud); white-space: nowrap; }
+.box[data-kind="results"] .name { background: var(--results); }
+.box .grip { position: absolute; right: -6px; bottom: -6px; width: 12px; height: 12px;
+  background: var(--accent); cursor: nwse-resize; border-radius: 2px; }
+.box.drawing { pointer-events: none; border-style: dashed; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Place the HUD elements</h1>
+  <p>Pick an element, then drag on a frame to draw it. Drag a box to move it, its corner to
+  resize it, or type exact values. Rectangles found automatically are already placed.</p>
+</header>
+<div class="bar"><div style="max-width:1680px;margin:0 auto;padding:0 16px">
+  <div class="chips" id="chips"></div>
+  <div class="fields">
+    <span id="selected">No element selected</span>
+    <label>x <input id="f-x" type="number" min="0" max="1" step="0.001" disabled></label>
+    <label>y <input id="f-y" type="number" min="0" max="1" step="0.001" disabled></label>
+    <label>w <input id="f-w" type="number" min="0" max="1" step="0.001" disabled></label>
+    <label>h <input id="f-h" type="number" min="0" max="1" step="0.001" disabled></label>
+    <button class="action" id="clear" disabled>Clear</button>
+    <button class="action primary" id="save" disabled>Save Layout</button>
+    <span id="status" role="status"></span>
+  </div>
+  <ul id="problems"></ul>
+</div></div>
+<main>
+  <ul id="notes"></ul>
+  <div id="panels"></div>
+</main>
+<script>
+"use strict";
+const MIN_SIDE = 0.002;
+let state = null;
+const rects = {};
+let active = null;
+let saved = false;
+const $ = (id) => document.getElementById(id);
+
+function round4(value) { return Math.round(value * 10000) / 10000; }
+function clamp01(value) { return Math.min(1, Math.max(0, value)); }
+function kindOf(name) {
+  return state.panels.find((p) => p.elements.includes(name)).kind;
+}
+function panelsOfKind(kind) {
+  return state.panels.map((p, i) => [p, i]).filter(([p]) => p.kind === kind).map(([, i]) => i);
+}
+
+function setStatus(text, cls) {
+  const status = $("status");
+  status.textContent = text;
+  status.className = cls || "";
+}
+
+function render() {
+  renderNotes();
+  renderChips();
+  renderBoxes();
+  renderFields();
+  $("save").disabled = saved || !state.required.every((name) => rects[name]);
+  $("clear").disabled = saved || !active || !rects[active];
+}
+
+function renderChips() {
+  const holder = $("chips");
+  holder.replaceChildren();
+  for (const kind of ["hud", "results"]) {
+    const label = document.createElement("span");
+    label.className = "group";
+    label.textContent = kind === "hud" ? "In-match HUD" : "Results screen";
+    holder.append(label);
+    const names = state.panels.find((p) => p.kind === kind).elements;
+    for (const name of names) {
+      const chip = document.createElement("button");
+      const required = state.required.includes(name);
+      const placed = Boolean(rects[name]);
+      chip.className = "chip " + (placed ? "placed" : required ? "missing" : "");
+      chip.dataset.kind = kind;
+      chip.setAttribute("aria-pressed", String(active === name));
+      chip.disabled = saved;
+      chip.append(name);
+      const mark = document.createElement("span");
+      mark.className = "state";
+      mark.textContent = placed ? "placed" : required ? "required" : "optional";
+      chip.append(mark);
+      chip.addEventListener("click", () => { active = name; render(); });
+      holder.append(chip);
+    }
+  }
+}
+
+function renderBoxes() {
+  document.querySelectorAll(".box:not(.drawing)").forEach((box) => box.remove());
+  for (const [name, rect] of Object.entries(rects)) {
+    const overlay = document.querySelector(`.overlay[data-panel="${rect.panel}"]`);
+    if (!overlay) continue;
+    const box = document.createElement("div");
+    box.className = "box" + (name === active ? " active" : "");
+    box.dataset.kind = kindOf(name);
+    box.dataset.name = name;
+    place(box, rect);
+    const label = document.createElement("span");
+    label.className = "name";
+    label.textContent = name;
+    const grip = document.createElement("span");
+    grip.className = "grip";
+    box.append(label, grip);
+    box.addEventListener("pointerdown", (event) => {
+      if (drawsInstead(rect.panel)) startDraw(event, rect.panel);
+      else startDrag(event, name, "move");
+    });
+    grip.addEventListener("pointerdown", (event) => startDrag(event, name, "resize"));
+    overlay.append(box);
+  }
+}
+
+function place(box, rect) {
+  box.style.left = rect.x * 100 + "%";
+  box.style.top = rect.y * 100 + "%";
+  box.style.width = rect.w * 100 + "%";
+  box.style.height = rect.h * 100 + "%";
+}
+
+function renderFields() {
+  const rect = active ? rects[active] : null;
+  $("selected").textContent = active
+    ? active + (rect ? " (panel " + (rect.panel + 1) + ")" : ": drag on a " + kindOf(active) + " frame")
+    : "No element selected";
+  for (const key of ["x", "y", "w", "h"]) {
+    const input = $("f-" + key);
+    input.disabled = saved || !rect;
+    input.value = rect ? rect[key].toFixed(4) : "";
+  }
+}
+
+function pointOn(overlay, event) {
+  const bounds = overlay.getBoundingClientRect();
+  return {
+    x: clamp01((event.clientX - bounds.left) / bounds.width),
+    y: clamp01((event.clientY - bounds.top) / bounds.height),
+  };
+}
+
+function overlayOf(panel) { return document.querySelector(`.overlay[data-panel="${panel}"]`); }
+
+function startDrag(event, name, mode) {
+  if (saved || event.button > 0) return;
+  event.preventDefault();
+  event.stopPropagation();
+  active = name;
+  const rect = rects[name];
+  const overlay = overlayOf(rect.panel);
+  const origin = pointOn(overlay, event);
+  const start = { ...rect };
+  const target = event.currentTarget;
+  target.setPointerCapture(event.pointerId);
+  const move = (e) => {
+    const now = pointOn(overlay, e);
+    const dx = now.x - origin.x, dy = now.y - origin.y;
+    if (mode === "move") {
+      rect.x = round4(Math.min(1 - start.w, Math.max(0, start.x + dx)));
+      rect.y = round4(Math.min(1 - start.h, Math.max(0, start.y + dy)));
+    } else {
+      rect.w = round4(Math.min(1 - start.x, Math.max(MIN_SIDE, start.w + dx)));
+      rect.h = round4(Math.min(1 - start.y, Math.max(MIN_SIDE, start.h + dy)));
+    }
+    const box = overlay.querySelector(`.box[data-name="${name}"]`);
+    if (box) place(box, rect);
+    renderFields();
+  };
+  const stop = () => {
+    target.removeEventListener("pointermove", move);
+    target.removeEventListener("pointerup", stop);
+    target.removeEventListener("pointercancel", stop);
+    render();
+  };
+  target.addEventListener("pointermove", move);
+  target.addEventListener("pointerup", stop);
+  target.addEventListener("pointercancel", stop);
+  document.querySelectorAll(".box.active").forEach((box) => box.classList.remove("active"));
+  target.closest(".box").classList.add("active");
+  renderChips();
+  renderFields();
+}
+
+function drawsInstead(panelIndex) {
+  return Boolean(active) && !rects[active] && kindOf(active) === state.panels[panelIndex].kind;
+}
+
+function startDraw(event, panelIndex) {
+  if (saved || event.button > 0) return;
+  const kind = state.panels[panelIndex].kind;
+  if (!active) {
+    setStatus("Pick an element first.", "bad");
+    return;
+  }
+  if (kindOf(active) !== kind) {
+    setStatus(active + " goes on a " + kindOf(active) + " frame, not a " + kind + " frame.", "bad");
+    return;
+  }
+  setStatus("");
+  event.preventDefault();
+  const overlay = overlayOf(panelIndex);
+  const origin = pointOn(overlay, event);
+  const name = active;
+  const ghost = document.createElement("div");
+  ghost.className = "box drawing";
+  ghost.dataset.kind = kind;
+  overlay.append(ghost);
+  overlay.setPointerCapture(event.pointerId);
+  let current = null;
+  const move = (e) => {
+    const now = pointOn(overlay, e);
+    current = {
+      x: round4(Math.min(origin.x, now.x)), y: round4(Math.min(origin.y, now.y)),
+      w: round4(Math.abs(now.x - origin.x)), h: round4(Math.abs(now.y - origin.y)),
+    };
+    place(ghost, current);
+  };
+  const stop = (e) => {
+    overlay.removeEventListener("pointermove", move);
+    overlay.removeEventListener("pointerup", stop);
+    overlay.removeEventListener("pointercancel", stop);
+    ghost.remove();
+    if (e.type === "pointerup" && current && current.w >= MIN_SIDE && current.h >= MIN_SIDE) {
+      rects[name] = { panel: panelIndex, ...current };
+    }
+    render();
+  };
+  overlay.addEventListener("pointermove", move);
+  overlay.addEventListener("pointerup", stop);
+  overlay.addEventListener("pointercancel", stop);
+}
+
+function buildPanels() {
+  const holder = $("panels");
+  state.panels.forEach((panel, index) => {
+    const section = document.createElement("section");
+    const heading = document.createElement("h2");
+    heading.textContent = `Frame ${index + 1}: ${panel.kind} screen at ${panel.second} s`;
+    const stage = document.createElement("div");
+    stage.className = "stage";
+    const image = document.createElement("img");
+    image.src = panel.image;
+    image.width = panel.width;
+    image.height = panel.height;
+    image.alt = heading.textContent;
+    image.draggable = false;
+    const overlay = document.createElement("div");
+    overlay.className = "overlay";
+    overlay.dataset.panel = String(index);
+    overlay.addEventListener("pointerdown", (event) => {
+      if (event.target === overlay) startDraw(event, index);
+    });
+    stage.append(image, overlay);
+    section.append(heading, stage);
+    holder.append(section);
+  });
+}
+
+function renderNotes() {
+  const list = $("notes");
+  list.replaceChildren();
+  for (const [name, reason] of Object.entries(state.notes)) {
+    const rect = rects[name];
+    const initial = state.rects[name];
+    const item = document.createElement("li");
+    if (!rect) {
+      item.textContent = `${name}: auto-detect found nothing (${reason}); draw it by hand.`;
+    } else if (initial && ["panel", "x", "y", "w", "h"].every((key) => rect[key] === initial[key])) {
+      item.textContent = `${name}: auto-detect placed it but it does not read back (${reason}); check it.`;
+    } else {
+      continue;
+    }
+    list.append(item);
+  }
+}
+
+for (const key of ["x", "y", "w", "h"]) {
+  $("f-" + key).addEventListener("change", (event) => {
+    const rect = active ? rects[active] : null;
+    const text = event.target.value.trim();
+    const value = Number(text);
+    if (rect && text !== "" && Number.isFinite(value)) {
+      const limit = 1 - rect[{ x: "w", y: "h", w: "x", h: "y" }[key]];
+      const low = key === "w" || key === "h" ? MIN_SIDE : 0;
+      rect[key] = round4(Math.min(limit, Math.max(low, value)));
+    }
+    renderBoxes();
+    renderFields();
+  });
+}
+
+$("clear").addEventListener("click", () => {
+  if (active) delete rects[active];
+  render();
+});
+
+$("save").addEventListener("click", async () => {
+  const problems = $("problems");
+  problems.replaceChildren();
+  $("save").disabled = true;
+  setStatus("Saving...");
+  let reply;
+  try {
+    const response = await fetch("layout", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ elements: rects }),
+    });
+    reply = { status: response.status, body: await response.json() };
+  } catch (error) {
+    setStatus("The server did not answer: " + error, "bad");
+    render();
+    return;
+  }
+  if (reply.status === 200) {
+    saved = true;
+    setStatus("Saved. You can close this tab.", "ok");
+    for (const warning of reply.body.warnings) {
+      const item = document.createElement("li");
+      item.textContent = "warning: " + warning;
+      problems.append(item);
+    }
+    render();
+    return;
+  }
+  setStatus("Not saved.", "bad");
+  for (const error of reply.body.errors || []) {
+    const item = document.createElement("li");
+    item.textContent = error;
+    problems.append(item);
+  }
+  render();
+});
+
+(async () => {
+  const response = await fetch("state.json");
+  state = await response.json();
+  for (const [name, rect] of Object.entries(state.rects)) rects[name] = { ...rect };
+  buildPanels();
+  active = state.required.find((name) => !rects[name]) || null;
+  render();
+})();
+</script>
+</body>
+</html>
