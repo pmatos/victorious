@@ -1,14 +1,14 @@
 """The labels file: the verdicts of a review, and how a later run is compared against them."""
 
-import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field
 
 from victorious.schema import AnalysisOutput, Match
+from victorious.versioned import load_versioned
 
 LABELS_VERSION = "1.0"
 MIN_OVERLAP = 0.5
@@ -57,23 +57,9 @@ class Labels(_Model):
 @dataclass(frozen=True)
 class Difference:
     kind: DifferenceKind
-    label: LabelledMatch | None
-    match: Match | None
+    start: float
+    end: float
     detail: str
-
-    @property
-    def start(self) -> float:
-        return self.label.start if self.label is not None else _present(self.match).start
-
-    @property
-    def end(self) -> float:
-        return self.label.end if self.label is not None else _present(self.match).end
-
-
-def _present(match: Match | None) -> Match:
-    if match is None:
-        raise ValueError("a difference needs a label or a Match")
-    return match
 
 
 def labels_from(output: AnalysisOutput, verdicts: Mapping[int, Verdict]) -> Labels:
@@ -99,26 +85,15 @@ def labels_from(output: AnalysisOutput, verdicts: Mapping[int, Verdict]) -> Labe
 
 
 def load_labels(path: Path) -> Labels:
-    try:
-        document = json.loads(path.read_text())
-    except OSError as error:
-        raise LabelsError(f"cannot read labels {path}: {error.strerror or error}") from error
-    except (ValueError, RecursionError) as error:
-        raise LabelsError(f"labels {path} are not JSON: {error}") from error
-    version = document.get("labels_version") if isinstance(document, dict) else None
-    if version != LABELS_VERSION:
-        raise LabelsError(
-            f"labels {path} have labels_version {version!r}, this victorious reads "
-            f"{LABELS_VERSION!r}; review the analysis again"
-        )
-    try:
-        return Labels.model_validate(document)
-    except ValidationError as error:
-        problems = "; ".join(
-            f"{'.'.join(str(part) for part in problem['loc'])}: {problem['msg']}"
-            for problem in error.errors()
-        )
-        raise LabelsError(f"labels {path} are not valid: {problems}") from error
+    return load_versioned(
+        path,
+        Labels,
+        noun="labels file",
+        key="labels_version",
+        version=LABELS_VERSION,
+        remedy="review the analysis again",
+        error=LabelsError,
+    )
 
 
 def _overlap(first: tuple[float, float], second: tuple[float, float]) -> float:
@@ -133,22 +108,16 @@ def _overlap(first: tuple[float, float], second: tuple[float, float]) -> float:
 def _pairs(labels: Sequence[LabelledMatch], matches: Sequence[Match]) -> dict[int, int]:
     """Label position to Match position: the best overlaps first, each used once."""
     candidates = sorted(
-        (
-            (_overlap((label.start, label.end), (match.start, match.end)), -a, -b)
-            for a, label in enumerate(labels)
-            for b, match in enumerate(matches)
-        ),
-        reverse=True,
+        (-_overlap((label.start, label.end), (match.start, match.end)), a, b)
+        for a, label in enumerate(labels)
+        for b, match in enumerate(matches)
     )
-    taken_labels: set[int] = set()
     taken_matches: set[int] = set()
     paired: dict[int, int] = {}
-    for overlap, negative_a, negative_b in candidates:
-        a, b = -negative_a, -negative_b
-        if overlap < MIN_OVERLAP:
+    for negative_overlap, a, b in candidates:
+        if -negative_overlap < MIN_OVERLAP:
             break
-        if a not in taken_labels and b not in taken_matches:
-            taken_labels.add(a)
+        if a not in paired and b not in taken_matches:
             taken_matches.add(b)
             paired[a] = b
     return paired
@@ -168,7 +137,12 @@ def _compare_confirmed(label: LabelledMatch, match: Match, tolerance: float) -> 
     for name, expected, actual in zip(VALUE_NAMES, _values(label), _values(match), strict=True):
         if expected != actual:
             found.append(
-                Difference("changed", label, match, f"{name}: expected {expected}, found {actual}")
+                Difference(
+                    "changed",
+                    label.start,
+                    label.end,
+                    f"{name}: expected {expected}, found {actual}",
+                )
             )
     moved = [
         f"{name} {_clock(was)} -> {_clock(now)}"
@@ -176,20 +150,24 @@ def _compare_confirmed(label: LabelledMatch, match: Match, tolerance: float) -> 
         if abs(was - now) > tolerance
     ]
     if moved:
-        found.append(Difference("shifted", label, match, ", ".join(moved)))
+        found.append(Difference("shifted", label.start, label.end, ", ".join(moved)))
     return found
 
 
 def _compare_rejected(label: LabelledMatch, match: Match) -> list[Difference]:
     if _values(label) == _values(match):
-        return [Difference("reappeared", label, match, "rejected before, and read the same again")]
+        return [
+            Difference(
+                "reappeared", label.start, label.end, "rejected before, and read the same again"
+            )
+        ]
     detail = (
         f"previously rejected as win={label.win} placement={label.placement} "
         f"personal_eliminations={label.personal_eliminations}, now win={match.win} "
         f"placement={match.placement} personal_eliminations={match.personal_eliminations}, "
         "re-review"
     )
-    return [Difference("changed", label, match, detail)]
+    return [Difference("changed", label.start, label.end, detail)]
 
 
 def compare(
@@ -206,7 +184,9 @@ def compare(
     for position, label in enumerate(labels.matches):
         if position not in paired:
             if label.verdict == "confirmed":
-                found.append(Difference("missing", label, None, "confirmed, and not found"))
+                found.append(
+                    Difference("missing", label.start, label.end, "confirmed, and not found")
+                )
             continue
         match = output.matches[paired[position]]
         if label.verdict == "confirmed":
@@ -215,7 +195,7 @@ def compare(
             found.extend(_compare_rejected(label, match))
     used = set(paired.values())
     found.extend(
-        Difference("unlabelled", None, match, "found, and never reviewed")
+        Difference("unlabelled", match.start, match.end, "found, and never reviewed")
         for position, match in enumerate(output.matches)
         if position not in used
     )

@@ -11,12 +11,12 @@ from pathlib import Path
 from typing import Any, get_args
 
 import cv2
-from pydantic import ValidationError
 
 from victorious.labels import DURATION_TOLERANCE, Labels, Verdict, labels_from
 from victorious.localpage import Resource, serve_until_saved
 from victorious.preview import scaled_frame
 from victorious.schema import SCHEMA_VERSION, AnalysisOutput, Match
+from victorious.versioned import load_versioned
 from victorious.video import RecordingError, VideoInfo, frame_at, probe
 
 RESULTS_SETTLE = 2
@@ -30,26 +30,15 @@ class ReviewError(Exception):
 
 
 def load_analysis(path: Path) -> AnalysisOutput:
-    try:
-        document = json.loads(path.read_text())
-    except OSError as error:
-        raise ReviewError(f"cannot read analysis {path}: {error.strerror or error}") from error
-    except (ValueError, RecursionError) as error:
-        raise ReviewError(f"analysis {path} is not JSON: {error}") from error
-    version = document.get("schema_version") if isinstance(document, dict) else None
-    if version != SCHEMA_VERSION:
-        raise ReviewError(
-            f"analysis {path} has schema_version {version!r}, this victorious reads "
-            f"{SCHEMA_VERSION!r}; run analyse again"
-        )
-    try:
-        return AnalysisOutput.model_validate(document)
-    except ValidationError as error:
-        problems = "; ".join(
-            f"{'.'.join(str(part) for part in problem['loc'])}: {problem['msg']}"
-            for problem in error.errors()
-        )
-        raise ReviewError(f"analysis {path} is not valid: {problems}") from error
+    return load_versioned(
+        path,
+        AnalysisOutput,
+        noun="analysis",
+        key="schema_version",
+        version=SCHEMA_VERSION,
+        remedy="run analyse again",
+        error=ReviewError,
+    )
 
 
 @dataclass(frozen=True)
@@ -130,6 +119,10 @@ def extract_frames(recording: Path, output: AnalysisOutput) -> list[MatchFrames]
             raise
 
 
+def _frame_route(match: Match, which: str) -> str:
+    return f"frame/{match.index}-{which}.jpg"
+
+
 def _last_value(match: Match, kind: str) -> int | None:
     values = [event.value for event in match.events if event.kind == kind]
     return values[-1] if values else None
@@ -150,11 +143,11 @@ def match_cards(output: AnalysisOutput, frames: list[MatchFrames]) -> list[dict[
             "has_results": has_results(match),
             "start_frame": {
                 "second": shown.start_second,
-                "image": f"frame/{match.index}-start.jpg",
+                "image": _frame_route(match, "start"),
             },
             "results_frame": {
                 "second": shown.results_second,
-                "image": f"frame/{match.index}-results.jpg",
+                "image": _frame_route(match, "results"),
             },
         }
         for match, shown in zip(output.matches, frames, strict=True)
@@ -207,8 +200,8 @@ def serve_review(
         "state.json": (json.dumps(state).encode(), "application/json"),
     }
     for match, shown in zip(output.matches, frames, strict=True):
-        resources[f"frame/{match.index}-start.jpg"] = (shown.start_jpeg, "image/jpeg")
-        resources[f"frame/{match.index}-results.jpg"] = (shown.results_jpeg, "image/jpeg")
+        resources[_frame_route(match, "start")] = (shown.start_jpeg, "image/jpeg")
+        resources[_frame_route(match, "results")] = (shown.results_jpeg, "image/jpeg")
     saved: list[Labels] = []
 
     def save(submitted: object) -> tuple[HTTPStatus, dict[str, Any]]:
