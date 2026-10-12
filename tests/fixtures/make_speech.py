@@ -1,10 +1,13 @@
-"""Regenerate the two committed speech clips with Piper text-to-speech.
+"""Regenerate the committed speech clips with Piper text-to-speech.
 
 Run by hand from the repository root when a clip needs refreshing; CI never runs it. Needs
 `uvx`, `ffmpeg` and the two Piper voices downloaded next to each other (the .onnx and its
 .onnx.json) from https://huggingface.co/rhasspy/piper-voices:
 
-    VICTORIOUS_PIPER_VOICES=/path/to/voices uv run python -m tests.fixtures.make_speech
+    VICTORIOUS_PIPER_VOICES=/path/to/voices uv run python -m tests.fixtures.make_speech [NAME ...]
+
+Names limit the run to those clips. `en_enroll` is a second sentence in the English voice, the
+enrollment clip for that Speaker.
 
 English uses en_US-ljspeech-medium (public domain data); Portuguese uses pt_BR-faber-medium
 (CC0 data, fine-tuned from lessac). The sentences are ours.
@@ -27,6 +30,10 @@ CLIPS = {
         "pt_BR-faber-medium",
         "Boa jogada, só restam dez jogadores, vamos rodar para a zona agora.",
     ),
+    "en_enroll": (
+        "en_US-ljspeech-medium",
+        "Okay team, I'll drop at the pier and meet you at the tower after the storm closes.",
+    ),
 }
 
 
@@ -40,7 +47,10 @@ def main() -> int:
         print("uvx and ffmpeg must be on PATH")
         return 2
     OUT.mkdir(exist_ok=True)
+    wanted = sys.argv[1:] or list(CLIPS)
     for name, (voice, sentence) in CLIPS.items():
+        if name not in wanted:
+            continue
         with tempfile.TemporaryDirectory() as scratch:
             wav = Path(scratch) / f"{name}.wav"
             subprocess.run(
