@@ -133,6 +133,16 @@ class ObservationRecord(_Model):
     region: Rect
 
 
+class MaskedAudioRecord(_Model):
+    """One line of the `--observations` file: a span of audio withheld from transcription."""
+
+    element: Literal["music_mask"]
+    start: float = Field(ge=0, description="Seconds from the start of the Recording.")
+    end: float = Field(ge=0, description="Seconds from the start of the Recording.")
+    music: float = Field(ge=0, le=1, description="Mean per-second music score over the span.")
+    speech: float = Field(ge=0, le=1, description="Mean per-second speech score over the span.")
+
+
 class ChosenLayout(_Model):
     path: str = Field(description="The Layout file used, as given on the command line.")
     score: float = Field(
