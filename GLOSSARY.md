@@ -44,6 +44,10 @@ _Avoid_: Processing, scan
 A span of spoken audio within a Match, with its speaker, its language, and a category of personal or game-related.
 _Avoid_: Subtitle, caption
 
+**Music mask**:
+A music-dominant span of a Recording's audio that is withheld from transcription, so music is not read as lyrics. Speech over music is not masked.
+_Avoid_: Music filter, noise gate
+
 **Speaker**:
 A distinct voice in a Recording, named through enrollment or labelled `unknown_N` when not enrolled.
 _Avoid_: Voice, participant

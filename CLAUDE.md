@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Victorious turns long Fortnite gameplay Recordings into a timestamped record of what happened in each Match (Wins, placement, eliminations, speech), read from what is on screen and what is said. The domain vocabulary (Recording, Match, Win, Layout, HUD element, Observation, Event, Setup, Analysis, Transcript segment, Speaker) is defined in `GLOSSARY.md`; architecture decisions are in `docs/adr/`. Read both before changing behaviour. The work is tracked in epic #13.
+Victorious turns long Fortnite gameplay Recordings into a timestamped record of what happened in each Match (Wins, placement, eliminations, speech), read from what is on screen and what is said. The domain vocabulary (Recording, Match, Win, Layout, HUD element, Observation, Event, Setup, Analysis, Transcript segment, Music mask, Speaker) is defined in `GLOSSARY.md`; architecture decisions are in `docs/adr/`. Read both before changing behaviour. The work is tracked in epic #13.
 
 ## Architecture
 
@@ -30,12 +30,13 @@ Installable package in `src/victorious/` (hatchling build, console script `victo
 - `selection.py`: `select_layout` drops Layouts whose aspect ratio does not fit the Recording, scores each remaining `hud_anchor` on up to 20 in-match frames (about 240 candidate seconds, plus at most 60 more from the dense opening window, read in time order so the choice does not depend on `--jobs`) and picks the best; none above `MIN_LAYOUT_SCORE` is a `LayoutSelectionError`. The first `NOT_FORTNITE_WINDOW` seconds are sampled at least every `OPENING_STRIDE` s; when none shows an in-match HUD and `detect.find_hud` finds no reference icons either, it returns `NoHud` (the `not_fortnite` warning) instead of raising.
 - `cache.py`: Observation cache keyed by Recording fingerprint, Layout hash and `OBSERVATION_VERSION` (bump it when readings or thresholds change), plus the bisect windows. The selection scores live beside it in `selection-*.json`, keyed by the Recording and the set of Layout hashes and by both `OBSERVATION_VERSION` and `SELECTION_VERSION` (bump the latter when `SCORED_FRAMES`, `MAX_CANDIDATE_FRAMES`, `NOT_FORTNITE_WINDOW`, `OPENING_STRIDE` or how a score is formed changes).
 - `speech.py`: `transcribe_matches` (per Match window: ffmpeg audio, faster-whisper VAD, per-chunk language over `en`/`pt` (both decoded when detection is unsure, `pick_reading` keeps the more confident), `is_speech` drop rule and `drop_repeated` loop filter, nearest-Match ownership of margin segments, merge into the Match's Events without moving existing ones), `require_ready` (Hugging Face token present) and `require_audio_stream`. `faster_whisper` is imported only when the model is loaded, so `--no-speech` never imports it.
+- `music.py`: `MusicTagger` (YAMNet on `onnxruntime`, per-second `Music`/`Speech` scores), `masked_windows` (music-dominant runs: threshold, one-second bridge, 3 s minimum, one-second edges), `merge_windows` and `silence`. `transcribe_matches` tags the merged Match windows first and zeroes the masked samples of every window before VAD/Whisper, so a Recording second gets one decision. `onnxruntime` is imported only when the tagger loads, so `--no-speech` never imports it.
 - `analysis.py`: `analyse(path, layouts, jobs=, chunk_seconds=, cache=, speech=)` and `run_machine`, the state machine that turns per-second Observations into Matches and Events. A Match opens on the HUD and closes only on a results screen. Output must not depend on `jobs` or chunk size: the skip-OCR rule is replayed with `ReuseTracker` over the exact schedule of counter reads the machine produces, instead of running per chunk.
 
 | Subcommand | Purpose | Status |
 |------------|---------|--------|
 | `setup` | Produce a Layout from a Recording | working: auto-detect from `--at hud=` and `--at results=`; `--manual` serves a local browser editor |
-| `analyse` | Turn a Recording and a Layout into Matches with Events | working: Matches, Win, placement, HUD counters, speech transcripts (music masking, speakers and categories: later tickets) |
+| `analyse` | Turn a Recording and a Layout into Matches with Events | working: Matches, Win, placement, HUD counters, speech transcripts with music masked (speakers and categories: later tickets) |
 | `review` | Inspect the Events found in a Recording | stub, see epic #13 |
 | `schema` | Print the JSON schema of the Analysis output | working |
 
@@ -70,7 +71,7 @@ Tests import the installed package (no `pythonpath` shim), so run them through `
 
 ## Test fixtures
 
-Tests build their Recordings on demand with `tests.synthetic`; no video is committed. `tests/fixtures/speech/` holds two short synthetic speech clips (`make_speech.py` regenerates them). `tests/test_speech.py` runs the real `small` Whisper model, so a cold Hugging Face cache needs network once; `conftest.py` pins `HF_HOME` so the isolated XDG cache does not hide it.
+Tests build their Recordings on demand with `tests.synthetic`; no video is committed. `tests/fixtures/speech/` holds two short synthetic speech clips (`make_speech.py` regenerates them). `tests/test_speech.py` and `tests/test_music_masking.py` run the real `small` Whisper model and the real YAMNet ONNX model, so a cold Hugging Face cache needs network once; the music bed is synthesised at test time (`tests/synthetic/music.py`, chords, drums and a sung vowel line that Whisper reads as "You"), nothing binary is committed; `conftest.py` pins `HF_HOME` so the isolated XDG cache does not hide it.
 
 ```python
 from tests.synthetic import RecordingSpec, build_recording, match_shots
