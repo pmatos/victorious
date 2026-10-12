@@ -195,15 +195,23 @@ def _run_analyse(args: argparse.Namespace) -> tuple[str, str | None]:
     state = "off" if cache is None else "hit" if analysis.cached else "miss"
     elapsed = time.monotonic() - started
     chosen = analysis.output.layout
-    print(
-        f"victorious analyse: layout {chosen.path} (score {chosen.score:.2f}, "
-        f"{analysis.candidates} candidate{'s' if analysis.candidates != 1 else ''}), "
-        f"cache {state}, {elapsed:.1f} s",
-        file=sys.stderr,
-    )
+    if chosen is None or analysis.layout is None:
+        for warning in analysis.output.warnings:
+            print(
+                f"victorious analyse: warning: {warning.code}: {warning.message}", file=sys.stderr
+            )
+    else:
+        print(
+            f"victorious analyse: layout {chosen.path} (score {chosen.score:.2f}, "
+            f"{analysis.candidates} candidate{'s' if analysis.candidates != 1 else ''}), "
+            f"cache {state}, {elapsed:.1f} s",
+            file=sys.stderr,
+        )
     text = analysis.output.model_dump_json(indent=2) + "\n"
     if args.observations is None:
         return text, None
+    if analysis.layout is None:
+        return text, ""
     lines = (
         record.model_dump_json()
         for record in records(analysis.observations, analysis.layout.layout)

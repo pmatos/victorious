@@ -16,12 +16,14 @@ from victorious.counters import (
     tracked_elements,
 )
 from victorious.layout import Layout, LoadedLayout
+from victorious.metadata import started_at
 from victorious.observations import Counters, SecondObservation
 from victorious.ocr import find_tesseract
 from victorious.parallel import extract_seconds, read_counters
 from victorious.resample import JumpResolver
 from victorious.schema import (
     AnalysisOutput,
+    AnalysisWarning,
     ChosenLayout,
     CounterElement,
     Event,
@@ -30,8 +32,8 @@ from victorious.schema import (
     frame_event,
 )
 from victorious.screens import HUD_THRESHOLD, RESULTS_THRESHOLD, ResultsReading
-from victorious.selection import select_layout
-from victorious.video import VideoInfo, probe
+from victorious.selection import NOT_FORTNITE_WINDOW, NoHud, select_layout
+from victorious.video import VideoInfo, probe, require_complete
 
 PLACEMENT_READINGS_PER_RUN = 5
 MAX_PLACEMENT = 100
@@ -237,7 +239,7 @@ class Analysis:
     output: AnalysisOutput
     observations: list[SecondObservation]
     cached: bool
-    layout: LoadedLayout
+    layout: LoadedLayout | None
     candidates: int
 
 
@@ -251,7 +253,24 @@ def analyse_with_observations(
 ) -> Analysis:
     info = probe(path)
     find_tesseract()
+    recording = RecordingInfo(
+        path=str(path), duration=info.duration, started_at=started_at(path, info.creation_time)
+    )
     selection = select_layout(path, info, layouts, jobs=jobs, cache=cache)
+    if isinstance(selection, NoHud):
+        require_complete(path, info)
+        shown = ", ".join(str(loaded.path) for loaded in selection.tried)
+        warning = AnalysisWarning(
+            code="not_fortnite",
+            message=(
+                f"no in-match HUD in the first {NOT_FORTNITE_WINDOW // 60} minutes "
+                f"({selection.frames} frames sampled, Layouts tried: {shown}); "
+                "this does not look like a Fortnite Recording, or its HUD needs a new Layout "
+                f"from `victorious setup {path}`"
+            ),
+        )
+        output = AnalysisOutput(recording=recording, layout=None, warnings=[warning], matches=[])
+        return Analysis(output, [], False, None, len(selection.tried))
     layout = selection.chosen.layout
     entry = cache.entry(path, layout) if cache is not None else None
     observations = entry.load() if entry is not None else None
@@ -263,8 +282,9 @@ def analyse_with_observations(
     if entry is not None and not cached:
         entry.store(observations)
     output = AnalysisOutput(
-        recording=RecordingInfo(path=str(path), duration=info.duration),
+        recording=recording,
         layout=ChosenLayout(path=str(selection.chosen.path), score=selection.score),
+        warnings=[],
         matches=matches,
     )
     return Analysis(output, observations, cached, selection.chosen, selection.fitting)

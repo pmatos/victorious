@@ -96,7 +96,7 @@ def test_output_with_the_chosen_layout_validates_against_the_schema(tmp_path: Pa
     assert result.returncode == 0, result.stderr
     document = json.loads(result.stdout)
     jsonschema.Draft202012Validator(json_schema()).validate(document)
-    assert document["schema_version"] == "1.2"
+    assert document["schema_version"] == "1.3"
     assert document["layout"]["path"] == str(layout)
     assert 0.7 <= document["layout"]["score"] <= 1.0
 
@@ -144,18 +144,8 @@ def test_no_layout_above_the_minimum_errors_without_output(tmp_path: Path) -> No
     assert result.stdout == ""
     assert not produced.exists()
     assert "no Layout matches" in result.stderr
+    assert "victorious setup" in result.stderr
     assert "Traceback" not in result.stderr
-
-
-def test_a_recording_without_any_hud_errors_clearly(tmp_path: Path) -> None:
-    recording = build_recording(small(10, ()), tmp_path / "recording.mkv")
-    layout = write_layout_document(tmp_path / "layout.yaml")
-
-    result = analyse_text(recording, layout)
-
-    assert result.returncode == 1
-    assert result.stdout == ""
-    assert "no Layout matches" in result.stderr
 
 
 def test_empty_layout_directory_errors(tmp_path: Path) -> None:
@@ -313,8 +303,8 @@ def test_candidate_frames_never_exceed_the_cap(
 
     status = main(["analyse", str(recording), "--layout", str(layout), "--jobs", "1", "--no-cache"])
 
-    assert status == 1
-    assert seconds == [0, 3, 6, 9]
+    assert status == 0
+    assert set(seconds) == {0, 3, 6, 9}
 
 
 @pytest.mark.parametrize("stored", [1.7, -0.1, float("nan"), float("inf"), True, "0.9", None])
