@@ -26,7 +26,6 @@ from victorious.schema import Event, Match, SpeechLanguage, transcript_event
 from victorious.speakers import (
     DIARIZATION_REPO,
     UNKNOWN_PREFIX,
-    fetch_diarizer,
     label_segments,
     load_clips,
     load_diarizer,
@@ -77,8 +76,8 @@ def require_ready(options: SpeechOptions | None = None) -> None:
         )
     load_tagger()
     options = options or SpeechOptions()
-    fetch_diarizer(options.diarization_model)
-    load_clips(options.voices)
+    clips = load_clips(options.voices)
+    load_diarizer(options.diarization_model).enroll(clips)
 
 
 def require_audio_stream(info: VideoInfo, options: SpeechOptions) -> None:
@@ -294,6 +293,25 @@ def _merged_spans(windows: Sequence[tuple[float, float]]) -> list[tuple[float, f
     return spans
 
 
+def outside_spans(
+    spans: Sequence[tuple[float, float]], begin: float, end: float
+) -> list[MaskedWindow]:
+    """The parts of [begin, end) that lie outside the sorted, disjoint `spans`."""
+    gaps: list[MaskedWindow] = []
+    cursor = begin
+    for start, stop in spans:
+        if stop <= cursor:
+            continue
+        if start >= end:
+            break
+        if start > cursor:
+            gaps.append(MaskedWindow(cursor, start, 0.0, 0.0))
+        cursor = stop
+    if cursor < end:
+        gaps.append(MaskedWindow(cursor, end, 0.0, 0.0))
+    return gaps
+
+
 def _music_masks(
     path: Path, spans: Sequence[tuple[float, float]], options: SpeechOptions
 ) -> list[MaskedWindow]:
@@ -328,7 +346,8 @@ def transcribe_matches(
     voice keeps its label across Matches.
     """
     windows = [_window(match, info.duration) for match in matches]
-    masked = _music_masks(path, _merged_spans(windows), options)
+    spans = _merged_spans(windows)
+    masked = _music_masks(path, spans, options)
     segments: list[list[Segment]] = [[] for _ in matches]
     model: Any = None
     for index, (begin, end) in enumerate(windows):
@@ -347,10 +366,12 @@ def transcribe_matches(
         [(segment.start, segment.end) for _, segment in flat],
         info.duration,
         lambda begin, end: silence(
-            sample_audio(path, begin, end, options.audio_stream), masked, begin
+            sample_audio(path, begin, end, options.audio_stream),
+            [*masked, *outside_spans(spans, begin, end)],
+            begin,
         ),
         lambda: load_diarizer(options.diarization_model),
-        load_clips(options.voices),
+        load_clips(options.voices) if flat else (),
     )
     spoken: list[list[Segment]] = [[] for _ in matches]
     for (index, segment), speaker in zip(flat, labels, strict=True):

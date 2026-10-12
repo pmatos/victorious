@@ -21,6 +21,7 @@ from victorious.speech import (
     drop_repeated,
     group_speech,
     is_speech,
+    outside_spans,
     pick_reading,
 )
 
@@ -355,3 +356,13 @@ def test_a_word_repeated_inside_a_segment_is_kept_beside_real_speech() -> None:
     said = _said("No, no, no, no, no.", "Go left", language="en", confidence=0.5)
 
     assert pick_reading({"en": said}) == said
+
+
+def test_the_padding_beyond_the_match_windows_is_cut_from_the_diarization_audio() -> None:
+    windows = [(10.0, 20.0), (30.0, 40.0)]
+
+    cuts = outside_spans(windows, 9.0, 31.0)
+
+    assert [(cut.start, cut.end) for cut in cuts] == [(9.0, 10.0), (20.0, 30.0)]
+    assert outside_spans(windows, 12.0, 18.0) == []
+    assert [(c.start, c.end) for c in outside_spans(windows, 38.0, 41.0)] == [(40.0, 41.0)]

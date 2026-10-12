@@ -15,17 +15,22 @@ from tests.analyse_helpers import FfmpegShim
 from tests.cli_runner import run_cli
 from tests.synthetic import AudioClip, write_layout
 from tests.test_speech import ENGLISH, PORTUGUESE, SPEECH, recording, transcripts
+from victorious.errors import SpeechError
 from victorious.schema import SCHEMA_VERSION, Event, json_schema
 from victorious.speakers import (
+    DIARIZATION_REPO,
     MATCH_DISTANCE,
+    Diarizer,
     EnrolledVoice,
+    EnrollmentClip,
     Piece,
     Turn,
+    clamped,
+    fetch_diarizer,
     name_speakers,
     padded_spans,
     pieces_for,
     speaker_for_segment,
-    to_joined,
 )
 
 ENROLLMENT = SPEECH / "en_enroll.opus"
@@ -120,6 +125,19 @@ def test_a_missing_voices_folder_is_not_an_error(tmp_path: Path) -> None:
     assert "warning" not in empty.stderr
     assert "warning" in missing.stderr
     assert "nowhere" in missing.stderr
+
+
+def test_a_voices_path_that_is_a_file_is_refused_as_not_a_folder(tmp_path: Path) -> None:
+    source = recording(tmp_path, AudioClip(ENGLISH, at=6))
+    clip = tmp_path / "alice.opus"
+    shutil.copy(ENROLLMENT, clip)
+
+    result = analyse(source, tmp_path, "--voices", str(clip))
+
+    assert result.returncode == 1
+    assert "is not a folder" in result.stderr
+    assert "does not exist" not in result.stderr
+    assert "Traceback" not in result.stderr
 
 
 def test_a_voices_folder_in_the_working_directory_is_used(tmp_path: Path) -> None:
@@ -285,12 +303,64 @@ def test_padded_spans_merge_neighbours_and_stay_inside_the_recording() -> None:
     assert spans == [(0.0, 5.0), (19.0, 22.0), (98.0, 100.0)]
 
 
-def test_a_source_time_maps_into_the_joined_audio() -> None:
-    spans = [(10.0, 14.0), (30.0, 33.0)]
-
-    pieces = pieces_for(spans, gap=0.5)
+def test_a_source_time_maps_into_the_joined_audio_or_its_nearest_edge() -> None:
+    pieces = pieces_for([(10.0, 14.0), (30.0, 33.0)], gap=0.5)
 
     assert pieces == [Piece(10.0, 0.0, 4.0), Piece(30.0, 4.5, 3.0)]
-    assert to_joined(pieces, 11.0) == 1.0
-    assert to_joined(pieces, 31.0) == 5.5
-    assert to_joined(pieces, 20.0) is None
+    assert clamped(pieces, 11.0) == 1.0
+    assert clamped(pieces, 31.0) == 5.5
+    assert clamped(pieces, 20.0) == 4.0
+    assert clamped(pieces, 28.0) == 4.5
+    assert clamped(pieces, 5.0) == 0.0
+    assert clamped(pieces, 99.0) == 7.5
+
+
+class Torch:
+    @staticmethod
+    def from_numpy(array: np.ndarray) -> np.ndarray:
+        return array
+
+
+def failing(_: object) -> object:
+    raise RuntimeError("boom")
+
+
+def test_the_pinned_mirror_is_fetched_without_a_token_and_other_models_with_one(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[dict[str, Any]] = []
+
+    def snapshot_download(model: str, **options: Any) -> str:
+        calls.append({"model": model, **options})
+        return "/cache/model"
+
+    monkeypatch.setattr("huggingface_hub.snapshot_download", snapshot_download)
+
+    fetch_diarizer(DIARIZATION_REPO)
+    fetch_diarizer("pyannote/speaker-diarization-community-1")
+
+    [mirror, original] = calls
+    assert mirror["token"] is False
+    assert mirror["revision"] is not None
+    assert original["token"] is None
+    assert original["revision"] is None
+
+
+def test_an_enrollment_clip_that_cannot_be_embedded_is_an_error_naming_it() -> None:
+    diarizer = Diarizer(object(), failing, Torch)
+    clip = EnrollmentClip("alice", np.zeros(16000, dtype="float32"))
+
+    with pytest.raises(SpeechError, match=r"alice.*--no-speech"):
+        diarizer.enroll([clip])
+
+
+def test_a_pipeline_without_the_expected_result_is_a_speech_error() -> None:
+    diarizer = Diarizer(lambda _: object(), failing, Torch)
+
+    with pytest.raises(SpeechError, match="diarization model failed"):
+        diarizer.diarize(np.zeros(16000, dtype="float32"))
+
+
+def test_a_diarization_folder_without_an_embedder_is_a_speech_error(tmp_path: Path) -> None:
+    with pytest.raises(SpeechError, match="embedding/"):
+        Diarizer.load(tmp_path)

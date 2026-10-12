@@ -121,14 +121,8 @@ def pieces_for(spans: Sequence[tuple[float, float]], gap: float) -> list[Piece]:
     return pieces
 
 
-def to_joined(pieces: Sequence[Piece], source: float) -> float | None:
-    for piece in pieces:
-        if piece.source <= source <= piece.source + piece.length:
-            return piece.joined + source - piece.source
-    return None
-
-
-def _clamped(pieces: Sequence[Piece], source: float) -> float:
+def clamped(pieces: Sequence[Piece], source: float) -> float:
+    """Where `source` sits in the joined audio, or its nearest edge when it falls in a gap."""
     piece = min(pieces, key=lambda p: max(p.source - source, source - p.source - p.length, 0.0))
     return piece.joined + min(max(source - piece.source, 0.0), piece.length)
 
@@ -184,7 +178,7 @@ def fetch_diarizer(model: str) -> Path:
             snapshot_download(
                 model,
                 revision=DIARIZATION_REVISION if model == DIARIZATION_REPO else None,
-                token=False,
+                token=False if model == DIARIZATION_REPO else None,
                 local_files_only=local_only,
                 ignore_patterns=["*.gif", "*.md"],
             )
@@ -211,6 +205,11 @@ class Diarizer:
 
     @classmethod
     def load(cls, folder: Path) -> "Diarizer":
+        if not (folder / "embedding").is_dir():
+            raise SpeechError(
+                f"the diarization model {str(folder)!r} has no embedding/ folder, "
+                "which a community-1 pipeline ships; pass --no-speech to skip speech"
+            )
         try:
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore")
@@ -241,18 +240,33 @@ class Diarizer:
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore", UserWarning)
                 result = self._pipeline(self._input(audio))
+            tracks = result.exclusive_speaker_diarization.itertracks(yield_label=True)
+            return [
+                Turn(float(span.start), float(span.end), str(label)) for span, _, label in tracks
+            ]
         except Exception as error:
             raise SpeechError(
                 f"the diarization model failed: {error}; pass --no-speech to skip speech"
             ) from error
-        tracks = result.exclusive_speaker_diarization.itertracks(yield_label=True)
-        return [Turn(float(span.start), float(span.end), str(label)) for span, _, label in tracks]
 
-    def embed(self, audio: np.ndarray) -> np.ndarray | None:
+    def embed(self, audio: np.ndarray) -> np.ndarray:
         try:
             return np.asarray(self._embedder(self._input(audio)), dtype="float32").ravel()
-        except Exception:
-            return None
+        except Exception as error:
+            raise SpeechError(
+                f"the voice embedder failed: {error}; pass --no-speech to skip speech"
+            ) from error
+
+    def enroll(self, clips: Sequence[EnrollmentClip]) -> list[EnrolledVoice]:
+        voices: list[EnrolledVoice] = []
+        for clip in clips:
+            try:
+                voices.append(EnrolledVoice(clip.name, self.embed(clip.audio)))
+            except SpeechError as error:
+                raise SpeechError(
+                    f"cannot embed the voice clip for {clip.name!r}: {error}"
+                ) from error
+        return voices
 
 
 @functools.cache
@@ -269,14 +283,14 @@ def _speaker_embeddings(
             (t for t in turns if t.speaker == speaker and t.end - t.start >= MIN_TURN),
             key=lambda t: t.start - t.end,
         )[:MAX_TURNS]
-        vectors = [
-            vector
-            for t in longest
-            if (
-                vector := diarizer.embed(audio[int(t.start * AUDIO_RATE) : int(t.end * AUDIO_RATE)])
-            )
-            is not None
-        ]
+        vectors: list[np.ndarray] = []
+        for t in longest:
+            try:
+                vectors.append(
+                    diarizer.embed(audio[int(t.start * AUDIO_RATE) : int(t.end * AUDIO_RATE)])
+                )
+            except SpeechError:
+                continue
         if vectors:
             found[speaker] = np.mean(vectors, axis=0)
     return found
@@ -311,7 +325,7 @@ def label_segments(
     model = diarizer()
     turns = model.diarize(joined)
     labels = [
-        speaker_for_segment(_clamped(pieces, start), _clamped(pieces, end), turns)
+        speaker_for_segment(clamped(pieces, start), clamped(pieces, end), turns)
         for start, end in segments
     ]
     order = sorted(range(len(segments)), key=lambda i: segments[i])
@@ -319,10 +333,7 @@ def label_segments(
     embeddings: dict[str, np.ndarray] = {}
     enrolled: list[EnrolledVoice] = []
     if clips and owners:
-        for clip in clips:
-            vector = model.embed(clip.audio)
-            if vector is not None:
-                enrolled.append(EnrolledVoice(clip.name, vector))
+        enrolled = model.enroll(clips)
         embeddings = _speaker_embeddings(model, joined, turns, set(owners))
     names = name_speakers(embeddings, enrolled, owners)
     return [None if label is None else names[label] for label in labels]
