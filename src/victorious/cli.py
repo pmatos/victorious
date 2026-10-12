@@ -20,6 +20,7 @@ from victorious.ocr import OcrError
 from victorious.preview import render_preview
 from victorious.schema import json_schema
 from victorious.setup import AT_KINDS, SetupResult, TimeError, parse_at, run_setup
+from victorious.speech import DEFAULT_MODEL, SpeechError, SpeechOptions, require_ready
 from victorious.video import RecordingError
 
 SUBCOMMANDS: tuple[tuple[str, str], ...] = (
@@ -52,6 +53,16 @@ def _positive_int(text: str) -> int:
         raise argparse.ArgumentTypeError(f"not a whole number: {text!r}") from None
     if value < 1:
         raise argparse.ArgumentTypeError(f"must be at least 1, got {value}")
+    return value
+
+
+def _non_negative_int(text: str) -> int:
+    try:
+        value = int(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"not a whole number: {text!r}") from None
+    if value < 0:
+        raise argparse.ArgumentTypeError(f"must be at least 0, got {value}")
     return value
 
 
@@ -114,6 +125,22 @@ def build_parser() -> argparse.ArgumentParser:
                 type=Path,
                 help="write every raw reading here as JSON lines, one per HUD element per second",
             )
+            sub.add_argument(
+                "--audio-stream",
+                type=_non_negative_int,
+                default=0,
+                metavar="N",
+                help="transcribe the Nth audio stream of the Recording, counting from 0 "
+                "(default: 0, the first)",
+            )
+            sub.add_argument(
+                "--no-speech",
+                action="store_true",
+                default=bool(os.environ.get("VICTORIOUS_NO_SPEECH")),
+                help="skip transcription: no models are loaded and no Hugging Face token is "
+                "needed (default when VICTORIOUS_NO_SPEECH is set)",
+            )
+            sub.add_argument("--whisper-model", default=DEFAULT_MODEL, help=argparse.SUPPRESS)
         if name == "setup":
             sub.add_argument("recording", type=Path, help="the Recording to read the HUD from")
             sub.add_argument(
@@ -186,11 +213,23 @@ def _require_distinct(observations: Path | None, output: Path | None) -> None:
 
 
 def _run_analyse(args: argparse.Namespace) -> tuple[str, str | None]:
+    speech = (
+        None
+        if args.no_speech
+        else SpeechOptions(audio_stream=args.audio_stream, model=args.whisper_model)
+    )
+    if speech is not None:
+        require_ready()
     layouts = load_layouts(args.layout)
     cache = None if args.no_cache else ObservationCache(args.cache_dir or default_cache_root())
     started = time.monotonic()
     analysis = analyse_with_observations(
-        args.recording, layouts, jobs=args.jobs, chunk_seconds=args.chunk_seconds, cache=cache
+        args.recording,
+        layouts,
+        jobs=args.jobs,
+        chunk_seconds=args.chunk_seconds,
+        cache=cache,
+        speech=speech,
     )
     state = "off" if cache is None else "hit" if analysis.cached else "miss"
     elapsed = time.monotonic() - started
@@ -201,10 +240,12 @@ def _run_analyse(args: argparse.Namespace) -> tuple[str, str | None]:
                 f"victorious analyse: warning: {warning.code}: {warning.message}", file=sys.stderr
             )
     else:
+        count = analysis.speech_segments
+        spoken = "" if count is None else f", speech {count} segment{'s' if count != 1 else ''}"
         print(
             f"victorious analyse: layout {chosen.path} (score {chosen.score:.2f}, "
             f"{analysis.candidates} candidate{'s' if analysis.candidates != 1 else ''}), "
-            f"cache {state}, {elapsed:.1f} s",
+            f"cache {state}{spoken}, {elapsed:.1f} s",
             file=sys.stderr,
         )
     text = analysis.output.model_dump_json(indent=2) + "\n"
@@ -321,7 +362,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         if sidecar is not None:
             _emit(sidecar, args.observations)
         _emit(text, args.output)
-    except (LayoutError, RecordingError, OcrError, ValidationError, OSError, cv2.error) as error:
+    except (
+        LayoutError,
+        RecordingError,
+        OcrError,
+        SpeechError,
+        ValidationError,
+        OSError,
+        cv2.error,
+    ) as error:
         print(f"victorious {args.command}: {error}", file=sys.stderr)
         return 1
     return 0

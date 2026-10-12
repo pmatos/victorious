@@ -1,6 +1,12 @@
+import os
 import shutil
+from pathlib import Path
 
 import pytest
+
+REAL_HF_HOME = os.environ.get("HF_HOME") or str(
+    Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache") / "huggingface"
+)
 
 
 @pytest.fixture(scope="session")
@@ -29,3 +35,10 @@ def isolated_cache(
     tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path_factory.mktemp("xdg-cache")))
+
+
+@pytest.fixture(autouse=True)
+def speech_is_off_and_models_are_kept(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keeps `analyse` model-free by default, and the model cache out of the isolated cache."""
+    monkeypatch.setenv("VICTORIOUS_NO_SPEECH", "1")
+    monkeypatch.setenv("HF_HOME", REAL_HF_HOME)
