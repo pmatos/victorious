@@ -3,24 +3,32 @@
 import os
 from itertools import pairwise
 from pathlib import Path
+from typing import Annotated
 
 import numpy as np
 import pytest
+from pydantic import Field, TypeAdapter
 
 from tests.analyse_helpers import analyse_text
 from tests.synthetic import AudioClip, music_bed, music_with_speech, write_layout, write_wav
 from tests.test_speech import ENGLISH, PORTUGUESE, recording, run, transcripts
 from victorious.music import (
+    MODEL_FILE,
     MaskedWindow,
+    MusicTagger,
     SecondScore,
     masked_windows,
     merge_windows,
     silence,
     unmasked,
 )
-from victorious.schema import SIDECAR_RECORD, MaskedAudioRecord, ObservationRecord
+from victorious.schema import MaskedAudioRecord, ObservationRecord
+from victorious.speech import SpeechError
 
 CLIP_SECONDS = 4.0
+SIDECAR_RECORD: TypeAdapter[ObservationRecord | MaskedAudioRecord] = TypeAdapter(
+    Annotated[ObservationRecord | MaskedAudioRecord, Field(discriminator="element")]
+)
 
 pytestmark = pytest.mark.usefixtures("require_ffmpeg", "require_tesseract")
 
@@ -181,6 +189,22 @@ def test_a_missing_audio_tagger_fails_cleanly(tmp_path: Path) -> None:
     assert "--no-speech" in result.stderr
     assert "Traceback" not in result.stderr
     assert not output.exists()
+
+
+def test_a_corrupt_audio_tagger_fails_cleanly(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    model = tmp_path / MODEL_FILE
+    model.write_bytes(b"this is not an onnx model")
+    names = tmp_path / "names.csv"
+    names.write_text("display_name\nSpeech\nMusic\n")
+    monkeypatch.setattr(
+        "huggingface_hub.hf_hub_download",
+        lambda repo, name, **options: str(model if name == MODEL_FILE else names),
+    )
+
+    with pytest.raises(SpeechError, match="audio tagger"):
+        MusicTagger.load()
 
 
 def scores(*pairs: tuple[float, float]) -> list[SecondScore]:

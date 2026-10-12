@@ -1,8 +1,8 @@
 """The structure of `analyse` output, and its exported JSON Schema."""
 
-from typing import Annotated, Any, Literal
+from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
+from pydantic import BaseModel, ConfigDict, Field
 
 from victorious.layout import Rect
 
@@ -141,10 +141,6 @@ class MaskedAudioRecord(_Model):
     end: float = Field(ge=0, description="Seconds from the start of the Recording.")
     music: float = Field(ge=0, le=1, description="Mean per-second music score over the span.")
     speech: float = Field(ge=0, le=1, description="Mean per-second speech score over the span.")
-
-
-SidecarRecord = Annotated[ObservationRecord | MaskedAudioRecord, Field(discriminator="element")]
-SIDECAR_RECORD: TypeAdapter[ObservationRecord | MaskedAudioRecord] = TypeAdapter(SidecarRecord)
 
 
 class ChosenLayout(_Model):

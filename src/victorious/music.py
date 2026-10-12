@@ -1,10 +1,11 @@
 """Finding music-dominant audio, so that emote and lobby music is not read as lyrics."""
 
 import csv
+import functools
 import math
 import os
 from collections.abc import Iterable, Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -23,7 +24,6 @@ MUSIC_EDGE = 0.25
 MIN_MASK = 3
 MIN_SPEECH = 0.25
 BRIDGE = 1
-TAG_SECONDS = 300
 FRAME_HOP = 0.48
 FRAME_LENGTH = 0.96
 
@@ -49,19 +49,6 @@ class MaskedWindow:
     end: float
     music: float
     speech: float
-
-
-def _mean_window(
-    start: float, end: float, parts: Iterable[tuple[float, MaskedWindow]]
-) -> MaskedWindow:
-    weighted = list(parts)
-    total = sum(weight for weight, _ in weighted)
-    return MaskedWindow(
-        start,
-        end,
-        sum(weight * window.music for weight, window in weighted) / total,
-        sum(weight * window.speech for weight, window in weighted) / total,
-    )
 
 
 def masked_windows(
@@ -124,20 +111,27 @@ def masked_windows(
 
 def merge_windows(windows: Iterable[MaskedWindow]) -> list[MaskedWindow]:
     """The windows with those that overlap or touch joined, scores weighted by length."""
-    merged: list[list[MaskedWindow]] = []
+    groups: list[list[MaskedWindow]] = []
+    reach = -math.inf
     for window in sorted(windows, key=lambda w: (w.start, w.end)):
-        if merged and window.start <= max(w.end for w in merged[-1]):
-            merged[-1].append(window)
+        if groups and window.start <= reach:
+            groups[-1].append(window)
+            reach = max(reach, window.end)
         else:
-            merged.append([window])
-    return [
-        _mean_window(
-            group[0].start,
-            max(w.end for w in group),
-            ((w.end - w.start, w) for w in group),
+            groups.append([window])
+            reach = window.end
+    merged = []
+    for group in groups:
+        total = sum(w.end - w.start for w in group)
+        merged.append(
+            MaskedWindow(
+                group[0].start,
+                max(w.end for w in group),
+                sum((w.end - w.start) * w.music for w in group) / total,
+                sum((w.end - w.start) * w.speech for w in group) / total,
+            )
         )
-        for group in merged
-    ]
+    return merged
 
 
 def silence(audio: np.ndarray, windows: Iterable[MaskedWindow], offset: float) -> np.ndarray:
@@ -195,7 +189,7 @@ class MusicTagger:
     def load(cls) -> "MusicTagger":
         import onnxruntime
         from huggingface_hub import hf_hub_download
-        from huggingface_hub.errors import HfHubHTTPError, LocalEntryNotFoundError
+        from huggingface_hub.errors import LocalEntryNotFoundError
 
         def fetch(name: str, local_only: bool) -> Path:
             return Path(
@@ -224,17 +218,25 @@ class MusicTagger:
                 str(model), options, providers=["CPUExecutionProvider"]
             )
             return cls(session, names.index("Music"), names.index("Speech"))
-        except (HfHubHTTPError, OSError, ValueError, KeyError, RuntimeError) as error:
+        except Exception as error:
             raise SpeechError(
                 f"cannot load the audio tagger {MODEL_REPO!r}: {error}; "
                 "pass --no-speech to skip speech"
             ) from error
 
-    def tag(self, audio: np.ndarray) -> list[SecondScore]:
-        """One score per started second of `audio` (16 kHz mono float32)."""
+    def tag(self, audio: np.ndarray, first_second: int = 0) -> list[SecondScore]:
+        """One score per started second of `audio` (16 kHz mono float32), numbered from
+        `first_second`."""
         if len(audio) == 0:
             return []
-        frames = self._session.run(None, {"waveform": np.ascontiguousarray(audio, "float32")})[0]
+        try:
+            frames = self._session.run(None, {"waveform": np.ascontiguousarray(audio, "float32")})[
+                0
+            ]
+        except Exception as error:
+            raise SpeechError(
+                f"the audio tagger {MODEL_REPO!r} failed: {error}; pass --no-speech to skip speech"
+            ) from error
         seconds = math.ceil(len(audio) / AUDIO_RATE)
         scores = []
         for second in range(seconds):
@@ -244,7 +246,7 @@ class MusicTagger:
             part = frames[span.start : span.stop]
             scores.append(
                 SecondScore(
-                    second,
+                    first_second + second,
                     float(part[:, self._music].mean()),
                     float(part[:, self._speech].max()),
                 )
@@ -252,5 +254,6 @@ class MusicTagger:
         return scores
 
 
-def shifted(scores: Iterable[SecondScore], seconds: int) -> list[SecondScore]:
-    return [replace(score, second=score.second + seconds) for score in scores]
+@functools.cache
+def load_tagger() -> MusicTagger:
+    return MusicTagger.load()

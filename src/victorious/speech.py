@@ -52,7 +52,7 @@ class Segment:
 
 
 def require_ready() -> None:
-    """Fails when no Hugging Face token is set, before anything is read or decoded."""
+    """Fails without a Hugging Face token or a loadable audio tagger, before any read or decode."""
     from huggingface_hub import get_token
 
     if not get_token():
@@ -60,6 +60,9 @@ def require_ready() -> None:
             "no Hugging Face token found: set HF_TOKEN (or run `hf auth login`), "
             "or pass --no-speech to skip speech"
         )
+    from victorious.music import load_tagger
+
+    load_tagger()
 
 
 def require_audio_stream(info: VideoInfo, options: SpeechOptions) -> None:
@@ -279,9 +282,8 @@ def _music_masks(
     path: Path, spans: Sequence[tuple[float, float]], options: SpeechOptions
 ) -> list["MaskedWindow"]:
     """Where each span of audio is music-dominant, scored one second at a time."""
-    from victorious.music import MusicTagger, SecondScore, masked_windows, merge_windows, shifted
+    from victorious.music import SecondScore, load_tagger, masked_windows, merge_windows
 
-    tagger: MusicTagger | None = None
     found: list[MaskedWindow] = []
     for begin, end in spans:
         scores: list[SecondScore] = []
@@ -292,9 +294,7 @@ def _music_masks(
             audio = sample_audio(path, piece, stop, options.audio_stream)
             if len(audio) == 0:
                 break
-            if tagger is None:
-                tagger = MusicTagger.load()
-            scores += shifted(tagger.tag(audio), round(piece - begin))
+            scores += load_tagger().tag(audio, round(piece - begin))
             length += len(audio) / AUDIO_RATE
             piece = stop
         found += masked_windows(scores, begin, length)
