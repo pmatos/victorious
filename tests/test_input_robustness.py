@@ -314,7 +314,7 @@ def test_an_unparsable_container_time_is_null(creation_time: str) -> None:
 def test_the_schema_names_the_new_fields() -> None:
     schema = json_schema()
 
-    assert schema["schema_version"] == "1.4"
+    assert schema["schema_version"] == "1.5"
     assert "started_at" in schema["$defs"]["RecordingInfo"]["properties"]
     assert "warnings" in schema["properties"]
     assert {"type": "null"} in schema["properties"]["layout"]["anyOf"]

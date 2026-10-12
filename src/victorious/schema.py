@@ -6,7 +6,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from victorious.layout import Rect
 
-SCHEMA_VERSION = "1.4"
+SCHEMA_VERSION = "1.5"
 
 CounterElement = Literal["personal_eliminations", "team_eliminations", "players_left"]
 EventKind = Literal[
@@ -56,6 +56,12 @@ class Event(_Model):
     language: SpeechLanguage | None = Field(
         description="The language spoken, English or Portuguese, for transcript only."
     )
+    speaker: str | None = Field(
+        description=(
+            "Who spoke, for transcript only: the name of the enrolled voice it matched, else "
+            "unknown_N, numbered from 1 in order of first appearance within the Recording."
+        )
+    )
 
 
 def _unit(value: float) -> float:
@@ -80,11 +86,17 @@ def frame_event(
         element=element,
         text=None,
         language=None,
+        speaker=None,
     )
 
 
 def transcript_event(
-    text: str, language: SpeechLanguage, start: float, end: float, confidence: float
+    text: str,
+    language: SpeechLanguage,
+    start: float,
+    end: float,
+    confidence: float,
+    speaker: str | None = None,
 ) -> Event:
     return Event(
         kind="transcript",
@@ -96,6 +108,7 @@ def transcript_event(
         element=None,
         text=text,
         language=language,
+        speaker=speaker,
     )
 
 
@@ -156,7 +169,7 @@ class AnalysisWarning(_Model):
 
 
 class AnalysisOutput(_Model):
-    schema_version: Literal["1.4"] = SCHEMA_VERSION  # type: ignore[assignment]
+    schema_version: Literal["1.5"] = SCHEMA_VERSION  # type: ignore[assignment]
     recording: RecordingInfo
     layout: ChosenLayout | None = Field(
         description="The Layout used, null when no in-match HUD was found to choose one."

@@ -6,12 +6,13 @@ import math
 import os
 import re
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 
+from victorious.errors import SpeechError
 from victorious.music import (
     MaskedWindow,
     SecondScore,
@@ -22,6 +23,14 @@ from victorious.music import (
     unmasked,
 )
 from victorious.schema import Event, Match, SpeechLanguage, transcript_event
+from victorious.speakers import (
+    DIARIZATION_REPO,
+    UNKNOWN_PREFIX,
+    label_segments,
+    load_clips,
+    load_diarizer,
+    padded_spans,
+)
 from victorious.video import AUDIO_RATE, VideoInfo, sample_audio
 
 MARGIN = 10.0
@@ -38,14 +47,12 @@ AMBIGUITY = 0.5
 DEFAULT_MODEL = "small"
 
 
-class SpeechError(Exception):
-    """Speech cannot be transcribed as asked."""
-
-
 @dataclass(frozen=True)
 class SpeechOptions:
     audio_stream: int = 0
     model: str = DEFAULT_MODEL
+    voices: Path | None = None
+    diarization_model: str = DIARIZATION_REPO
 
 
 @dataclass(frozen=True)
@@ -55,10 +62,12 @@ class Segment:
     start: float
     end: float
     confidence: float
+    speaker: str | None = None
 
 
-def require_ready() -> None:
-    """Fails without a Hugging Face token or a loadable audio tagger, before any read or decode."""
+def require_ready(options: SpeechOptions | None = None) -> None:
+    """Fails without a Hugging Face token, a loadable audio tagger or diarization model, or a
+    usable voices folder, before any read or decode of the Recording."""
     from huggingface_hub import get_token
 
     if not get_token():
@@ -67,6 +76,9 @@ def require_ready() -> None:
             "or pass --no-speech to skip speech"
         )
     load_tagger()
+    options = options or SpeechOptions()
+    clips = load_clips(options.voices)
+    load_diarizer(options.diarization_model).enroll(clips)
 
 
 def require_audio_stream(info: VideoInfo, options: SpeechOptions) -> None:
@@ -268,16 +280,31 @@ class SpeechResult:
     matches: list[Match]
     segments: int
     masked: list[MaskedWindow]
+    speakers: int = 0
+    enrolled: int = 0
 
 
 def _merged_spans(windows: Sequence[tuple[float, float]]) -> list[tuple[float, float]]:
-    spans: list[tuple[float, float]] = []
-    for begin, end in sorted(window for window in windows if window[1] > window[0]):
-        if spans and begin <= spans[-1][1]:
-            spans[-1] = (spans[-1][0], max(spans[-1][1], end))
-        else:
-            spans.append((begin, end))
-    return spans
+    return padded_spans([window for window in windows if window[1] > window[0]], 0.0, math.inf)
+
+
+def outside_spans(
+    spans: Sequence[tuple[float, float]], begin: float, end: float
+) -> list[MaskedWindow]:
+    """The parts of [begin, end) that lie outside the sorted, disjoint `spans`."""
+    gaps: list[MaskedWindow] = []
+    cursor = begin
+    for start, stop in spans:
+        if stop <= cursor:
+            continue
+        if start >= end:
+            break
+        if start > cursor:
+            gaps.append(MaskedWindow(cursor, start, 0.0, 0.0))
+        cursor = stop
+    if cursor < end:
+        gaps.append(MaskedWindow(cursor, end, 0.0, 0.0))
+    return gaps
 
 
 def _music_masks(
@@ -310,10 +337,12 @@ def transcribe_matches(
     Music-dominant seconds are decided once per Recording second and returned. Each window's
     speech spans are found on its own audio, then cut at the masked seconds, which are
     silenced before the language is detected and the speech is read. Each model is loaded on
-    the first window it needs.
+    the first window it needs. The Speakers are told apart once over all the segments, so a
+    voice keeps its label across Matches.
     """
     windows = [_window(match, info.duration) for match in matches]
-    masked = _music_masks(path, _merged_spans(windows), options)
+    spans = _merged_spans(windows)
+    masked = _music_masks(path, spans, options)
     segments: list[list[Segment]] = [[] for _ in matches]
     model: Any = None
     for index, (begin, end) in enumerate(windows):
@@ -327,18 +356,42 @@ def transcribe_matches(
         for segment in _transcribe_window(model, audio, begin, masked):
             if _owner(segment, index, windows, matches) == index:
                 segments[index].append(segment)
+    flat = [(index, segment) for index, found in enumerate(segments) for segment in found]
+    labels = label_segments(
+        [(segment.start, segment.end) for _, segment in flat],
+        info.duration,
+        lambda begin, end: silence(
+            sample_audio(path, begin, end, options.audio_stream),
+            [*masked, *outside_spans(spans, begin, end)],
+            begin,
+        ),
+        lambda: load_diarizer(options.diarization_model),
+        load_clips(options.voices) if flat else (),
+    )
+    spoken: list[list[Segment]] = [[] for _ in matches]
+    for (index, segment), speaker in zip(flat, labels, strict=True):
+        spoken[index].append(replace(segment, speaker=speaker))
     result = [
         match.model_copy(
             update={
                 "events": _merged(
                     match.events,
                     [
-                        transcript_event(s.text, s.language, s.start, s.end, s.confidence)
+                        transcript_event(
+                            s.text, s.language, s.start, s.end, s.confidence, s.speaker
+                        )
                         for s in found
                     ],
                 )
             }
         )
-        for match, found in zip(matches, segments, strict=True)
+        for match, found in zip(matches, spoken, strict=True)
     ]
-    return SpeechResult(result, sum(len(found) for found in segments), masked)
+    heard = {label for label in labels if label is not None}
+    return SpeechResult(
+        result,
+        len(flat),
+        masked,
+        speakers=len(heard),
+        enrolled=sum(not label.startswith(UNKNOWN_PREFIX) for label in heard),
+    )

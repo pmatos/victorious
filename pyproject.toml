@@ -11,7 +11,10 @@ dependencies = [
     "onnxruntime>=1.31.0",
     "opencv-python>=5.0.0.93",
     "pydantic>=2.14.0",
+    "pyannote-audio>=4.0.7",
     "pyyaml>=6.0.3",
+    "torch>=2.14.1",
+    "torchaudio>=2.11.0",
 ]
 
 [project.scripts]
@@ -36,12 +39,21 @@ dev = [
     "types-pyyaml>=6.0.12.20260906",
 ]
 
+[tool.uv.sources]
+torch = { index = "pytorch-cpu", marker = "sys_platform == 'linux'" }
+torchaudio = { index = "pytorch-cpu", marker = "sys_platform == 'linux'" }
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
 [tool.mypy]
 files = ["."]
 strict = true
 
 [[tool.mypy.overrides]]
-module = ["cv2.*", "faster_whisper.*", "onnxruntime.*"]
+module = ["cv2.*", "faster_whisper.*", "onnxruntime.*", "pyannote.*", "torch.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

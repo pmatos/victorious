@@ -13,6 +13,7 @@ from pydantic import ValidationError
 
 from victorious.analysis import analyse_with_observations
 from victorious.cache import ObservationCache, default_cache_root
+from victorious.errors import SpeechError
 from victorious.layout import LayoutError, dump_layout, load_layouts
 from victorious.manual import serve_manual
 from victorious.observations import records
@@ -20,7 +21,8 @@ from victorious.ocr import OcrError
 from victorious.preview import render_preview
 from victorious.schema import MaskedAudioRecord, json_schema
 from victorious.setup import AT_KINDS, SetupResult, TimeError, parse_at, run_setup
-from victorious.speech import DEFAULT_MODEL, SpeechError, SpeechOptions, require_ready
+from victorious.speakers import DIARIZATION_REPO
+from victorious.speech import DEFAULT_MODEL, SpeechOptions, require_ready
 from victorious.video import RecordingError
 
 SUBCOMMANDS: tuple[tuple[str, str], ...] = (
@@ -134,7 +136,18 @@ def build_parser() -> argparse.ArgumentParser:
                 help="skip transcription: no models are loaded and no Hugging Face token is "
                 "needed (default when VICTORIOUS_NO_SPEECH is set)",
             )
+            sub.add_argument(
+                "--voices",
+                type=Path,
+                metavar="DIR",
+                help="enroll known Speakers from short clips in this folder, one per person and "
+                "named by file (voices/alice.wav is alice); other voices are unknown_N "
+                "(default: ./voices if it exists)",
+            )
             sub.add_argument("--whisper-model", default=DEFAULT_MODEL, help=argparse.SUPPRESS)
+            sub.add_argument(
+                "--diarization-model", default=DIARIZATION_REPO, help=argparse.SUPPRESS
+            )
         if name == "setup":
             sub.add_argument("recording", type=Path, help="the Recording to read the HUD from")
             sub.add_argument(
@@ -209,8 +222,24 @@ def _require_distinct(observations: Path | None, output: Path | None) -> None:
 def _run_analyse(args: argparse.Namespace) -> tuple[str, str | None]:
     speech = None
     if not args.no_speech:
-        require_ready()
-        speech = SpeechOptions(audio_stream=args.audio_stream, model=args.whisper_model)
+        if args.voices is not None and not args.voices.is_dir():
+            if args.voices.exists():
+                raise SpeechError(
+                    f"--voices {args.voices} is not a folder; give the folder of enrollment "
+                    "clips or pass --no-speech to skip speech"
+                )
+            print(
+                f"victorious analyse: warning: voices folder {args.voices} does not exist; "
+                "every voice will be unknown_N",
+                file=sys.stderr,
+            )
+        speech = SpeechOptions(
+            audio_stream=args.audio_stream,
+            model=args.whisper_model,
+            voices=args.voices or Path("voices"),
+            diarization_model=args.diarization_model,
+        )
+        require_ready(speech)
     layouts = load_layouts(args.layout)
     cache = None if args.no_cache else ObservationCache(args.cache_dir or default_cache_root())
     started = time.monotonic()
@@ -236,6 +265,8 @@ def _run_analyse(args: argparse.Namespace) -> tuple[str, str | None]:
         silenced = round(sum(window.end - window.start for window in analysis.masked))
         if silenced:
             spoken += f", music masked {silenced} s"
+        if count is not None:
+            spoken += f", speakers {analysis.speakers} (enrolled {analysis.enrolled})"
         print(
             f"victorious analyse: layout {chosen.path} (score {chosen.score:.2f}, "
             f"{analysis.candidates} candidate{'s' if analysis.candidates != 1 else ''}), "
