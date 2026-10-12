@@ -136,7 +136,7 @@ def build_parser() -> argparse.ArgumentParser:
             sub.add_argument(
                 "--no-speech",
                 action="store_true",
-                default=bool(os.environ.get("VICTORIOUS_NO_SPEECH")),
+                default=os.environ.get("VICTORIOUS_NO_SPEECH", "").lower() in {"1", "true", "yes"},
                 help="skip transcription: no models are loaded and no Hugging Face token is "
                 "needed (default when VICTORIOUS_NO_SPEECH is set)",
             )

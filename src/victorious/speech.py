@@ -160,15 +160,15 @@ def _distance(second: float, match: Match) -> float:
 
 
 def _owner(
-    segment: Segment, windows: Sequence[tuple[float, float]], matches: Sequence[Match]
+    segment: Segment, source: int, windows: Sequence[tuple[float, float]], matches: Sequence[Match]
 ) -> int:
     """The Match a segment belongs to: of those whose window it touches, the nearest to it."""
     midpoint = (segment.start + segment.end) / 2
-    touching = [
+    touching = {
         index
         for index, (begin, end) in enumerate(windows)
         if segment.start < end and segment.end > begin
-    ]
+    } | {source}
     return min(touching, key=lambda index: (_distance(midpoint, matches[index]), index))
 
 
@@ -207,7 +207,7 @@ def transcribe_matches(
         if model is None:
             model = _load_model(options.model)
         for segment in _transcribe_window(model, audio, begin):
-            if _owner(segment, windows, matches) == index:
+            if _owner(segment, index, windows, matches) == index:
                 segments[index].append(segment)
     result = [
         match.model_copy(

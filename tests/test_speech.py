@@ -37,11 +37,13 @@ def ffmpeg(*arguments: str | Path) -> None:
     subprocess.run([tool, "-v", "error", "-y", *map(str, arguments)], check=True)
 
 
-def recording(tmp_path: Path, *clips: AudioClip, name: str = "recording.mkv") -> Path:
-    """Two Matches, 5-25 s and 65-85 s, in a 100 s Recording with `clips` mixed in."""
+def recording(
+    tmp_path: Path, *clips: AudioClip, name: str = "recording.mkv", second: int = 65
+) -> Path:
+    """Two Matches, 5-25 s and `second` + 20 s, in a 100 s Recording with `clips` mixed in."""
     shots = (
         *match_shots(5, STEADY, results_at=25, placement=1),
-        *match_shots(65, STEADY, results_at=85, placement=6),
+        *match_shots(second, STEADY, results_at=second + 20, placement=6),
     )
     return build_recording(replace(small(100, shots), audio=clips), tmp_path / name)
 
@@ -96,13 +98,17 @@ def test_speech_just_after_the_results_screen_is_kept(tmp_path: Path) -> None:
     assert transcripts(second) == []
 
 
-def test_speech_between_two_matches_belongs_to_the_nearer_one(tmp_path: Path) -> None:
-    source = recording(tmp_path, AudioClip(ENGLISH, at=60), AudioClip(ENGLISH, at=29))
+@pytest.mark.parametrize(("at", "owner"), [(27, 0), (31, 1)])
+def test_speech_in_two_overlapping_margins_belongs_to_the_nearer_match(
+    tmp_path: Path, at: int, owner: int
+) -> None:
+    source = recording(tmp_path, AudioClip(ENGLISH, at=at), second=40)
 
-    first, second = run(source, tmp_path)["matches"]
+    matches = run(source, tmp_path)["matches"]
 
-    assert [event["time"] for event in transcripts(first)] == pytest.approx([29], abs=1.5)
-    assert [event["time"] for event in transcripts(second)] == pytest.approx([60], abs=1.5)
+    assert [len(transcripts(match)) for match in matches] == [1 - owner, owner]
+    [event] = transcripts(matches[owner])
+    assert abs(event["time"] - at) < 1.5
 
 
 def test_no_speech_skips_transcription_and_models(tmp_path: Path) -> None:
