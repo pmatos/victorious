@@ -17,6 +17,7 @@ from victorious.categorize import KEY_VARIABLE, jev_from_env
 from victorious.errors import SpeechError
 from victorious.labels import (
     DEFAULT_TOLERANCE,
+    Labels,
     LabelsError,
     compare,
     format_differences,
@@ -27,7 +28,7 @@ from victorious.manual import serve_manual
 from victorious.observations import records
 from victorious.ocr import OcrError
 from victorious.preview import render_preview
-from victorious.review import ReviewError, load_analysis
+from victorious.review import ReviewError, extract_frames, load_analysis, serve_review
 from victorious.schema import MaskedAudioRecord, json_schema
 from victorious.setup import AT_KINDS, SetupResult, TimeError, parse_at, run_setup
 from victorious.speakers import DIARIZATION_REPO
@@ -452,6 +453,44 @@ def _review_arguments_error(args: argparse.Namespace) -> str | None:
     return None
 
 
+def _run_review(args: argparse.Namespace) -> int:
+    output = load_analysis(args.analysis)
+    labels_path: Path = args.output or args.analysis.with_name(f"{args.analysis.stem}.labels.json")
+    recording: Path = args.recording or Path(output.recording.path)
+    _require_writable_directory(labels_path)
+    if not recording.is_file():
+        raise RecordingError(
+            f"Recording not found: {recording} (pass --recording PATH to say where it is)"
+        )
+    if labels_path.resolve() in (args.analysis.resolve(), recording.resolve()):
+        raise OSError(f"--output must not name the analysis or the Recording: {labels_path}")
+    frames = extract_frames(recording, output)
+
+    def write(labels: Labels) -> None:
+        _emit(labels.model_dump_json(indent=2) + "\n", labels_path)
+        confirmed = sum(item.verdict == "confirmed" for item in labels.matches)
+        print(
+            f"victorious review: wrote {labels_path} ({confirmed} confirmed, "
+            f"{len(labels.matches) - confirmed} rejected)",
+            file=sys.stderr,
+        )
+
+    saved = serve_review(
+        output,
+        frames,
+        port=args.port or 0,
+        open_browser=not args.no_browser,
+        announce=lambda url: print(
+            f"victorious review: serving {url} (Ctrl-C to cancel)", file=sys.stderr, flush=True
+        ),
+        commit=write,
+    )
+    if saved is None:
+        print("victorious review: cancelled, nothing written", file=sys.stderr)
+        return 1
+    return 0
+
+
 def _run_compare(args: argparse.Namespace) -> int:
     output = load_analysis(args.analysis)
     tolerance = DEFAULT_TOLERANCE if args.tolerance is None else args.tolerance
@@ -474,7 +513,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             if problem is not None:
                 print(f"victorious review: error: {problem}", file=sys.stderr)
                 return 2
-            return _run_compare(args)
+            return _run_compare(args) if args.against is not None else _run_review(args)
         _require_writable_directory(args.output)
         sidecar: str | None = None
         if args.command == "schema":

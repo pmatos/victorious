@@ -11,18 +11,22 @@ import time
 import urllib.error
 import urllib.request
 from collections.abc import Mapping
+from pathlib import Path
 from typing import Any
 
 ANNOUNCED = re.compile(r"http://127\.0\.0\.1:\d+/[\w-]+/")
 
 
 class RunningCli:
-    def __init__(self, *args: str, env: Mapping[str, str] | None = None) -> None:
+    def __init__(
+        self, *args: str, env: Mapping[str, str] | None = None, cwd: Path | None = None
+    ) -> None:
         self.process = subprocess.Popen(
             [sys.executable, "-m", "victorious", *args],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
+            cwd=cwd,
             env={**os.environ, **env} if env else None,
         )
         self.lines: list[str] = []

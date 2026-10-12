@@ -76,7 +76,7 @@ def _present(match: Match | None) -> Match:
 
 
 def labels_from(output: AnalysisOutput, verdicts: Mapping[int, Verdict]) -> Labels:
-    """The labels of `output` with the verdict of each Match, by position in `matches`."""
+    """The labels of `output` with the verdict of each Match, by its `index`."""
     return Labels(
         recording=LabelsRecording(path=output.recording.path, duration=output.recording.duration),
         analysis=LabelsAnalysis(
@@ -87,12 +87,12 @@ def labels_from(output: AnalysisOutput, verdicts: Mapping[int, Verdict]) -> Labe
             LabelledMatch(
                 start=match.start,
                 end=match.end,
-                verdict=verdicts[position],
+                verdict=verdicts[match.index],
                 win=match.win,
                 placement=match.placement,
                 personal_eliminations=match.personal_eliminations,
             )
-            for position, match in enumerate(output.matches)
+            for match in output.matches
         ],
     )
 

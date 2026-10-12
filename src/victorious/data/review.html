@@ -1,0 +1,250 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>victorious review</title>
+<link rel="icon" href="data:,">
+<style>
+:root {
+  color-scheme: light dark;
+  --bg: #f6f7f9; --panel: #ffffff; --text: #16181d; --muted: #5c6370; --line: #cdd2da;
+  --accent: #0b6bcb; --bad: #c0262d; --ok: #1f7a35; --win: #1f9d3a;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #14161a; --panel: #1d2026; --text: #e8eaee; --muted: #9aa1ad; --line: #3a3f48;
+    --accent: #5aa7ff; --bad: #ff7b80; --ok: #6fdc8c; --win: #4ade6b;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text);
+  font: 15px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+header, main, .bar > div { max-width: 1680px; margin: 0 auto; padding: 0 16px; }
+h1 { font-size: 20px; margin: 16px 0 4px; }
+p { margin: 4px 0; color: var(--muted); }
+.bar { position: sticky; top: 0; z-index: 5; background: var(--bg); padding: 10px 0;
+  border-bottom: 1px solid var(--line); }
+.bar > div { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+#progress { font-weight: 600; }
+button { border: 1px solid var(--line); background: var(--panel); color: var(--text);
+  border-radius: 6px; padding: 6px 14px; cursor: pointer; font: inherit; }
+button.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+button[aria-pressed="true"].confirm { background: var(--ok); border-color: var(--ok); color: #fff; }
+button[aria-pressed="true"].reject { background: var(--bad); border-color: var(--bad); color: #fff; }
+button:disabled { opacity: 0.5; cursor: not-allowed; }
+#status.bad { color: var(--bad); }
+#status.ok { color: var(--ok); }
+ul#problems { margin: 6px 0 0; padding-left: 20px; color: var(--bad); }
+ol#cards { list-style: none; margin: 16px 0; padding: 0; display: grid; gap: 16px; }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 12px; }
+.card:focus-visible { outline: 2px solid var(--accent); }
+.card.decided-confirmed { border-left: 6px solid var(--ok); }
+.card.decided-rejected { border-left: 6px solid var(--bad); }
+.head { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: baseline; }
+.head h2 { font-size: 16px; margin: 0; }
+.badge { padding: 1px 8px; border-radius: 999px; border: 1px solid var(--line); font-size: 13px; }
+.badge.win { border-color: var(--win); color: var(--win); font-weight: 600; }
+dl.values { display: flex; flex-wrap: wrap; gap: 4px 18px; margin: 8px 0; }
+dl.values div { display: flex; gap: 6px; }
+dl.values dt { color: var(--muted); }
+dl.values dd { margin: 0; font-variant-numeric: tabular-nums; }
+.frames { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 420px), 1fr)); gap: 12px; }
+figure { margin: 0; }
+figure img { width: 100%; height: auto; display: block; background: #000; border: 1px solid var(--line); }
+figcaption { color: var(--muted); font-size: 13px; margin-top: 4px; }
+figcaption.warn { color: var(--bad); }
+.verdicts { display: flex; gap: 8px; margin-top: 10px; align-items: center; }
+.hint { color: var(--muted); font-size: 13px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Review the detected Matches</h1>
+  <p id="subtitle"></p>
+  <p>Confirm a Match when what was read is right, reject it when the Match is not real or a
+  value is wrong. Focus a card and press <kbd>c</kbd> or <kbd>r</kbd> to decide quickly.</p>
+</header>
+<div class="bar"><div>
+  <span id="progress"></span>
+  <button class="primary" id="save" disabled>Save labels</button>
+  <span id="status" role="status"></span>
+</div></div>
+<main>
+  <ul id="problems"></ul>
+  <ol id="cards"></ol>
+</main>
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+let state = null;
+const verdicts = {};
+let saved = false;
+
+function clock(seconds) {
+  const whole = Math.floor(seconds);
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${Math.floor(whole / 3600)}:${pad(Math.floor(whole % 3600 / 60))}:${pad(whole % 60)}`;
+}
+
+function shown(value) { return value === null || value === undefined ? "not read" : String(value); }
+
+function decide(index, verdict) {
+  if (saved) return;
+  verdicts[index] = verdict;
+  render();
+}
+
+function frame(label, picture, warn) {
+  const figure = document.createElement("figure");
+  const image = document.createElement("img");
+  image.src = picture.image;
+  image.alt = `${label} at ${clock(picture.second)}`;
+  image.loading = "lazy";
+  const caption = document.createElement("figcaption");
+  caption.textContent = `${label} (${clock(picture.second)})`;
+  if (warn) caption.className = "warn";
+  figure.append(image, caption);
+  return figure;
+}
+
+function values(card) {
+  const list = document.createElement("dl");
+  list.className = "values";
+  const rows = [
+    ["Placement", shown(card.placement)],
+    ["Personal eliminations", shown(card.personal_eliminations)],
+    ["Team eliminations", shown(card.team_eliminations)],
+    ["Players left", shown(card.players_left)],
+    ["Unreadable spans", String(card.unreadable)],
+  ];
+  for (const [name, value] of rows) {
+    const row = document.createElement("div");
+    const term = document.createElement("dt");
+    term.textContent = name;
+    const detail = document.createElement("dd");
+    detail.textContent = value;
+    row.append(term, detail);
+    list.append(row);
+  }
+  return list;
+}
+
+function build(card) {
+  const item = document.createElement("li");
+  const article = document.createElement("article");
+  article.className = "card";
+  article.tabIndex = 0;
+  article.dataset.index = String(card.index);
+  article.addEventListener("keydown", (event) => {
+    if (event.target !== article || event.ctrlKey || event.metaKey || event.altKey) return;
+    if (event.key === "c") decide(card.index, "confirmed");
+    if (event.key === "r") decide(card.index, "rejected");
+  });
+
+  const head = document.createElement("div");
+  head.className = "head";
+  const title = document.createElement("h2");
+  title.textContent = `Match ${card.index + 1}`;
+  const span = document.createElement("span");
+  span.textContent = `${clock(card.start)} - ${clock(card.end)}`;
+  const badge = document.createElement("span");
+  badge.className = "badge" + (card.win ? " win" : "");
+  badge.textContent = card.win ? "Win" : "No win";
+  head.append(title, span, badge);
+
+  const frames = document.createElement("div");
+  frames.className = "frames";
+  frames.append(
+    frame("Start frame", card.start_frame, false),
+    card.has_results
+      ? frame("Results frame", card.results_frame, false)
+      : frame("No results screen reached, last in-match frame", card.results_frame, true),
+  );
+
+  const buttons = document.createElement("div");
+  buttons.className = "verdicts";
+  for (const [verdict, label] of [["confirmed", "Confirm"], ["rejected", "Reject"]]) {
+    const button = document.createElement("button");
+    button.className = verdict === "confirmed" ? "confirm" : "reject";
+    button.textContent = label;
+    button.dataset.verdict = verdict;
+    button.addEventListener("click", () => decide(card.index, verdict));
+    buttons.append(button);
+  }
+  article.append(head, values(card), frames, buttons);
+  item.append(article);
+  return item;
+}
+
+function render() {
+  const total = state.matches.length;
+  const decided = state.matches.filter((card) => verdicts[card.index]).length;
+  $("progress").textContent = total === 0
+    ? "No Matches to review"
+    : `${decided} of ${total} decided`;
+  $("save").disabled = saved || decided !== total;
+  document.querySelectorAll(".card").forEach((article) => {
+    const verdict = verdicts[Number(article.dataset.index)];
+    article.className = "card" + (verdict ? " decided-" + verdict : "");
+    article.querySelectorAll("button").forEach((button) => {
+      button.setAttribute("aria-pressed", String(button.dataset.verdict === verdict));
+      button.disabled = saved;
+    });
+  });
+}
+
+function setStatus(text, cls) {
+  $("status").textContent = text;
+  $("status").className = cls || "";
+}
+
+$("save").addEventListener("click", async () => {
+  const problems = $("problems");
+  problems.replaceChildren();
+  $("save").disabled = true;
+  setStatus("Saving...");
+  let reply;
+  try {
+    const response = await fetch("labels", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ verdicts }),
+    });
+    reply = { status: response.status, body: await response.json() };
+  } catch (error) {
+    setStatus("The server did not answer: " + error, "bad");
+    render();
+    return;
+  }
+  if (reply.status === 200) {
+    saved = true;
+    setStatus("Saved. You can close this tab.", "ok");
+    render();
+    return;
+  }
+  setStatus("Not saved.", "bad");
+  for (const error of reply.body.errors || []) {
+    const item = document.createElement("li");
+    item.textContent = error;
+    problems.append(item);
+  }
+  render();
+});
+
+(async () => {
+  const response = await fetch("state.json");
+  state = await response.json();
+  const count = state.matches.length;
+  $("subtitle").textContent = `${state.recording}: ${count} Match${count === 1 ? "" : "es"}`;
+  if (count === 0) {
+    const none = document.createElement("li");
+    none.textContent = "No Matches were detected in this Recording. Saving writes an empty labels file.";
+    $("cards").append(none);
+  }
+  for (const card of state.matches) $("cards").append(build(card));
+  render();
+})();
+</script>
+</body>
+</html>
