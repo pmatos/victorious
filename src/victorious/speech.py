@@ -29,6 +29,7 @@ from victorious.speakers import (
     label_segments,
     load_clips,
     load_diarizer,
+    padded_spans,
 )
 from victorious.video import AUDIO_RATE, VideoInfo, sample_audio
 
@@ -284,13 +285,7 @@ class SpeechResult:
 
 
 def _merged_spans(windows: Sequence[tuple[float, float]]) -> list[tuple[float, float]]:
-    spans: list[tuple[float, float]] = []
-    for begin, end in sorted(window for window in windows if window[1] > window[0]):
-        if spans and begin <= spans[-1][1]:
-            spans[-1] = (spans[-1][0], max(spans[-1][1], end))
-        else:
-            spans.append((begin, end))
-    return spans
+    return padded_spans([window for window in windows if window[1] > window[0]], 0.0, math.inf)
 
 
 def outside_spans(

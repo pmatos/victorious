@@ -85,16 +85,20 @@ def name_speakers(
         if speaker in names:
             continue
         embedding = embeddings.get(speaker)
-        best: EnrolledVoice | None = None
-        if embedding is not None and enrolled:
-            best = min(enrolled, key=lambda voice: _distance(embedding, voice.embedding))
-            if _distance(embedding, best.embedding) > MATCH_DISTANCE:
-                best = None
-        if best is None:
+        nearest = (
+            min(
+                ((_distance(embedding, voice.embedding), voice.name) for voice in enrolled),
+                key=lambda scored: scored[0],
+                default=None,
+            )
+            if embedding is not None
+            else None
+        )
+        if nearest is not None and nearest[0] <= MATCH_DISTANCE:
+            names[speaker] = nearest[1]
+        else:
             unknown += 1
             names[speaker] = f"{UNKNOWN_PREFIX}{unknown}"
-        else:
-            names[speaker] = best.name
     return names
 
 
@@ -281,7 +285,8 @@ def _speaker_embeddings(
     for speaker in speakers:
         longest = sorted(
             (t for t in turns if t.speaker == speaker and t.end - t.start >= MIN_TURN),
-            key=lambda t: t.start - t.end,
+            key=lambda t: t.end - t.start,
+            reverse=True,
         )[:MAX_TURNS]
         vectors: list[np.ndarray] = []
         for t in longest:

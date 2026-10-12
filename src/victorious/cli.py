@@ -222,12 +222,12 @@ def _require_distinct(observations: Path | None, output: Path | None) -> None:
 def _run_analyse(args: argparse.Namespace) -> tuple[str, str | None]:
     speech = None
     if not args.no_speech:
-        if args.voices is not None and args.voices.exists() and not args.voices.is_dir():
-            raise SpeechError(
-                f"--voices {args.voices} is not a folder; give the folder of enrollment clips "
-                "or pass --no-speech to skip speech"
-            )
-        if args.voices is not None and not args.voices.exists():
+        if args.voices is not None and not args.voices.is_dir():
+            if args.voices.exists():
+                raise SpeechError(
+                    f"--voices {args.voices} is not a folder; give the folder of enrollment "
+                    "clips or pass --no-speech to skip speech"
+                )
             print(
                 f"victorious analyse: warning: voices folder {args.voices} does not exist; "
                 "every voice will be unknown_N",
