@@ -208,6 +208,18 @@ def test_a_recording_without_audio_names_no_speech(tmp_path: Path) -> None:
     assert shim.lines() == []
 
 
+def test_an_unknown_whisper_model_fails_cleanly(tmp_path: Path) -> None:
+    source = recording(tmp_path, AudioClip(ENGLISH, at=8))
+    layout = write_layout(tmp_path / "layout.yaml")
+
+    result = analyse_text(source, layout, "--no-cache", "--whisper-model", "no-such-model")
+
+    assert result.returncode == 1
+    assert "no-such-model" in result.stderr
+    assert "--no-speech" in result.stderr
+    assert "Traceback" not in result.stderr
+
+
 def test_silence_yields_no_transcript(tmp_path: Path) -> None:
     document = run(recording(tmp_path), tmp_path)
 

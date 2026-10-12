@@ -87,9 +87,14 @@ def _load_model(name: str) -> Any:
         )
 
     try:
-        return load(True)
-    except LocalEntryNotFoundError:
-        return load(False)
+        try:
+            return load(True)
+        except LocalEntryNotFoundError:
+            return load(False)
+    except (ValueError, RuntimeError) as error:
+        raise SpeechError(
+            f"cannot load the Whisper model {name!r}: {error}; pass --no-speech to skip speech"
+        ) from error
 
 
 def _language(model: Any, audio: np.ndarray) -> SpeechLanguage:

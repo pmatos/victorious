@@ -138,8 +138,7 @@ def sample_audio(path: Path, start: float, end: float, stream: int) -> np.ndarra
     if result.returncode != 0:
         detail = result.stderr.decode(errors="replace").strip()
         raise RecordingError(f"cannot decode the audio of Recording {path}: {detail}")
-    usable = len(result.stdout) // 4 * 4
-    return np.frombuffer(result.stdout[:usable], dtype="<f4").astype(np.float32)
+    return np.frombuffer(result.stdout, dtype="<f4", count=len(result.stdout) // 4)
 
 
 def frame_at(path: Path, info: VideoInfo, second: int) -> np.ndarray | None:
