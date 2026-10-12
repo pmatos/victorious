@@ -1,8 +1,10 @@
 """Transcribing what is said within each Match, in English or Portuguese."""
 
+import bisect
 import heapq
 import math
 import os
+import re
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -20,6 +22,9 @@ MAX_GAP = 5.0
 BATCH_SIZE = 16
 MAX_NO_SPEECH_PROB = 0.9
 MIN_AVG_LOGPROB = -1.5
+MAX_COMPRESSION_RATIO = 2.4
+LOOP_LENGTH = 3
+AMBIGUITY = 0.5
 DEFAULT_MODEL = "small"
 
 
@@ -65,12 +70,34 @@ def require_audio_stream(info: VideoInfo, options: SpeechOptions) -> None:
         )
 
 
-def is_speech(no_speech_prob: float, avg_logprob: float, text: str) -> bool:
+def is_speech(
+    no_speech_prob: float, avg_logprob: float, compression_ratio: float, text: str
+) -> bool:
     return (
         bool(text.strip())
         and no_speech_prob <= MAX_NO_SPEECH_PROB
         and avg_logprob >= MIN_AVG_LOGPROB
+        and compression_ratio <= MAX_COMPRESSION_RATIO
     )
+
+
+def drop_repeated(segments: list[Segment]) -> list[Segment]:
+    """Drops runs of `LOOP_LENGTH` or more back-to-back segments with the same words.
+
+    Whisper loops on music and noise ("the", "Thank you.", ...) one short segment at a time,
+    which the per-segment compression ratio cannot see.
+    """
+    keys = [re.sub(r"\W+", " ", segment.text.lower()).strip() for segment in segments]
+    kept: list[Segment] = []
+    start = 0
+    while start < len(segments):
+        stop = start + 1
+        while stop < len(segments) and keys[stop] == keys[start]:
+            stop += 1
+        if stop - start < LOOP_LENGTH:
+            kept.extend(segments[start:stop])
+        start = stop
+    return kept
 
 
 def _load_model(name: str) -> Any:
@@ -98,10 +125,33 @@ def _load_model(name: str) -> Any:
         ) from error
 
 
-def _language(model: Any, audio: np.ndarray) -> SpeechLanguage:
-    _, _, probabilities = model.detect_language(audio)
-    scores = dict(probabilities)
-    return max(LANGUAGES, key=lambda code: scores.get(code, 0.0))
+def candidate_languages(scores: dict[str, float]) -> tuple[SpeechLanguage, ...]:
+    """The languages worth decoding: the likeliest, and any within `AMBIGUITY` of it."""
+    ranked = sorted(LANGUAGES, key=lambda code: -scores.get(code, 0.0))
+    best = scores.get(ranked[0], 0.0)
+    return tuple(code for code in ranked if best - scores.get(code, 0.0) < AMBIGUITY)
+
+
+def _chant(text: str) -> bool:
+    words = re.findall(r"\w+", text.lower())
+    return len(words) >= LOOP_LENGTH and len(set(words)) == 1
+
+
+def pick_reading(readings: dict[SpeechLanguage, list[Segment]]) -> list[Segment]:
+    """The reading of one stretch of speech whose segments are most confident on average.
+
+    Loops are dropped first, and a segment that only repeats one word counts as no confidence
+    at all, so a language that chants loses to one that does not. Ties go to the first
+    language, which is the one detection found likeliest.
+    """
+
+    def score(segments: list[Segment]) -> float:
+        total = sum(0.0 if _chant(s.text) else s.confidence for s in segments)
+        return total / len(segments)
+
+    kept = [drop_repeated(segments) for segments in readings.values()]
+    spoken = [segments for segments in kept if segments]
+    return max(spoken, key=score) if spoken else []
 
 
 def group_speech(
@@ -126,35 +176,48 @@ def _transcribe_window(model: Any, audio: np.ndarray, offset: float) -> list[Seg
     vad = VadOptions(max_speech_duration_s=MAX_CHUNK)
     spans = [(t["start"], t["end"]) for t in get_speech_timestamps(audio, vad, AUDIO_RATE)]
     groups = group_speech(spans, int(MAX_CHUNK * AUDIO_RATE), int(MAX_GAP * AUDIO_RATE))
-    by_language: dict[SpeechLanguage, list[dict[str, float]]] = {}
-    for start, end in groups:
-        language = _language(model, audio[start:end])
-        by_language.setdefault(language, []).append(
-            {"start": start / AUDIO_RATE, "end": end / AUDIO_RATE}
-        )
+    candidates = [
+        candidate_languages(dict(model.detect_language(audio[start:end])[2]))
+        for start, end in groups
+    ]
     pipeline = BatchedInferencePipeline(model)
-    segments: list[Segment] = []
-    for language, clips in by_language.items():
+    readings: list[dict[SpeechLanguage, list[Segment]]] = [
+        {language: [] for language in languages} for languages in candidates
+    ]
+    for language in LANGUAGES:
+        indices = [i for i, languages in enumerate(candidates) if language in languages]
+        if not indices:
+            continue
+        starts = [groups[i][0] / AUDIO_RATE for i in indices]
         spoken, _ = pipeline.transcribe(
             audio,
             language=language,
-            clip_timestamps=clips,
+            clip_timestamps=[
+                {"start": groups[i][0] / AUDIO_RATE, "end": groups[i][1] / AUDIO_RATE}
+                for i in indices
+            ],
             condition_on_previous_text=False,
             without_timestamps=False,
             batch_size=BATCH_SIZE,
         )
         for part in spoken:
-            if is_speech(part.no_speech_prob, part.avg_logprob, part.text):
-                segments.append(
-                    Segment(
-                        text=part.text.strip(),
-                        language=language,
-                        start=offset + part.start,
-                        end=offset + part.end,
-                        confidence=math.exp(part.avg_logprob),
-                    )
+            if not is_speech(
+                part.no_speech_prob, part.avg_logprob, part.compression_ratio, part.text
+            ):
+                continue
+            middle = (part.start + part.end) / 2
+            owner = indices[max(bisect.bisect_right(starts, middle) - 1, 0)]
+            readings[owner][language].append(
+                Segment(
+                    text=part.text.strip(),
+                    language=language,
+                    start=offset + part.start,
+                    end=offset + part.end,
+                    confidence=math.exp(part.avg_logprob),
                 )
-    return sorted(segments, key=lambda segment: segment.start)
+            )
+    chosen = [segment for reading in readings for segment in pick_reading(reading)]
+    return sorted(chosen, key=lambda segment: segment.start)
 
 
 def _window(match: Match, duration: float) -> tuple[float, float]:

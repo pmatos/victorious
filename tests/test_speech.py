@@ -14,8 +14,15 @@ import pytest
 
 from tests.analyse_helpers import STEADY, FfmpegShim, analyse_text, small
 from tests.synthetic import AudioClip, build_recording, match_shots, write_layout
-from victorious.schema import json_schema
-from victorious.speech import group_speech, is_speech
+from victorious.schema import SpeechLanguage, json_schema
+from victorious.speech import (
+    Segment,
+    candidate_languages,
+    drop_repeated,
+    group_speech,
+    is_speech,
+    pick_reading,
+)
 
 pytestmark = pytest.mark.usefixtures("require_ffmpeg", "require_tesseract")
 
@@ -243,20 +250,47 @@ def test_speech_does_not_change_the_frame_events(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize(
-    ("no_speech_prob", "avg_logprob", "text", "kept"),
+    ("no_speech_prob", "avg_logprob", "compression_ratio", "text", "kept"),
     [
-        (0.85, -0.5, " Nice shot", True),
-        (0.5, -0.3, " Nice shot", True),
-        (0.4, -1.3, " Nice shot", True),
-        (0.3, -1.95, " the", False),
-        (0.97, -0.4, " Nice shot", False),
-        (0.2, -0.2, "   ", False),
+        (0.85, -0.5, 1.0, " Nice shot", True),
+        (0.5, -0.3, 1.0, " Nice shot", True),
+        (0.4, -1.3, 1.0, " Nice shot", True),
+        (0.3, -1.95, 1.0, " the", False),
+        (0.97, -0.4, 1.0, " Nice shot", False),
+        (0.2, -0.2, 1.0, "   ", False),
+        (0.4, -0.45, 3.42, " Someone killed me, ayyyyyyyyyyyyyyyyyyyyyyyyyyyyyy", False),
+        (0.4, -0.45, 2.3, " Nice shot", True),
     ],
 )
 def test_low_confidence_segments_are_dropped(
-    no_speech_prob: float, avg_logprob: float, text: str, kept: bool
+    no_speech_prob: float, avg_logprob: float, compression_ratio: float, text: str, kept: bool
 ) -> None:
-    assert is_speech(no_speech_prob, avg_logprob, text) is kept
+    assert is_speech(no_speech_prob, avg_logprob, compression_ratio, text) is kept
+
+
+def _said(*texts: str, language: SpeechLanguage = "en", confidence: float = 0.4) -> list[Segment]:
+    return [
+        Segment(
+            text=text,
+            language=language,
+            start=2.0 * i,
+            end=2.0 * i + 2.0,
+            confidence=confidence,
+        )
+        for i, text in enumerate(texts)
+    ]
+
+
+def test_a_phrase_repeated_back_to_back_is_a_hallucinated_loop() -> None:
+    loop = _said("Nice shot", "the", "the", "The.", "the", "Thank you.", "Thank you.")
+
+    assert [s.text for s in drop_repeated(loop)] == ["Nice shot", "Thank you.", "Thank you."]
+
+
+def test_a_repeat_that_is_not_back_to_back_is_kept() -> None:
+    said = _said("No", "No", "Go left", "No", "No", "Nice shot", "No")
+
+    assert drop_repeated(said) == said
 
 
 def test_nearby_speech_is_grouped_up_to_one_window() -> None:
@@ -273,3 +307,50 @@ def test_nearby_speech_is_grouped_up_to_one_window() -> None:
         (1000, 1100),
         (5000, 5100),
     ]
+
+
+@pytest.mark.parametrize(
+    ("scores", "expected"),
+    [
+        ({"en": 0.9, "pt": 0.01, "es": 0.02}, ("en",)),
+        ({"en": 0.28, "pt": 0.57}, ("pt", "en")),
+        ({"en": 0.33, "pt": 0.31}, ("en", "pt")),
+        ({"en": 0.4, "es": 0.4}, ("en", "pt")),
+        ({"en": 0.5, "es": 0.4}, ("en",)),
+        ({"es": 0.9}, ("en", "pt")),
+    ],
+)
+def test_both_languages_are_tried_when_detection_is_unsure(
+    scores: dict[str, float], expected: tuple[str, ...]
+) -> None:
+    assert candidate_languages(scores) == expected
+
+
+def test_the_language_that_reads_the_speech_best_wins() -> None:
+    english = _said("Oh, they're healing", "Okay, right", language="en", confidence=0.57)
+    portuguese = _said("Ah, ele esta a fome", "Ok, certo", language="pt", confidence=0.36)
+
+    assert pick_reading({"pt": portuguese, "en": english}) == english
+    assert pick_reading({"pt": english, "en": portuguese}) == english
+
+
+def test_a_language_that_only_loops_does_not_win() -> None:
+    english = _said("Oh, they're healing", "Okay, right", language="en", confidence=0.5)
+    loop = _said("oh", "Oh.", "oh", language="pt", confidence=0.9)
+
+    assert pick_reading({"pt": loop, "en": english}) == english
+    assert pick_reading({"pt": loop}) == []
+
+
+def test_a_language_that_only_repeats_one_word_loses_to_one_that_does_not() -> None:
+    english = _said("Oh, they're healing", "Okay, right", language="en", confidence=0.4)
+    chant = _said("oi oi oi oi oi oi", "oi oi oi oi", language="pt", confidence=0.9)
+
+    assert pick_reading({"pt": chant, "en": english}) == english
+    assert pick_reading({"pt": chant}) == chant
+
+
+def test_a_word_repeated_inside_a_segment_is_kept_beside_real_speech() -> None:
+    said = _said("No, no, no, no, no.", "Go left", language="en", confidence=0.5)
+
+    assert pick_reading({"en": said}) == said
