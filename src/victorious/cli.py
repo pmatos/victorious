@@ -13,6 +13,7 @@ from pydantic import ValidationError
 
 from victorious.analysis import analyse_with_observations
 from victorious.cache import ObservationCache, default_cache_root
+from victorious.categorize import KEY_VARIABLE, jev_from_env
 from victorious.errors import SpeechError
 from victorious.layout import LayoutError, dump_layout, load_layouts
 from victorious.manual import serve_manual
@@ -221,6 +222,7 @@ def _require_distinct(observations: Path | None, output: Path | None) -> None:
 
 def _run_analyse(args: argparse.Namespace) -> tuple[str, str | None]:
     speech = None
+    categorizer = None
     if not args.no_speech:
         if args.voices is not None and not args.voices.is_dir():
             if args.voices.exists():
@@ -240,6 +242,7 @@ def _run_analyse(args: argparse.Namespace) -> tuple[str, str | None]:
             diarization_model=args.diarization_model,
         )
         require_ready(speech)
+        categorizer = jev_from_env(os.environ)
     layouts = load_layouts(args.layout)
     cache = None if args.no_cache else ObservationCache(args.cache_dir or default_cache_root())
     started = time.monotonic()
@@ -250,6 +253,7 @@ def _run_analyse(args: argparse.Namespace) -> tuple[str, str | None]:
         chunk_seconds=args.chunk_seconds,
         cache=cache,
         speech=speech,
+        categorizer=categorizer,
     )
     state = "off" if cache is None else "hit" if analysis.cached else "miss"
     elapsed = time.monotonic() - started
@@ -267,12 +271,28 @@ def _run_analyse(args: argparse.Namespace) -> tuple[str, str | None]:
             spoken += f", music masked {silenced} s"
         if count is not None:
             spoken += f", speakers {analysis.speakers} (enrolled {analysis.enrolled})"
+            if categorizer is not None:
+                spoken += f", categories {analysis.categorized} of {count}"
         print(
             f"victorious analyse: layout {chosen.path} (score {chosen.score:.2f}, "
             f"{analysis.candidates} candidate{'s' if analysis.candidates != 1 else ''}), "
             f"cache {state}{spoken}, {elapsed:.1f} s",
             file=sys.stderr,
         )
+        if count:
+            segments = f"{count} segment{'s' if count != 1 else ''}"
+            if categorizer is None:
+                print(
+                    f"victorious analyse: note: no {KEY_VARIABLE} set, so the categories of the "
+                    f"{segments} are null",
+                    file=sys.stderr,
+                )
+            elif analysis.categorized < count:
+                print(
+                    f"victorious analyse: warning: Jev did not categorize "
+                    f"{count - analysis.categorized} of {segments}: {analysis.category_failure}",
+                    file=sys.stderr,
+                )
     text = analysis.output.model_dump_json(indent=2) + "\n"
     if args.observations is None:
         return text, None

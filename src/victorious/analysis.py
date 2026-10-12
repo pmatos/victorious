@@ -9,6 +9,7 @@ from typing import Protocol
 import numpy as np
 
 from victorious.cache import ObservationCache
+from victorious.categorize import JevClient, categorize_matches
 from victorious.counters import (
     CounterTracker,
     Resolver,
@@ -247,6 +248,8 @@ class Analysis:
     masked: list[MaskedWindow] = field(default_factory=list)
     speakers: int = 0
     enrolled: int = 0
+    categorized: int = 0
+    category_failure: str | None = None
 
 
 def analyse_with_observations(
@@ -257,6 +260,7 @@ def analyse_with_observations(
     chunk_seconds: int = 60,
     cache: ObservationCache | None = None,
     speech: SpeechOptions | None = None,
+    categorizer: JevClient | None = None,
 ) -> Analysis:
     info = probe(path)
     if speech is not None:
@@ -293,11 +297,15 @@ def analyse_with_observations(
         entry.store(observations)
     segments = None
     masked: list[MaskedWindow] = []
-    speakers = enrolled = 0
+    speakers = enrolled = categorized = 0
+    category_failure: str | None = None
     if speech is not None:
         spoken = transcribe_matches(path, info, matches, speech)
         matches, segments, masked = spoken.matches, spoken.segments, spoken.masked
         speakers, enrolled = spoken.speakers, spoken.enrolled
+        judged = categorize_matches(matches, categorizer)
+        matches = judged.matches
+        categorized, category_failure = judged.categorized, judged.first_failure
     output = AnalysisOutput(
         recording=recording,
         layout=ChosenLayout(path=str(selection.chosen.path), score=selection.score),
@@ -314,6 +322,8 @@ def analyse_with_observations(
         masked,
         speakers,
         enrolled,
+        categorized,
+        category_failure,
     )
 
 
@@ -325,7 +335,14 @@ def analyse(
     chunk_seconds: int = 60,
     cache: ObservationCache | None = None,
     speech: SpeechOptions | None = None,
+    categorizer: JevClient | None = None,
 ) -> AnalysisOutput:
     return analyse_with_observations(
-        path, layouts, jobs=jobs, chunk_seconds=chunk_seconds, cache=cache, speech=speech
+        path,
+        layouts,
+        jobs=jobs,
+        chunk_seconds=chunk_seconds,
+        cache=cache,
+        speech=speech,
+        categorizer=categorizer,
     ).output
