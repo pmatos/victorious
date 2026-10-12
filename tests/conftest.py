@@ -9,6 +9,9 @@ REAL_HF_HOME = os.environ.get("HF_HOME") or str(
 )
 
 
+os.environ["VICTORIOUS_NO_SPEECH"] = "1"
+
+
 @pytest.fixture(scope="session")
 def require_ffmpeg() -> None:
     missing = [tool for tool in ("ffmpeg", "ffprobe") if shutil.which(tool) is None]
@@ -39,6 +42,9 @@ def isolated_cache(
 
 @pytest.fixture(autouse=True)
 def speech_is_off_and_models_are_kept(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Keeps `analyse` model-free by default, and the model cache out of the isolated cache."""
+    """Keeps `analyse` model-free by default, and the model cache out of the isolated cache.
+
+    Module-scoped fixtures run before this one, so the variable is also set on import above.
+    """
     monkeypatch.setenv("VICTORIOUS_NO_SPEECH", "1")
     monkeypatch.setenv("HF_HOME", REAL_HF_HOME)
