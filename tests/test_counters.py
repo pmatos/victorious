@@ -71,6 +71,62 @@ def test_a_counter_that_changes_once_is_reported_once(tmp_path: Path) -> None:
     assert counter_events(match, "team_eliminations") == []
 
 
+def test_players_left_that_reads_another_value_for_two_seconds_is_not_an_event(
+    tmp_path: Path,
+) -> None:
+    steps = ((0.0, 0, 0, 99), (12.0, 0, 0, 98), (14.0, 0, 0, 99))
+    shots = match_shots(5, steps, results_at=35, placement=3)
+
+    output = analyse(tmp_path, small(45, shots))
+
+    (match,) = output["matches"]
+    assert changes(match, "players_left") == []
+
+
+def test_players_left_multi_step_misread_is_dropped_and_a_later_fall_still_resolved(
+    tmp_path: Path,
+) -> None:
+    steps = ((0.0, 0, 0, 99), (12.0, 0, 0, 96), (14.0, 0, 0, 99), (22.0, 0, 0, 97))
+    shots = match_shots(5, steps, results_at=40, placement=3)
+
+    output = analyse(tmp_path, small(50, shots))
+
+    (match,) = output["matches"]
+    assert [value for _, value in changes(match, "players_left")] == [98, 97]
+
+
+def test_players_left_misread_after_a_real_fall_is_dropped_and_the_fall_kept(
+    tmp_path: Path,
+) -> None:
+    steps = ((0.0, 0, 0, 99), (8.0, 0, 0, 98), (18.0, 0, 0, 99), (20.0, 0, 0, 98))
+    shots = match_shots(5, steps, results_at=35, placement=3)
+
+    output = analyse(tmp_path, small(45, shots))
+
+    (match,) = output["matches"]
+    assert changes(match, "players_left") == [(13.0, 98)]
+
+
+def test_players_left_that_returns_after_a_long_run_is_kept(tmp_path: Path) -> None:
+    steps = ((0.0, 0, 0, 99), (8.0, 0, 0, 98), (20.0, 0, 0, 99))
+    shots = match_shots(5, steps, results_at=40, placement=3)
+
+    output = analyse(tmp_path, small(50, shots))
+
+    (match,) = output["matches"]
+    assert changes(match, "players_left") == [(13.0, 98), (25.0, 99)]
+
+
+def test_players_left_rising_while_the_lobby_fills_is_kept(tmp_path: Path) -> None:
+    steps = ((0.0, 0, 0, 96), (10.0, 0, 0, 97), (20.0, 0, 0, 98))
+    shots = match_shots(5, steps, results_at=40, placement=3)
+
+    output = analyse(tmp_path, small(50, shots))
+
+    (match,) = output["matches"]
+    assert changes(match, "players_left") == [(15.0, 97), (25.0, 98)]
+
+
 def test_counter_events_sit_between_match_start_and_match_end_in_time_order(
     tmp_path: Path,
 ) -> None:

@@ -24,6 +24,7 @@ MAX_RESOLVED_JUMP: dict[CounterElement, int] = {
     "players_left": 10,
 }
 MAX_GAP_SECONDS = 3.0
+TRANSIENT_SECONDS = 5.0
 RISING: dict[CounterElement, int] = {
     "personal_eliminations": 1,
     "team_eliminations": 1,
@@ -201,9 +202,19 @@ class _Pending:
     confidences: list[float] = field(default_factory=list)
 
 
+@dataclass(frozen=True)
+class _Change:
+    """The latest committed change of a counter: its Event and the value it left."""
+
+    index: int
+    previous: int
+    time: float
+
+
 @dataclass
 class _State:
     committed: int | None = None
+    last_change: _Change | None = None
     pending: _Pending | None = None
     gap_start: float | None = None
     last_seen: float | None = None
@@ -214,13 +225,16 @@ class CounterTracker:
     """Emits an Event when a counter's value changes, once the new value is read twice in a row.
 
     A jump of more than one between two readable seconds is recorded as a Gap; `close` hands the
-    Gaps to a resolver and replaces each jump's single Event by one Event per step.
+    Gaps to a resolver and replaces each jump's single Event by one Event per step. A
+    `players_left` change that goes back to the value it left within `TRANSIENT_SECONDS` is a
+    misread, not a change: neither it nor the return becomes an Event.
     """
 
     def __init__(self, elements: tuple[CounterElement, ...]) -> None:
         self._states: dict[CounterElement, _State] = {element: _State() for element in elements}
         self._events: list[Event] = []
         self._gaps: dict[int, Gap] = {}
+        self._dropped: set[int] = set()
 
     def observe(self, second: float, readings: dict[CounterElement, CounterReading | None]) -> None:
         for element, state in self._states.items():
@@ -238,6 +252,7 @@ class CounterTracker:
         if start is None or end - start <= UNREADABLE_SECONDS:
             return
         state.pending = None
+        state.last_change = None
         self._events.append(frame_event("unreadable", start, 0.0, end=end, element=element))
 
     def _accept(
@@ -253,13 +268,38 @@ class CounterTracker:
             return
         pending.confidences.append(reading.confidence)
         if state.committed is not None:
-            confidence = sum(pending.confidences) / len(pending.confidences)
-            self._events.append(frame_event(element, pending.time, confidence, pending.value))
-            self._record_gap(element, state, pending, confidence)
+            if self._is_return(element, state, pending):
+                self._drop_transient(state)
+            else:
+                self._commit_change(element, state, pending)
         state.committed = pending.value
         state.furthest = _further(element, state.furthest, pending.value)
         state.pending = None
         state.last_seen = second
+
+    def _commit_change(self, element: CounterElement, state: _State, pending: _Pending) -> None:
+        confidence = sum(pending.confidences) / len(pending.confidences)
+        self._events.append(frame_event(element, pending.time, confidence, pending.value))
+        if state.committed is not None:
+            state.last_change = _Change(len(self._events) - 1, state.committed, pending.time)
+        self._record_gap(element, state, pending, confidence)
+
+    @staticmethod
+    def _is_return(element: CounterElement, state: _State, pending: _Pending) -> bool:
+        change = state.last_change
+        return (
+            element == "players_left"
+            and change is not None
+            and pending.value == change.previous
+            and pending.time - change.time <= TRANSIENT_SECONDS
+        )
+
+    def _drop_transient(self, state: _State) -> None:
+        change = state.last_change
+        if change is not None:
+            self._dropped.add(change.index)
+            self._gaps.pop(change.index, None)
+        state.last_change = None
 
     def _record_gap(
         self, element: CounterElement, state: _State, pending: _Pending, confidence: float
@@ -275,19 +315,21 @@ class CounterTracker:
     def close(self, end: float, resolver: Resolver | None = None) -> TrackerResult:
         for element, state in self._states.items():
             self._close_gap(element, state, end)
-        events = list(self._events)
+        resolved: dict[int, list[Step]] = {}
         if self._gaps and resolver is not None:
             resolved = dict(zip(self._gaps, resolver(list(self._gaps.values())), strict=True))
-            events = []
-            for index, event in enumerate(self._events):
-                steps = resolved.get(index)
-                if steps:
-                    events.extend(
-                        frame_event(event.kind, step.time, step.confidence, step.value)
-                        for step in steps
-                    )
-                else:
-                    events.append(event)
+        events: list[Event] = []
+        for index, event in enumerate(self._events):
+            if index in self._dropped:
+                continue
+            steps = resolved.get(index)
+            if steps:
+                events.extend(
+                    frame_event(event.kind, step.time, step.confidence, step.value)
+                    for step in steps
+                )
+            else:
+                events.append(event)
         personal = self._states.get("personal_eliminations")
         return TrackerResult(
             events=events,
