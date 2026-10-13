@@ -61,11 +61,7 @@ class _OpenMatch:
 
     def abandoned_lobby(self) -> bool:
         """A short HUD run that only showed a lobby filling: the player left before the game."""
-        return (
-            self.results_start is None
-            and self.last_hud - self.start < ABANDONED_LOBBY_SECONDS
-            and lobby_filling(self.opening)
-        )
+        return self.last_hud - self.start < ABANDONED_LOBBY_SECONDS and lobby_filling(self.opening)
 
 
 def _vote(readings: list[ResultsReading]) -> tuple[int, float] | None:
