@@ -84,6 +84,15 @@ def scale_range(element: str) -> tuple[float, float]:
     return min(factors), max(factors)
 
 
+def _best_banner(
+    region: np.ndarray,
+    height: int,
+    sweep: Sequence[float] = SCALE_SWEEP,
+    shrink: float = 1.0,
+) -> float:
+    return max(_score(region, name, True, height, sweep, shrink)[0] for name in BANNER_NAMES)
+
+
 def _banner_score(frame: np.ndarray, rect: Rect) -> float:
     """The banner at its settled size next to the Layout rect, else large and low on the frame.
 
@@ -91,19 +100,17 @@ def _banner_score(frame: np.ndarray, rect: Rect) -> float:
     seconds show no banner at all.
     """
     height = frame.shape[0]
-    region = _crop(frame, rect, RESULTS_MARGIN)
-    settled = max(_score(region, name, True, height)[0] for name in BANNER_NAMES)
+    settled = _best_banner(_crop(frame, rect, RESULTS_MARGIN), height)
     if settled >= RESULTS_THRESHOLD:
         return settled
-    wide = _crop(frame, rect, BANNER_WIDE_MARGIN)
     small = cv2.resize(
-        wide, None, fx=BANNER_WIDE_SHRINK, fy=BANNER_WIDE_SHRINK, interpolation=cv2.INTER_AREA
+        _crop(frame, rect, BANNER_WIDE_MARGIN),
+        None,
+        fx=BANNER_WIDE_SHRINK,
+        fy=BANNER_WIDE_SHRINK,
+        interpolation=cv2.INTER_AREA,
     )
-    large = max(
-        _score(small, name, True, height, BANNER_WIDE_SWEEP, BANNER_WIDE_SHRINK)[0]
-        for name in BANNER_NAMES
-    )
-    return max(settled, large)
+    return max(settled, _best_banner(small, height, BANNER_WIDE_SWEEP, BANNER_WIDE_SHRINK))
 
 
 def hud_score(frame: np.ndarray, layout: Layout) -> float:
