@@ -22,7 +22,7 @@ from tests.synthetic import (
     match_shots,
     write_layout,
 )
-from victorious import cli, screens
+from victorious import cli, ocr, screens
 from victorious import parallel as parallel_module
 from victorious.analysis import analyse as analyse_recording
 from victorious.layout import load_layouts
@@ -324,6 +324,7 @@ def test_missing_tesseract_fails_before_any_frame_is_decoded(
     monkeypatch.setattr(
         shutil, "which", lambda name: None if name == "tesseract" else real_which(name)
     )
+    monkeypatch.setattr(ocr, "_load_tesseract", lambda: None)
 
     def no_decoding(*args: Any) -> None:
         raise AssertionError("frames were decoded")

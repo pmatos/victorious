@@ -1,6 +1,7 @@
 """Telling Speakers apart: diarization, and naming voices enrolled from a `voices/` folder."""
 
 import functools
+import math
 import warnings
 from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor
@@ -221,7 +222,7 @@ class ParallelEmbedding:
     def __call__(self, waveforms: Any, masks: Any = None) -> np.ndarray:
         if len(waveforms) == 0:
             return np.asarray(self._model(waveforms, masks=masks))
-        size = max(1, -(-len(waveforms) // self._workers))
+        size = math.ceil(len(waveforms) / self._workers)
         parts = [
             (
                 waveforms[start : start + size],
