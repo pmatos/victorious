@@ -6,7 +6,7 @@ from math import isfinite
 from pathlib import Path
 from typing import Literal
 
-ResultsStyle = Literal["classic", "orange", "placed"]
+ResultsStyle = Literal["classic", "orange", "orange_large", "placed"]
 
 
 @dataclass(frozen=True)
@@ -39,8 +39,9 @@ class Hud:
 class Results:
     """The results screen; placement 1 is a Win and carries the Victory Royale banner.
 
-    `style` is "classic" (blue banner, gold "#N"), "orange" (the orange banner skin, a Win)
-    or "placed" (white "YOU PLACED #N" shown once eliminated).
+    `style` is "classic" (blue banner, gold "#N"), "orange" (the orange banner skin, a Win),
+    "orange_large" (the same banner while it is zoomed in and lower, before it settles; the
+    "#1" is part of its art) or "placed" (white "YOU PLACED #N" shown once eliminated).
     """
 
     placement: int
@@ -49,7 +50,7 @@ class Results:
     def __post_init__(self) -> None:
         if not 1 <= self.placement <= 100:
             raise ValueError(f"placement must be between 1 and 100, got {self.placement}")
-        if self.style == "orange" and self.placement != 1:
+        if self.style.startswith("orange") and self.placement != 1:
             raise ValueError("the orange banner is a Win, so its placement must be 1")
 
 

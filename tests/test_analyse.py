@@ -79,6 +79,21 @@ def test_orange_victory_royale_banner_is_a_win(tmp_path: Path) -> None:
     assert "win" in [event["kind"] for event in output["matches"][0]["events"]]
 
 
+@pytest.mark.parametrize("settles", [False, True], ids=["recording_ends", "banner_settles"])
+def test_the_large_orange_banner_is_a_win_before_it_settles(tmp_path: Path, settles: bool) -> None:
+    shots = match_shots(
+        5, STEADY, results_at=25, placement=1, results_duration=8, results_style="orange_large"
+    )
+    if settles:
+        shots = (*shots, Shot(Results(1, "orange"), 33, 37))
+
+    output = analyse(tmp_path, small(37 if settles else 33, shots))
+
+    assert summary(output) == [(5.0, 25.0, True, 1)]
+    times = {event["kind"]: event["time"] for event in output["matches"][0]["events"]}
+    assert times["win"] == 25.0
+
+
 def test_layout_without_an_elimination_placement_still_reads_classic_results(
     tmp_path: Path,
 ) -> None:

@@ -14,6 +14,8 @@ CROPS = Path(__file__).parent.parent / "fixtures" / "crops"
 NATIVE_WIDTH = 2560
 NATIVE_HEIGHT = 1440
 BANNER_CROP_SCALE = 4.0
+LARGE_BANNER_ZOOM = 1.45
+LARGE_BANNER_OFFSET = (-2, 82)
 DIGIT_GAP_NATIVE = 3.0
 DIGIT_HEIGHT_NATIVE = 17
 ICON_NATIVE_SIZE = 36
@@ -168,8 +170,22 @@ def _draw_hud(frame: np.ndarray, hud: Hud) -> None:
             _draw_text(frame, _digits(value), rect, height=rect[3], align="right", color=WHITE)
 
 
+def _draw_large_banner(frame: np.ndarray) -> None:
+    height, width = frame.shape[:2]
+    banner = load_crop("victory_royale_orange", True)
+    scale = height / NATIVE_HEIGHT * BANNER_CROP_SCALE * LARGE_BANNER_ZOOM
+    size = (round(banner.shape[1] * scale), round(banner.shape[0] * scale))
+    left, top = NATIVE_RECTS["results_banner"][:2]
+    x = round((left + LARGE_BANNER_OFFSET[0]) / NATIVE_WIDTH * width)
+    y = round((top + LARGE_BANNER_OFFSET[1]) / NATIVE_HEIGHT * height)
+    _paste(frame, cv2.resize(banner, size, interpolation=cv2.INTER_LINEAR), x, y)
+
+
 def _draw_results(frame: np.ndarray, results: Results) -> None:
     height, width = frame.shape[:2]
+    if results.style == "orange_large":
+        _draw_large_banner(frame)
+        return
     if results.style == "placed":
         hash_mask, rect_name, color = load_crop("hash_white"), "elimination_placement", WHITE
     else:

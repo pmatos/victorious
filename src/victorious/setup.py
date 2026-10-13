@@ -23,11 +23,11 @@ from victorious.layout import (
 from victorious.screens import (
     HUD_THRESHOLD,
     RESULTS_THRESHOLD,
-    SCALE_SWEEP,
     ResultsReading,
     counter_masks,
     hud_score,
     results_reading,
+    scale_range,
 )
 from victorious.video import RecordingError, VideoInfo, frame_at, probe
 
@@ -100,8 +100,8 @@ class SetupResult:
         return sum(len(panel.found) for panel in self.panels)
 
 
-def _scale_note(found: Found) -> str:
-    low, high = min(SCALE_SWEEP), max(SCALE_SWEEP)
+def _scale_note(element: str, found: Found) -> str:
+    low, high = scale_range(element)
     if low <= found.scale_factor <= high:
         return ""
     return (
@@ -146,7 +146,7 @@ def _self_check(layout: Layout, panels: Sequence[Panel]) -> dict[str, str]:
                 best = max(score for score, _ in outcomes)
                 problems[element] = (
                     f"the Layout does not read back at {panel.kind}={panel.second} "
-                    f"(score {best:.2f}){_scale_note(found)}"
+                    f"(score {best:.2f}){_scale_note(element, found)}"
                 )
     return problems
 

@@ -17,6 +17,9 @@ RESULTS_THRESHOLD = 0.7
 ICON_NAMES = ("icon_skull", "icon_squad", "icon_person")
 BANNER_NAMES = ("victory_royale", "victory_royale_orange")
 SCALE_SWEEP = (0.9, 1.0, 1.1)
+BANNER_WIDE_SWEEP = (1.1, 1.2, 1.3, 1.4, 1.5, 1.6)
+BANNER_WIDE_MARGIN = 1.0
+BANNER_WIDE_SHRINK = 0.5
 ANCHOR_MARGIN = 0.1
 RESULTS_MARGIN = 0.2
 GOLD_LOW = (15, 90, 200)
@@ -59,13 +62,55 @@ def _crop(frame: np.ndarray, rect: Rect, margin: float) -> np.ndarray:
     return np.asarray(frame[y0:y1, x0:x1])
 
 
-def _score(region: np.ndarray, name: str, color: bool, frame_height: int) -> tuple[float, float]:
-    base = reference_scale(name, frame_height)
+def _score(
+    region: np.ndarray,
+    name: str,
+    color: bool,
+    frame_height: int,
+    sweep: Sequence[float] = SCALE_SWEEP,
+    shrink: float = 1.0,
+) -> tuple[float, float]:
+    base = reference_scale(name, frame_height) * shrink
     template = load_reference(name, color)
     _, confidence, scale = match_template_in_frame_multiscale(
-        region, template, 0.0, [base * factor for factor in SCALE_SWEEP]
+        region, template, 0.0, [base * factor for factor in sweep]
     )
     return float(np.nan_to_num(confidence)), scale
+
+
+def scale_range(element: str) -> tuple[float, float]:
+    """The smallest and largest size, as a factor of the reference, `analyse` reads."""
+    factors = (*SCALE_SWEEP, *BANNER_WIDE_SWEEP) if element == "results_banner" else SCALE_SWEEP
+    return min(factors), max(factors)
+
+
+def _best_banner(
+    region: np.ndarray,
+    height: int,
+    sweep: Sequence[float] = SCALE_SWEEP,
+    shrink: float = 1.0,
+) -> float:
+    return max(_score(region, name, True, height, sweep, shrink)[0] for name in BANNER_NAMES)
+
+
+def _banner_score(frame: np.ndarray, rect: Rect) -> float:
+    """The banner at its settled size next to the Layout rect, else large and low on the frame.
+
+    The wide search only runs when the narrow one misses, and on a shrunken copy, since most
+    seconds show no banner at all.
+    """
+    height = frame.shape[0]
+    settled = _best_banner(_crop(frame, rect, RESULTS_MARGIN), height)
+    if settled >= RESULTS_THRESHOLD:
+        return settled
+    small = cv2.resize(
+        _crop(frame, rect, BANNER_WIDE_MARGIN),
+        None,
+        fx=BANNER_WIDE_SHRINK,
+        fy=BANNER_WIDE_SHRINK,
+        interpolation=cv2.INTER_AREA,
+    )
+    return max(settled, _best_banner(small, height, BANNER_WIDE_SWEEP, BANNER_WIDE_SHRINK))
 
 
 def hud_score(frame: np.ndarray, layout: Layout) -> float:
@@ -138,8 +183,7 @@ HASH_STYLES = (
 def results_reading(frame: np.ndarray, layout: Layout, read_placement: bool) -> ResultsReading:
     """The Victory Royale banner and "#" scores, and the placement digits when asked for."""
     height = frame.shape[0]
-    banner_region = _crop(frame, layout.screens.results.results_banner, RESULTS_MARGIN)
-    banner = max(_score(banner_region, name, True, height)[0] for name in BANNER_NAMES)
+    banner = _banner_score(frame, layout.screens.results.results_banner)
     best: tuple[float, np.ndarray, float, _HashStyle] | None = None
     scores: dict[str, float] = {}
     for style in HASH_STYLES:
