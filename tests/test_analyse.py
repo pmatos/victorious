@@ -367,6 +367,7 @@ def test_layout_for_another_aspect_ratio_with_no_hud_is_not_fortnite(tmp_path: P
     assert output["matches"] == []
     assert output["layout"] is None
     assert [warning["code"] for warning in output["warnings"]] == ["not_fortnite"]
+    assert "no Layout fits" in output["warnings"][0]["message"]
 
 
 def test_layout_rect_with_nan_is_rejected(tmp_path: Path) -> None:

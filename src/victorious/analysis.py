@@ -295,11 +295,16 @@ def analyse_with_observations(
     if isinstance(selection, NoHud):
         require_complete(path, info)
         shown = ", ".join(str(loaded.path) for loaded in selection.tried)
+        tried = (
+            f"Layouts tried: {shown}"
+            if selection.fitting
+            else f"no Layout fits this {info.width}x{info.height} Recording: {shown}"
+        )
         warning = AnalysisWarning(
             code="not_fortnite",
             message=(
                 f"no in-match HUD in the first {NOT_FORTNITE_WINDOW // 60} minutes "
-                f"({selection.frames} frames sampled, Layouts tried: {shown}); "
+                f"({selection.frames} frames sampled, {tried}); "
                 "this does not look like a Fortnite Recording, or its HUD needs a new Layout "
                 f"from `victorious setup {path}`"
             ),

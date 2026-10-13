@@ -39,6 +39,7 @@ class NoHud:
 
     tried: list[LoadedLayout]
     frames: int
+    fitting: bool = True
 
 
 def _scores_at(
@@ -144,11 +145,11 @@ def select_layout(
         (loaded for loaded in layouts if loaded.layout.fits(info.width, info.height)),
         key=lambda loaded: str(loaded.path),
     )
+    opening, rest = _candidate_seconds(info)
     if not fitting:
-        opening, _ = _candidate_seconds(info)
         spread = _icon_scan_seconds(opening)
         if not _any_hud(path, info, spread, jobs):
-            return NoHud(list(layouts), len(spread))
+            return NoHud(list(layouts), len(spread), fitting=False)
         raise _no_fit(path, info, layouts)
 
     hashes = [layout_hash(loaded.layout) for loaded in fitting]
@@ -158,7 +159,6 @@ def select_layout(
         best, score = _best(fitting, stored)
         return Selection(best, score, len(fitting))
 
-    opening, rest = _candidate_seconds(info)
     frames, tried = _in_match_scores(path, info, fitting, opening, rest, jobs)
     if not frames:
         if not _any_hud(path, info, _icon_scan_seconds(opening), jobs):
