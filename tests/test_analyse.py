@@ -335,8 +335,12 @@ def test_missing_tesseract_fails_before_any_frame_is_decoded(
         analyse_recording(recording, layout)
 
 
-def test_layout_for_another_aspect_ratio_is_rejected(tmp_path: Path) -> None:
-    recording = build_recording(small(5, ()), tmp_path / "recording.mkv")
+def test_layout_for_another_aspect_ratio_is_rejected_when_the_hud_is_shown(
+    tmp_path: Path,
+) -> None:
+    recording = build_recording(
+        small(25, match_shots(2, STEADY, results_at=20, placement=1)), tmp_path / "recording.mkv"
+    )
     document = layout_document()
     document["aspect_ratio"] = "21:9"
     layout = write_layout(tmp_path / "layout.yaml", document)
@@ -346,7 +350,24 @@ def test_layout_for_another_aspect_ratio_is_rejected(tmp_path: Path) -> None:
     assert result.returncode == 1
     assert "21:9" in result.stderr
     assert "1920x1080" in result.stderr
+    assert "victorious setup" in result.stderr
     assert result.stdout == ""
+
+
+def test_layout_for_another_aspect_ratio_with_no_hud_is_not_fortnite(tmp_path: Path) -> None:
+    recording = build_recording(small(5, ()), tmp_path / "recording.mkv")
+    document = layout_document()
+    document["aspect_ratio"] = "21:9"
+    layout = write_layout(tmp_path / "layout.yaml", document)
+
+    result = run_cli("analyse", str(recording), "--layout", str(layout))
+
+    assert result.returncode == 0, result.stderr
+    output = json.loads(result.stdout)
+    assert output["matches"] == []
+    assert output["layout"] is None
+    assert [warning["code"] for warning in output["warnings"]] == ["not_fortnite"]
+    assert "no Layout fits" in output["warnings"][0]["message"]
 
 
 def test_layout_rect_with_nan_is_rejected(tmp_path: Path) -> None:

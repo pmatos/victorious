@@ -39,6 +39,7 @@ class NoHud:
 
     tried: list[LoadedLayout]
     frames: int
+    aspect_fits: bool = True
 
 
 def _scores_at(
@@ -103,13 +104,16 @@ def _shows_hud(path: Path, info: VideoInfo, second: int) -> bool:
     return frame is not None and shows_hud(frame)
 
 
-def _any_hud(path: Path, info: VideoInfo, seconds: Sequence[int], jobs: int) -> bool:
-    """Whether the reference HUD icons appear in up to ICON_SCAN_FRAMES evenly spread frames.
+def _icon_scan_seconds(seconds: Sequence[int]) -> Sequence[int]:
+    return seconds[:: max(1, math.ceil(len(seconds) / ICON_SCAN_FRAMES))]
 
-    Whatever the Layout. Locating the icons costs seconds a frame, and a HUD that is up at all
-    is up for minutes, so a sparse look is enough.
+
+def _any_hud(path: Path, info: VideoInfo, spread: Sequence[int], jobs: int) -> bool:
+    """Whether the reference HUD icons appear in any of the spread frames, whatever the Layout.
+
+    Locating the icons costs seconds a frame, and a HUD that is up at all is up for minutes,
+    so a sparse look is enough.
     """
-    spread = seconds[:: max(1, math.ceil(len(seconds) / ICON_SCAN_FRAMES))]
     with ThreadPoolExecutor(max_workers=max(1, jobs)) as pool:
         return any(
             any(pool.map(lambda s: _shows_hud(path, info, s), group))
@@ -141,7 +145,11 @@ def select_layout(
         (loaded for loaded in layouts if loaded.layout.fits(info.width, info.height)),
         key=lambda loaded: str(loaded.path),
     )
+    opening, rest = _candidate_seconds(info)
     if not fitting:
+        spread = _icon_scan_seconds(opening)
+        if not _any_hud(path, info, spread, jobs):
+            return NoHud(list(layouts), len(spread), aspect_fits=False)
         raise _no_fit(path, info, layouts)
 
     hashes = [layout_hash(loaded.layout) for loaded in fitting]
@@ -151,10 +159,9 @@ def select_layout(
         best, score = _best(fitting, stored)
         return Selection(best, score, len(fitting))
 
-    opening, rest = _candidate_seconds(info)
     frames, tried = _in_match_scores(path, info, fitting, opening, rest, jobs)
     if not frames:
-        if not _any_hud(path, info, opening, jobs):
+        if not _any_hud(path, info, _icon_scan_seconds(opening), jobs):
             return NoHud(fitting, tried)
         raise LayoutSelectionError(
             f"no Layout matches this Recording's HUD: none of {tried} sampled frames shows "
