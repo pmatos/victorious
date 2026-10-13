@@ -46,6 +46,7 @@ MAX_PLACEMENT = 100
 MAX_PLACEMENT_ATTEMPTS = 15
 NEW_MATCH_ABSENCE_SECONDS = 20
 LOBBY_PEEK_SECONDS = 6
+ABANDONED_LOBBY_SECONDS = 30
 
 
 @dataclass
@@ -56,6 +57,15 @@ class _OpenMatch:
     tracker: CounterTracker
     results_start: int | None = None
     readings: list[ResultsReading] = field(default_factory=list)
+    opening: list[Counters] = field(default_factory=list)
+
+    def abandoned_lobby(self) -> bool:
+        """A short HUD run that only showed a lobby filling: the player left before the game."""
+        return (
+            self.results_start is None
+            and self.last_hud - self.start < ABANDONED_LOBBY_SECONDS
+            and lobby_filling(self.opening)
+        )
 
 
 def _vote(readings: list[ResultsReading]) -> tuple[int, float] | None:
@@ -182,7 +192,8 @@ def run_machine(
                 ahead = _peek_lobby(observations, second, counters)
                 peeked.update(ahead)
                 if lobby_filling(list(ahead.values())):
-                    matches.append(_finish(len(matches), current, resolver))
+                    if not current.abandoned_lobby():
+                        matches.append(_finish(len(matches), current, resolver))
                     current = None
             if current is not None:
                 current.last_hud = second
@@ -198,7 +209,10 @@ def run_machine(
         else:
             quiet_seen = True
         if current is not None:
-            current.tracker.observe(second, read(second) if present else {})
+            taken = read(second) if present else {}
+            if second - current.start < ABANDONED_LOBBY_SECONDS:
+                current.opening.append(taken)
+            current.tracker.observe(second, taken)
 
     if current is not None:
         matches.append(_finish(len(matches), current, resolver))

@@ -153,6 +153,20 @@ def test_match_left_before_its_results_screen_ends_when_the_next_one_starts(
     assert second["personal_eliminations"] == 0
 
 
+def test_lobby_abandoned_before_the_game_is_not_a_match(tmp_path: Path) -> None:
+    shots = (
+        *lobby_filling_shots(5),
+        Shot(Lobby(), 12, 45),
+        *lobby_filling_shots(45),
+        Shot(Hud(0, 0, 95), 52, 70),
+        Shot(Results(placement=4), 70, 75),
+    )
+
+    output = analyse(tmp_path, small(80, shots))
+
+    assert summary(output) == [(45.0, 70.0, False, 4)]
+
+
 def test_long_hud_absence_with_the_counters_unchanged_is_still_one_match(tmp_path: Path) -> None:
     shots = (
         Shot(Hud(3, 4, 16), 5, 15),
