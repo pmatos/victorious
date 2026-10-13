@@ -268,12 +268,8 @@ class CounterTracker:
             return
         pending.confidences.append(reading.confidence)
         previous = state.committed
-        if previous is not None:
-            returned_from = self._return_start(element, state, pending)
-            if returned_from is not None:
-                self._drop_transient(state, returned_from)
-            else:
-                self._commit_change(element, state, pending, previous)
+        if previous is not None and not self._drop_returned(state, pending):
+            self._commit_change(element, state, pending, previous)
         state.committed = pending.value
         state.furthest = _further(element, state.furthest, pending.value)
         state.pending = None
@@ -284,29 +280,24 @@ class CounterTracker:
     ) -> None:
         confidence = sum(pending.confidences) / len(pending.confidences)
         self._events.append(frame_event(element, pending.time, confidence, pending.value))
-        state.recent_changes = [
-            change
-            for change in state.recent_changes
-            if pending.time - change.time <= TRANSIENT_SECONDS
-        ]
-        state.recent_changes.append(_Change(len(self._events) - 1, previous, pending.time))
+        if element == "players_left":
+            state.recent_changes = [
+                change
+                for change in state.recent_changes
+                if pending.time - change.time <= TRANSIENT_SECONDS
+            ]
+            state.recent_changes.append(_Change(len(self._events) - 1, previous, pending.time))
         self._record_gap(element, state, pending, confidence)
 
-    @staticmethod
-    def _return_start(element: CounterElement, state: _State, pending: _Pending) -> int | None:
-        if element != "players_left":
-            return None
+    def _drop_returned(self, state: _State, pending: _Pending) -> bool:
         for position, change in enumerate(state.recent_changes):
-            if change.previous == pending.value:
-                within = pending.time - change.time <= TRANSIENT_SECONDS
-                return position if within else None
-        return None
-
-    def _drop_transient(self, state: _State, start: int) -> None:
-        for change in state.recent_changes[start:]:
-            self._dropped.add(change.index)
-            self._gaps.pop(change.index, None)
-        del state.recent_changes[start:]
+            if change.previous == pending.value and pending.time - change.time <= TRANSIENT_SECONDS:
+                for dropped in state.recent_changes[position:]:
+                    self._dropped.add(dropped.index)
+                    self._gaps.pop(dropped.index, None)
+                del state.recent_changes[position:]
+                return True
+        return False
 
     def _record_gap(
         self, element: CounterElement, state: _State, pending: _Pending, confidence: float
