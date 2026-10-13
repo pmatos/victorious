@@ -12,6 +12,100 @@ This project uses [uv](https://docs.astral.sh/uv/) for dependency management.
 uv sync
 ```
 
+## Tutorial
+
+From a Recording to a reviewed result. The commands below use `recording.mkv`; the reference sections further down say what every option does.
+
+You need `ffmpeg`, `ffprobe` and `tesseract` on `PATH` (see [Requirements](#requirements)) and `uv sync` done.
+
+### 1. Set up a Layout (once per HUD design and aspect ratio)
+
+Find, in a video player, one second where the in-match HUD is on screen (the three counters at the top right) and one second of each results screen: a Win (Victory Royale banner) and a "YOU PLACED #N" screen. Then:
+
+```bash
+uv run victorious setup recording.mkv --at hud=12:34 --at results=1:05:20 --at results=1:41:07 -o layout.yaml
+```
+
+`TIME` is seconds (`754`) or `MM:SS` / `H:MM:SS`. This writes `layout.yaml` and `layout.preview.png`. Open the preview: every element is drawn and labelled on each reference frame, so a rectangle in the wrong place is obvious.
+
+- With only a Win frame, the Layout is still written and stderr warns that `elimination_placement` was not found. Add a `--at results=` second showing "YOU PLACED #N" and rerun.
+- `could not find N element`: try another `--at hud=` second where the digits are crisp, or add `--manual` to drag the rectangles into place on a page served on `127.0.0.1` (pre-filled with what was found; add `--no-browser` to only print its address; `Save Layout` writes the same files).
+
+### 2. Analyse
+
+```bash
+uv run victorious analyse recording.mkv --layout layout.yaml --no-speech -o analysis.json
+```
+
+Start with `--no-speech`: it needs no token and no models, and gives the Matches, Wins, placement and counters. `--layout` also takes a directory of Layouts (one per HUD design or aspect ratio); the best fit for the Recording is chosen. Without `-o` the JSON goes to stdout. `--observations observations.jsonl` also writes every raw HUD reading, one line per element per second, which is what to read when a counter looks wrong.
+
+Reruns on the same Recording and Layout reuse the cached Observations (`--no-cache` to ignore them, `--jobs N` to limit the processes).
+
+### 3. Read the output
+
+Every time is in seconds from the start of the Recording.
+
+```bash
+jq -c '.matches[] | {start, end, win, placement, personal_eliminations}' analysis.json
+```
+
+```text
+{"start":2.0,"end":20.0,"win":true,"placement":1,"personal_eliminations":1}
+{"start":30.0,"end":45.0,"win":false,"placement":6,"personal_eliminations":0}
+```
+
+Each Match also has an `events` list in time order: `match_start`, `personal_eliminations` and `team_eliminations` (with the new count in `value`), `players_left`, `win`, `final_placement` (`value` is the placement), `match_end` and, with speech, `transcript`. `placement: null` means the Match was still running at the end of the Recording or its placement could not be read. A `warnings` entry of `not_fortnite` (see [Common errors](#common-errors)) means no in-match HUD was found, so `matches` is empty.
+
+```bash
+uv run victorious schema -o analysis.schema.json
+```
+
+`schema` prints the JSON schema of this output (to stdout without `-o`), for validating or generating types.
+
+### 4. Add speech (transcripts, Speakers, categories)
+
+Speech is on unless `--no-speech` is given, and needs three things set up once:
+
+1. **Hugging Face token.** Export `HF_TOKEN` (or `HUGGING_FACE_HUB_TOKEN`, or run `hf auth login`). Without one, `analyse` exits 1 before reading the Recording. The models are downloaded on first use (Whisper is about 480 MB).
+2. **Enrolled voices (optional).** Put one clip of a few seconds per person in a `voices/` folder in the directory you run the tool from, named by the person: `voices/alice.wav` becomes the Speaker `alice`. Any other voice is `unknown_1`, `unknown_2`, ... Use `--voices DIR` for another folder.
+3. **Jev API key (optional).** `export TYPESAFE_API_KEY=...` makes each transcript `category` `personal` or `game_related`. Only the text of each segment is sent to the external service (see [ADR 0002](docs/adr/0002-external-categorization-of-transcript-text.md)). Without a key a note goes to stderr; segments Jev cannot judge are `null` too. Either way the run still exits 0.
+
+```bash
+export HF_TOKEN=hf_...
+uv run victorious analyse recording.mkv --layout layout.yaml -o analysis.json
+```
+
+The first audio stream is transcribed; if the voices (microphone, party chat) are on another track, pass `--audio-stream N` (counted from 0 among the audio streams). Speech takes a large share of the run time, so keep `--no-speech` (or `VICTORIOUS_NO_SPEECH=1`) while iterating on a Layout.
+
+### 5. Review the Matches
+
+```bash
+uv run victorious review analysis.json
+```
+
+A page opens (the address is printed on stderr; `--no-browser` only prints it) with one card per Match and two frames of the Recording. Confirm a Match when what was read is right, reject it when it is not a real Match or a value is wrong (`c` and `r` decide the focused card). `Save labels` writes `analysis.labels.json` beside the JSON and the command exits 0; `Ctrl-C` cancels and writes nothing. If the Recording moved, pass `--recording PATH`.
+
+Keep the labels file beside the Recording. After changing the tool or the Layout, rerun `analyse` and compare:
+
+```bash
+uv run victorious review analysis.json --against analysis.labels.json
+```
+
+It prints one line per difference (`missing`, `changed`, `shifted`, `reappeared`, `unlabelled`) and exits 1, or prints `no differences (N matches)` and exits 0. `--tolerance SECONDS` sets how far a boundary may move (default 2).
+
+### Common errors
+
+| Message or symptom | Cause and fix |
+|--------------------|---------------|
+| `no Layout fits this 1920x1080 Recording (layout.yaml is 4:3); run victorious setup ...` | Every Layout's aspect ratio differs from the Recording's by more than 2%. Run `setup` on a Recording with this aspect ratio and put the result in the `--layout` directory. |
+| `no Layout matches this Recording's HUD: ...` | The aspect ratio fits but no HUD anchor is found in the sampled frames: the HUD design differs or the rectangles are off. Check the preview, or rerun `setup` with other `--at` seconds. |
+| `warning: not_fortnite: no in-match HUD in the first 10 minutes ...` (exit 0, `matches: []`, `layout: null`) | No in-match HUD was seen in the first 10 minutes for any Layout: not a Fortnite Recording, or a HUD design no Layout describes. A HUD that first appears after minute 10 is not looked for. |
+| `Recording not found: FILE` or `cannot read Recording FILE: ...` (exit 1) | The file is missing or not a video. |
+| `cannot read Recording FILE: it is truncated (no frame at 83 s, its header claims 85 s)` (exit 1) | A cut-short Recording is an error, not a partial result, and nothing is written. Check that it plays to the end and is not still being written. |
+| `no Hugging Face token found: set HF_TOKEN ...` (exit 1) | Speech is on but there is no token. Set `HF_TOKEN`, or pass `--no-speech`. |
+| `setup: could not find N element` (exit 1) | No Layout was written. Pass other `--at` seconds with a clear HUD or results screen, or use `--manual`. |
+| Counters missing or wrong at 720p | Digits are only reliable from 1920x1080 up; use `--observations` to see what was read. |
+
 ## Usage
 
 ```bash
