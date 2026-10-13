@@ -39,7 +39,7 @@ class NoHud:
 
     tried: list[LoadedLayout]
     frames: int
-    fitting: bool = True
+    aspect_fits: bool = True
 
 
 def _scores_at(
@@ -149,7 +149,7 @@ def select_layout(
     if not fitting:
         spread = _icon_scan_seconds(opening)
         if not _any_hud(path, info, spread, jobs):
-            return NoHud(list(layouts), len(spread), fitting=False)
+            return NoHud(list(layouts), len(spread), aspect_fits=False)
         raise _no_fit(path, info, layouts)
 
     hashes = [layout_hash(loaded.layout) for loaded in fitting]

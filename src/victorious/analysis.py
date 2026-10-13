@@ -297,7 +297,7 @@ def analyse_with_observations(
         shown = ", ".join(str(loaded.path) for loaded in selection.tried)
         tried = (
             f"Layouts tried: {shown}"
-            if selection.fitting
+            if selection.aspect_fits
             else f"no Layout fits this {info.width}x{info.height} Recording: {shown}"
         )
         warning = AnalysisWarning(
