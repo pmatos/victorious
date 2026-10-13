@@ -97,7 +97,7 @@ It prints one line per difference (`missing`, `changed`, `shifted`, `reappeared`
 
 | Message or symptom | Cause and fix |
 |--------------------|---------------|
-| `no Layout fits this 1920x1080 Recording (layout.yaml is 4:3); run victorious setup ...` | Every Layout's aspect ratio differs from the Recording's by more than 2%. Run `setup` on a Recording with this aspect ratio and put the result in the `--layout` directory. |
+| `no Layout fits this 1920x1080 Recording (layout.yaml is 4:3); run victorious setup ...` | Every Layout's aspect ratio differs from the Recording's by more than 2% and the Recording shows the in-match HUD (one with no HUD is reported as `not_fortnite` instead). Run `setup` on a Recording with this aspect ratio and put the result in the `--layout` directory. |
 | `no Layout matches this Recording's HUD: ...` | The aspect ratio fits but no HUD anchor is found in the sampled frames: the HUD design differs or the rectangles are off. Check the preview, or rerun `setup` with other `--at` seconds. |
 | `warning: not_fortnite: no in-match HUD in the first 10 minutes ...` (exit 0, `matches: []`, `layout: null`) | No in-match HUD was seen in the first 10 minutes for any Layout: not a Fortnite Recording, or a HUD design no Layout describes. A HUD that first appears after minute 10 is not looked for. |
 | `Recording not found: FILE` or `cannot read Recording FILE: ...` (exit 1) | The file is missing or not a video. |

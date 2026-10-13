@@ -9,8 +9,15 @@ from typing import Any
 import jsonschema
 import pytest
 
-from tests.analyse_helpers import STEADY, FfmpegShim, analyse_text, small
-from tests.synthetic import Hud, Shot, build_recording, match_shots, write_layout
+from tests.analyse_helpers import FPS, STEADY, FfmpegShim, analyse_text, small
+from tests.synthetic import (
+    Hud,
+    RecordingSpec,
+    Shot,
+    build_recording,
+    match_shots,
+    write_layout,
+)
 from victorious import selection
 from victorious.cli import main
 from victorious.metadata import started_at
@@ -106,6 +113,47 @@ def test_a_recording_without_a_hud_writes_an_empty_observations_file(
 
     assert result.returncode == 0, result.stderr
     assert sidecar.read_text() == ""
+
+
+@pytest.fixture(scope="module")
+def no_hud_32x9(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    spec = RecordingSpec(
+        duration=30, shots=(), fps=FPS, width=1920, height=540, keyframe_interval=2
+    )
+    return build_recording(spec, tmp_path_factory.mktemp("no-hud-32x9") / "no-hud-32x9.mkv")
+
+
+def test_a_32x9_recording_without_a_hud_is_not_fortnite_whatever_the_layout(
+    no_hud_32x9: Path, layout: Path, tmp_path: Path
+) -> None:
+    produced = tmp_path / "out.json"
+    sidecar = tmp_path / "side.jsonl"
+
+    result = analyse_text(
+        no_hud_32x9, layout, *("-o", str(produced)), *("--observations", str(sidecar))
+    )
+
+    assert result.returncode == 0, result.stderr
+    document = validated(produced.read_text())
+    assert document["matches"] == []
+    assert document["layout"] is None
+    assert [warning["code"] for warning in document["warnings"]] == ["not_fortnite"]
+    assert "not_fortnite" in result.stderr
+    assert sidecar.read_text() == ""
+
+
+def test_a_truncated_32x9_recording_without_a_hud_is_not_reported_as_not_fortnite(
+    no_hud_32x9: Path, layout: Path, tmp_path: Path
+) -> None:
+    cut = truncate(no_hud_32x9, tmp_path / "cut.mkv", 0.55)
+    produced = tmp_path / "out.json"
+
+    result = analyse_text(cut, layout, "-o", str(produced))
+
+    assert result.returncode == 1
+    assert not produced.exists()
+    assert "truncated" in result.stderr
+    assert "Traceback" not in result.stderr
 
 
 def test_a_hud_after_the_opening_window_is_not_fortnite(
