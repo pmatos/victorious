@@ -16,6 +16,7 @@ from victorious.counters import (
     CounterTracker,
     Resolver,
     ReuseTracker,
+    lobby_filling,
     tracked_elements,
 )
 from victorious.layout import Layout, LoadedLayout
@@ -43,6 +44,8 @@ from victorious.video import VideoInfo, probe, require_complete
 PLACEMENT_READINGS_PER_RUN = 5
 MAX_PLACEMENT = 100
 MAX_PLACEMENT_ATTEMPTS = 15
+NEW_MATCH_ABSENCE_SECONDS = 20
+LOBBY_PEEK_SECONDS = 6
 
 
 @dataclass
@@ -134,6 +137,11 @@ def run_machine(
     quiet_seen = True
     elements = tracked_elements(layout)
 
+    peeked: dict[int, Counters] = {}
+
+    def read(second: int) -> Counters:
+        return peeked.pop(second) if second in peeked else counters.read(second)
+
     for observation in observations:
         second = observation.second
         reading = observation.results
@@ -156,6 +164,16 @@ def run_machine(
         hud = observation.hud
         present = hud >= HUD_THRESHOLD
         if present:
+            if current is not None and second - current.last_hud > NEW_MATCH_ABSENCE_SECONDS:
+                counters.reset()
+                window = range(second, min(len(observations), second + LOBBY_PEEK_SECONDS))
+                for ahead in window:
+                    upcoming = observations[ahead]
+                    if upcoming.hud >= HUD_THRESHOLD and not upcoming.results.is_results:
+                        peeked[ahead] = counters.read(ahead)
+                if lobby_filling([peeked[ahead] for ahead in window if ahead in peeked]):
+                    matches.append(_finish(len(matches), current, resolver))
+                    current = None
             if current is not None:
                 current.last_hud = second
             elif quiet_seen:
@@ -169,7 +187,7 @@ def run_machine(
         else:
             quiet_seen = True
         if current is not None:
-            current.tracker.observe(second, counters.read(second) if present else {})
+            current.tracker.observe(second, read(second) if present else {})
 
     if current is not None:
         matches.append(_finish(len(matches), current, resolver))
