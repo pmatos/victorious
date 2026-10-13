@@ -125,6 +125,17 @@ class CounterSource(Protocol):
     def read(self, second: int) -> Counters: ...
 
 
+def _peek_lobby(
+    observations: Sequence[SecondObservation], second: int, counters: CounterSource
+) -> dict[int, Counters]:
+    """Reads the counters of the in-match seconds right after the HUD returns, in time order."""
+    ahead: dict[int, Counters] = {}
+    for upcoming in observations[second : second + LOBBY_PEEK_SECONDS]:
+        if upcoming.hud >= HUD_THRESHOLD and not upcoming.results.is_results:
+            ahead[upcoming.second] = counters.read(upcoming.second)
+    return ahead
+
+
 def run_machine(
     layout: Layout,
     observations: Sequence[SecondObservation],
@@ -138,6 +149,7 @@ def run_machine(
     elements = tracked_elements(layout)
 
     peeked: dict[int, Counters] = {}
+    reset_at_return = False
 
     def read(second: int) -> Counters:
         return peeked.pop(second) if second in peeked else counters.read(second)
@@ -164,20 +176,20 @@ def run_machine(
         hud = observation.hud
         present = hud >= HUD_THRESHOLD
         if present:
+            reset_at_return = False
             if current is not None and second - current.last_hud > NEW_MATCH_ABSENCE_SECONDS:
                 counters.reset()
-                window = range(second, min(len(observations), second + LOBBY_PEEK_SECONDS))
-                for ahead in window:
-                    upcoming = observations[ahead]
-                    if upcoming.hud >= HUD_THRESHOLD and not upcoming.results.is_results:
-                        peeked[ahead] = counters.read(ahead)
-                if lobby_filling([peeked[ahead] for ahead in window if ahead in peeked]):
+                reset_at_return = True
+                ahead = _peek_lobby(observations, second, counters)
+                peeked.update(ahead)
+                if lobby_filling(list(ahead.values())):
                     matches.append(_finish(len(matches), current, resolver))
                     current = None
             if current is not None:
                 current.last_hud = second
             elif quiet_seen:
-                counters.reset()
+                if not reset_at_return:
+                    counters.reset()
                 current = _OpenMatch(
                     start=second,
                     start_confidence=hud,

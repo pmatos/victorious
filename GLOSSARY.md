@@ -9,7 +9,7 @@ A single video file of one play session, typically one to three hours, containin
 _Avoid_: Stream, video, VOD
 
 **Match**:
-One Fortnite game, from lobby/bus to results screen.
+One Fortnite game, from lobby/bus to results screen (or to its last in-match second when the player left before one).
 _Avoid_: Game, round, session
 
 **Win**:
