@@ -82,8 +82,9 @@ class _Engine:
 
 
 _ENGINES_LOCK = threading.Lock()
+_UNUSABLE = threading.Event()
 _THREAD = threading.local()
-_IDLE: dict[_Pass, list[_Engine]] = {}
+_IDLE: dict[tuple[int, bool], list[_Engine]] = {}
 _ALL: list[_Engine] = []
 
 
@@ -118,12 +119,17 @@ def _load_library(name: str) -> ctypes.CDLL | None:
 
 
 @functools.cache
-def _library() -> ctypes.CDLL | None:
-    """libtesseract, loaded once, or None when only the command line is installed."""
+def _load_tesseract() -> ctypes.CDLL | None:
     for name in ("libtesseract.so.5", ctypes.util.find_library("tesseract")):
         if name is not None and (library := _load_library(name)) is not None:
             return library
     return None
+
+
+def _library() -> ctypes.CDLL | None:
+    """libtesseract, loaded once, or None when only the command line is installed or the
+    library could not load its model."""
+    return None if _UNUSABLE.is_set() else _load_tesseract()
 
 
 @functools.cache
@@ -140,8 +146,8 @@ def _openmp() -> ctypes.CDLL | None:
 def _single_threaded() -> None:
     """Keeps Tesseract's OpenMP team to the calling thread: the readers are already parallel.
 
-    The setting belongs to the calling thread, so the speech libraries, which share this
-    runtime when it is the system's, keep their own threads.
+    The setting belongs to the calling thread; a thread that later runs a library sharing
+    this runtime inherits it.
     """
     if getattr(_THREAD, "limited", False):
         return
@@ -159,18 +165,24 @@ def _engine(settings: _Pass) -> Iterator[_Engine | None]:
     if library is None:
         yield None
         return
+    key = (settings.page_segmentation_mode, settings.whitelist)
     with _ENGINES_LOCK:
-        idle = _IDLE.setdefault(settings, [])
+        idle = _IDLE.setdefault(key, [])
         engine = idle.pop() if idle else None
     if engine is None:
-        engine = _Engine(library, settings)
+        try:
+            engine = _Engine(library, settings)
+        except OcrError:
+            _UNUSABLE.set()
+            yield None
+            return
         with _ENGINES_LOCK:
             _ALL.append(engine)
     try:
         yield engine
     finally:
         with _ENGINES_LOCK:
-            _IDLE[settings].append(engine)
+            _IDLE.setdefault(key, []).append(engine)
 
 
 @atexit.register
@@ -198,6 +210,12 @@ def find_tesseract() -> str:
     if path is None:
         raise OcrError("tesseract not found on PATH; install tesseract-ocr")
     return path
+
+
+def require_ocr() -> None:
+    """Raises OcrError unless digits can be read, in-process or through the command line."""
+    if _library() is None:
+        find_tesseract()
 
 
 def glyph_boxes(mask: np.ndarray, max_height: int | None = None) -> list[tuple[int, int, int, int]]:
@@ -242,13 +260,13 @@ def _tsv_from_command_line(image: np.ndarray, tesseract: str, settings: _Pass) -
     return result.stdout.decode(errors="replace")
 
 
-def _recognise(image: np.ndarray, tesseract: str, settings: _Pass) -> tuple[str, float] | None:
+def _recognise(image: np.ndarray, settings: _Pass) -> tuple[str, float] | None:
     with _engine(settings) as engine:
         if engine is not None:
             text = engine.tsv(image)
         else:
-            text = _tsv_from_command_line(image, tesseract, settings)
-    for line in text.splitlines()[1:]:
+            text = _tsv_from_command_line(image, find_tesseract(), settings)
+    for line in text.splitlines():
         fields = line.split("\t")
         if len(fields) != 12:
             continue
@@ -265,9 +283,9 @@ def _recognise(image: np.ndarray, tesseract: str, settings: _Pass) -> tuple[str,
     return None
 
 
-def _read_glyph(glyph: np.ndarray, tesseract: str) -> tuple[str, float] | None:
+def _read_glyph(glyph: np.ndarray) -> tuple[str, float] | None:
     def run(settings: _Pass) -> tuple[str, float] | None:
-        return _recognise(_glyph_image(glyph, settings.glyph_height), tesseract, settings)
+        return _recognise(_glyph_image(glyph, settings.glyph_height), settings)
 
     votes: dict[str, float] = {}
     readings = map(run, PASSES) if _library() is not None else _PASS_POOL.map(run, PASSES)
@@ -284,11 +302,10 @@ def read_digits(mask: np.ndarray) -> DigitReading | None:
     """The digits in `mask` (white glyphs on black), or None when nothing readable is there."""
     if mask.size == 0:
         return None
-    tesseract = find_tesseract()
     boxes = glyph_boxes(mask)
     if not boxes:
         return None
-    readings = [_read_glyph(mask[y : y + h, x : x + w], tesseract) for x, y, w, h in boxes]
+    readings = [_read_glyph(mask[y : y + h, x : x + w]) for x, y, w, h in boxes]
     found = [reading for reading in readings if reading is not None]
     if len(found) != len(readings):
         return None

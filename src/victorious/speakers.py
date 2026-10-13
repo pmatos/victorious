@@ -219,6 +219,8 @@ class ParallelEmbedding:
         return getattr(self._model, name)
 
     def __call__(self, waveforms: Any, masks: Any = None) -> np.ndarray:
+        if len(waveforms) == 0:
+            return np.asarray(self._model(waveforms, masks=masks))
         size = max(1, -(-len(waveforms) // self._workers))
         parts = [
             (

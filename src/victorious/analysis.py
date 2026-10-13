@@ -22,7 +22,7 @@ from victorious.layout import Layout, LoadedLayout
 from victorious.metadata import started_at
 from victorious.music import MaskedWindow
 from victorious.observations import Counters, SecondObservation
-from victorious.ocr import find_tesseract
+from victorious.ocr import require_ocr
 from victorious.parallel import extract_seconds, read_counters
 from victorious.resample import JumpResolver
 from victorious.schema import (
@@ -285,7 +285,7 @@ def analyse_with_observations(
     info = probe(path)
     if speech is not None:
         require_audio_stream(info, speech)
-    find_tesseract()
+    require_ocr()
     recording = RecordingInfo(
         path=str(path), duration=info.duration, started_at=started_at(path, info.creation_time)
     )

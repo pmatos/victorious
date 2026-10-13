@@ -401,3 +401,11 @@ def test_a_parallel_embedder_still_answers_for_the_model_it_wraps() -> None:
     assert embedder.dimension == 3
     assert embedder.sample_rate == 16000
     assert embedder(np.zeros((1, 1, 8), dtype="float32")).shape == (1, 3)
+
+
+def test_an_empty_batch_is_embedded_as_an_empty_batch() -> None:
+    inner = _Embedder()
+
+    rows = ParallelEmbedding(inner, workers=3)(np.zeros((0, 1, 8), dtype="float32"))
+
+    assert rows.shape == (0, 3)
