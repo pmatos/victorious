@@ -312,10 +312,13 @@ def _run_analyse(args: argparse.Namespace) -> tuple[str, str | None]:
             spoken += f", speakers {analysis.speakers} (enrolled {analysis.enrolled})"
             if categorizer is not None:
                 spoken += f", categories {analysis.categorized} of {count}"
+        breakdown = ", ".join(
+            f"{name} {seconds:.1f} s" for name, seconds in analysis.phases.items()
+        )
         print(
             f"victorious analyse: layout {chosen.path} (score {chosen.score:.2f}, "
             f"{analysis.candidates} candidate{'s' if analysis.candidates != 1 else ''}), "
-            f"cache {state}{spoken}, {elapsed:.1f} s",
+            f"cache {state}{spoken}, {elapsed:.1f} s ({breakdown})",
             file=sys.stderr,
         )
         if count:

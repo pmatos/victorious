@@ -1,14 +1,17 @@
 """Telling Speakers apart: diarization, and naming voices enrolled from a `voices/` folder."""
 
 import functools
+import math
 import warnings
 from collections.abc import Callable, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 
+from victorious.cpus import physical_cores
 from victorious.errors import SpeechError
 from victorious.video import AUDIO_RATE, RecordingError, sample_audio
 
@@ -199,6 +202,38 @@ def fetch_diarizer(model: str) -> Path:
         ) from error
 
 
+class ParallelEmbedding:
+    """An embedding model that runs the parts of each batch on threads, in order.
+
+    Torch scales poorly inside one large batch on a few threads, but its operators release the
+    GIL, so independent parts of the batch run side by side; the rows are those of the whole.
+    """
+
+    def __init__(self, model: Any, workers: int) -> None:
+        self._model = model
+        self._workers = max(1, workers)
+        self._pool = ThreadPoolExecutor(max_workers=self._workers)
+
+    def __getattr__(self, name: str) -> Any:
+        if name.startswith("_"):
+            raise AttributeError(name)
+        return getattr(self._model, name)
+
+    def __call__(self, waveforms: Any, masks: Any = None) -> np.ndarray:
+        if len(waveforms) == 0:
+            return np.asarray(self._model(waveforms, masks=masks))
+        size = math.ceil(len(waveforms) / self._workers)
+        parts = [
+            (
+                waveforms[start : start + size],
+                None if masks is None else masks[start : start + size],
+            )
+            for start in range(0, len(waveforms), size)
+        ]
+        rows = self._pool.map(lambda part: self._model(part[0], masks=part[1]), parts)
+        return np.vstack(list(rows))
+
+
 class Diarizer:
     """The pyannote community-1 pipeline and its embedder, run on CPU."""
 
@@ -233,6 +268,8 @@ class Diarizer:
                 f"cannot load the diarization model {str(folder)!r}; "
                 "pass --no-speech to skip speech"
             )
+        torch.set_num_threads(1)
+        pipeline._embedding = ParallelEmbedding(pipeline._embedding, physical_cores())
         return cls(pipeline, embedder, torch)
 
     def _input(self, audio: np.ndarray) -> dict[str, Any]:

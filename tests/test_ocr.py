@@ -2,6 +2,7 @@
 
 import shutil
 import subprocess
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -9,6 +10,7 @@ import cv2
 import numpy as np
 import pytest
 
+from victorious import ocr
 from victorious.ocr import OcrError, glyph_boxes, read_digits
 
 CROPS = Path(__file__).parent / "fixtures" / "crops"
@@ -38,24 +40,85 @@ def test_a_stray_speck_beside_the_digits_is_not_a_glyph() -> None:
 
 
 def test_missing_tesseract_is_an_ocr_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(ocr, "_library", lambda: None)
     monkeypatch.setattr(shutil, "which", lambda name: None)
 
     with pytest.raises(OcrError, match="tesseract"):
         read_digits(_digits_mask("7"))
 
 
-def test_malformed_tesseract_output_is_skipped_not_fatal(monkeypatch: pytest.MonkeyPatch) -> None:
-    header = "\t".join(["level"] * 12)
-    broken = "\t".join(["5", "1", "1", "1", "1", "1", "0", "0", "5", "5", "n/a", "7"])
-    output = f"{header}\n{broken}\n"
-
+def _forced_through_the_command_line(monkeypatch: pytest.MonkeyPatch, output: str) -> None:
     def fake_run(*args: Any, **kwargs: Any) -> subprocess.CompletedProcess[bytes]:
         return subprocess.CompletedProcess(args, 0, output.encode(), b"")
 
+    monkeypatch.setattr(ocr, "_library", lambda: None)
     monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/tesseract")
     monkeypatch.setattr(subprocess, "run", fake_run)
 
+
+def test_malformed_tesseract_output_is_skipped_not_fatal(monkeypatch: pytest.MonkeyPatch) -> None:
+    header = "\t".join(["level"] * 12)
+    broken = "\t".join(["5", "1", "1", "1", "1", "1", "0", "0", "5", "5", "n/a", "7"])
+    _forced_through_the_command_line(monkeypatch, f"{header}\n{broken}\n")
+
     assert read_digits(_digits_mask("7")) is None
+
+
+def test_a_library_that_cannot_load_its_model_falls_back_to_the_command_line(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    header = "\t".join(["level"] * 12)
+    seven = "\t".join(["5", "1", "1", "1", "1", "1", "0", "0", "5", "5", "93.5", "7"])
+
+    def broken(*args: Any, **kwargs: Any) -> None:
+        raise OcrError("tesseract failed to load its English model")
+
+    monkeypatch.setattr(ocr, "_UNUSABLE", threading.Event())
+    monkeypatch.setattr(ocr, "_IDLE", {})
+    monkeypatch.setattr(ocr, "_load_tesseract", lambda: object())
+    monkeypatch.setattr(ocr, "_Engine", broken)
+    monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/tesseract")
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        lambda *a, **k: subprocess.CompletedProcess(a, 0, f"{header}\n{seven}\n".encode(), b""),
+    )
+
+    reading = read_digits(_digits_mask("7"))
+
+    assert reading is not None
+    assert reading.text == "7"
+    assert ocr._library() is None
+
+
+def test_the_command_line_reads_when_the_library_is_not_there(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    header = "\t".join(["level"] * 12)
+    seven = "\t".join(["5", "1", "1", "1", "1", "1", "0", "0", "5", "5", "93.5", "7"])
+    _forced_through_the_command_line(monkeypatch, f"{header}\n{seven}\n")
+
+    reading = read_digits(_digits_mask("7"))
+
+    assert reading is not None
+    assert reading.text == "7"
+
+
+@pytest.mark.usefixtures("require_tesseract")
+def test_digits_are_read_without_starting_a_process(monkeypatch: pytest.MonkeyPatch) -> None:
+    if ocr._library() is None:
+        pytest.skip("libtesseract is not installed")
+
+    def refuse(*args: Any, **kwargs: Any) -> None:
+        raise AssertionError(f"started a process: {args}")
+
+    monkeypatch.setattr(subprocess, "run", refuse)
+    monkeypatch.setattr(subprocess, "Popen", refuse)
+
+    reading = read_digits(_digits_mask("42"))
+
+    assert reading is not None
+    assert reading.text == "42"
 
 
 @pytest.mark.usefixtures("require_tesseract")

@@ -23,6 +23,7 @@ from victorious.speakers import (
     Diarizer,
     EnrolledVoice,
     EnrollmentClip,
+    ParallelEmbedding,
     Piece,
     Turn,
     clamped,
@@ -364,3 +365,47 @@ def test_a_pipeline_without_the_expected_result_is_a_speech_error() -> None:
 def test_a_diarization_folder_without_an_embedder_is_a_speech_error(tmp_path: Path) -> None:
     with pytest.raises(SpeechError, match="embedding/"):
         Diarizer.load(tmp_path)
+
+
+class _Embedder:
+    """A stand-in for a pyannote embedding model: one row per sample in the batch."""
+
+    dimension = 3
+    sample_rate = 16000
+
+    def __init__(self) -> None:
+        self.batches: list[int] = []
+
+    def __call__(self, waveforms: np.ndarray, masks: np.ndarray | None = None) -> np.ndarray:
+        self.batches.append(len(waveforms))
+        weights = np.ones(len(waveforms)) if masks is None else masks.sum(axis=1)
+        return np.stack([waveforms.mean(axis=(1, 2)), weights, np.arange(len(waveforms))], axis=1)
+
+
+def test_embedding_a_batch_in_parts_gives_the_rows_of_the_whole_batch_in_order() -> None:
+    waveforms = np.random.default_rng(0).normal(size=(7, 1, 40)).astype("float32")
+    masks = np.random.default_rng(1).uniform(size=(7, 5)).astype("float32")
+    whole = _Embedder()(waveforms, masks)
+    inner = _Embedder()
+
+    parts = ParallelEmbedding(inner, workers=3)(waveforms, masks=masks)
+
+    assert max(inner.batches) < 7
+    assert sum(inner.batches) == 7
+    np.testing.assert_allclose(parts[:, :2], whole[:, :2])
+
+
+def test_a_parallel_embedder_still_answers_for_the_model_it_wraps() -> None:
+    embedder = ParallelEmbedding(_Embedder(), workers=2)
+
+    assert embedder.dimension == 3
+    assert embedder.sample_rate == 16000
+    assert embedder(np.zeros((1, 1, 8), dtype="float32")).shape == (1, 3)
+
+
+def test_an_empty_batch_is_embedded_as_an_empty_batch() -> None:
+    inner = _Embedder()
+
+    rows = ParallelEmbedding(inner, workers=3)(np.zeros((0, 1, 8), dtype="float32"))
+
+    assert rows.shape == (0, 3)

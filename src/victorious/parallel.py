@@ -22,7 +22,7 @@ import numpy as np
 from victorious.counters import CounterReading, best_reading
 from victorious.layout import Layout
 from victorious.observations import Aborted, ChunkSecond, extract_chunk
-from victorious.ocr import PASSES
+from victorious.ocr import concurrent_readers
 from victorious.video import TAIL_TOLERANCE, RecordingError, VideoInfo, sample_chunk
 
 _ABORT: Event | None = None
@@ -119,7 +119,7 @@ def extract_seconds(
 
 def read_counters(masks: Sequence[list[np.ndarray]], jobs: int) -> list[CounterReading | None]:
     """Tesseract on each list of masks, `jobs` at a time."""
-    readers = max(1, jobs // len(PASSES))
+    readers = concurrent_readers(jobs)
     if readers == 1 or len(masks) < 2:
         return [best_reading(candidates) for candidates in masks]
     with ThreadPoolExecutor(max_workers=readers) as pool:
