@@ -62,6 +62,7 @@ class _Engine:
             library.TessBaseAPISetVariable(self._handle, b"tessedit_char_whitelist", b"0123456789")
 
     def tsv(self, image: np.ndarray) -> str:
+        _single_threaded()
         pixels = np.ascontiguousarray(image)
         height, width = pixels.shape
         library = self._library
@@ -81,6 +82,7 @@ class _Engine:
 
 
 _ENGINES_LOCK = threading.Lock()
+_THREAD = threading.local()
 _IDLE: dict[_Pass, list[_Engine]] = {}
 _ALL: list[_Engine] = []
 
@@ -103,23 +105,50 @@ _SIGNATURES: dict[str, tuple[type | None, list[type]]] = {
 }
 
 
+def _load_library(name: str) -> ctypes.CDLL | None:
+    try:
+        library = ctypes.CDLL(name)
+        for function, (result, arguments) in _SIGNATURES.items():
+            member = getattr(library, function)
+            member.restype = result
+            member.argtypes = arguments
+    except (OSError, AttributeError):
+        return None
+    return library
+
+
 @functools.cache
 def _library() -> ctypes.CDLL | None:
     """libtesseract, loaded once, or None when only the command line is installed."""
-    os.environ["OMP_THREAD_LIMIT"] = "1"
     for name in ("libtesseract.so.5", ctypes.util.find_library("tesseract")):
-        if name is None:
-            continue
-        try:
-            library = ctypes.CDLL(name)
-            for function, (result, arguments) in _SIGNATURES.items():
-                member = getattr(library, function)
-                member.restype = result
-                member.argtypes = arguments
-        except (OSError, AttributeError):
-            continue
-        return library
+        if name is not None and (library := _load_library(name)) is not None:
+            return library
     return None
+
+
+@functools.cache
+def _openmp() -> ctypes.CDLL | None:
+    try:
+        runtime = ctypes.CDLL("libgomp.so.1")
+        runtime.omp_set_num_threads.argtypes = [ctypes.c_int]
+        runtime.omp_set_num_threads.restype = None
+    except (OSError, AttributeError):
+        return None
+    return runtime
+
+
+def _single_threaded() -> None:
+    """Keeps Tesseract's OpenMP team to the calling thread: the readers are already parallel.
+
+    The setting belongs to the calling thread, so the speech libraries, which share this
+    runtime when it is the system's, keep their own threads.
+    """
+    if getattr(_THREAD, "limited", False):
+        return
+    runtime = _openmp()
+    if runtime is not None:
+        runtime.omp_set_num_threads(1)
+    _THREAD.limited = True
 
 
 @contextlib.contextmanager
