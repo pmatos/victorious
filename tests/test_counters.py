@@ -71,6 +71,62 @@ def test_a_counter_that_changes_once_is_reported_once(tmp_path: Path) -> None:
     assert counter_events(match, "team_eliminations") == []
 
 
+def test_players_left_that_reads_another_value_for_two_seconds_is_not_an_event(
+    tmp_path: Path,
+) -> None:
+    steps = ((0.0, 0, 0, 99), (12.0, 0, 0, 98), (14.0, 0, 0, 99))
+    shots = match_shots(5, steps, results_at=35, placement=3)
+
+    output = analyse(tmp_path, small(45, shots))
+
+    (match,) = output["matches"]
+    assert changes(match, "players_left") == []
+
+
+def test_players_left_multi_step_misread_is_dropped_and_a_later_fall_still_resolved(
+    tmp_path: Path,
+) -> None:
+    steps = ((0.0, 0, 0, 99), (12.0, 0, 0, 96), (14.0, 0, 0, 99), (22.0, 0, 0, 97))
+    shots = match_shots(5, steps, results_at=40, placement=3)
+
+    output = analyse(tmp_path, small(50, shots))
+
+    (match,) = output["matches"]
+    assert [value for _, value in changes(match, "players_left")] == [98, 97]
+
+
+def test_players_left_misread_after_a_real_fall_is_dropped_and_the_fall_kept(
+    tmp_path: Path,
+) -> None:
+    steps = ((0.0, 0, 0, 99), (8.0, 0, 0, 98), (18.0, 0, 0, 99), (20.0, 0, 0, 98))
+    shots = match_shots(5, steps, results_at=35, placement=3)
+
+    output = analyse(tmp_path, small(45, shots))
+
+    (match,) = output["matches"]
+    assert changes(match, "players_left") == [(13.0, 98)]
+
+
+def test_players_left_that_returns_after_a_long_run_is_kept(tmp_path: Path) -> None:
+    steps = ((0.0, 0, 0, 99), (8.0, 0, 0, 98), (20.0, 0, 0, 99))
+    shots = match_shots(5, steps, results_at=40, placement=3)
+
+    output = analyse(tmp_path, small(50, shots))
+
+    (match,) = output["matches"]
+    assert changes(match, "players_left") == [(13.0, 98), (25.0, 99)]
+
+
+def test_players_left_rising_while_the_lobby_fills_is_kept(tmp_path: Path) -> None:
+    steps = ((0.0, 0, 0, 96), (10.0, 0, 0, 97), (20.0, 0, 0, 98))
+    shots = match_shots(5, steps, results_at=40, placement=3)
+
+    output = analyse(tmp_path, small(50, shots))
+
+    (match,) = output["matches"]
+    assert changes(match, "players_left") == [(15.0, 97), (25.0, 98)]
+
+
 def test_counter_events_sit_between_match_start_and_match_end_in_time_order(
     tmp_path: Path,
 ) -> None:
@@ -286,6 +342,37 @@ def test_a_reading_from_before_an_unreadable_span_does_not_pair_with_one_after_i
     tracker.observe(20, reading(1))
 
     assert [event.kind for event in tracker.close(30).events] == ["unreadable"]
+
+
+def _players_left_events(values: list[int]) -> list[tuple[float, int | None]]:
+    tracker = CounterTracker(("players_left",))
+    for second, value in enumerate(values):
+        tracker.observe(float(second), {"players_left": CounterReading(value, 0.9)})
+    return [(event.time, event.value) for event in tracker.close(float(len(values))).events]
+
+
+def test_a_players_left_return_exactly_at_the_window_is_dropped() -> None:
+    values = [99] * 5 + [98] * 5 + [99] * 5
+
+    assert _players_left_events(values) == []
+
+
+def test_a_players_left_return_just_past_the_window_is_kept() -> None:
+    values = [99] * 5 + [98] * 6 + [99] * 5
+
+    assert _players_left_events(values) == [(5.0, 98), (11.0, 99)]
+
+
+def test_a_players_left_misread_through_two_wrong_values_is_dropped_whole() -> None:
+    values = [99] * 5 + [98] * 2 + [97] * 2 + [99] * 5
+
+    assert _players_left_events(values) == []
+
+
+def test_a_real_players_left_fall_before_a_misread_chain_is_kept() -> None:
+    values = [100] * 5 + [99] * 10 + [98] * 2 + [97] * 2 + [99] * 5
+
+    assert _players_left_events(values) == [(5.0, 99)]
 
 
 def _read_players_left(
