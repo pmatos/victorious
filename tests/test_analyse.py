@@ -375,3 +375,30 @@ def test_opencv_failure_is_reported_as_a_clean_error(
 
     assert status == 1
     assert "victorious analyse:" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    ("placement", "style", "first_run"),
+    [(1, "classic", 1.0), (12, "placed", 1.0), (12, "placed", 3.0), (1, "orange", 2.0)],
+)
+def test_a_dropped_second_inside_the_results_screen_changes_nothing(
+    tmp_path: Path, placement: int, style: Any, first_run: float
+) -> None:
+    results = 25.0
+    shots = (
+        *match_shots(
+            5,
+            STEADY,
+            results_at=results,
+            placement=placement,
+            results_duration=first_run,
+            results_style=style,
+        ),
+        Shot(Lobby(), results + first_run, results + first_run + 1),
+        Shot(Results(placement, style), results + first_run + 1, results + first_run + 5),
+        *match_shots(50, STEADY, results_at=70, placement=5),
+    )
+
+    output = analyse(tmp_path, small(80, shots))
+
+    assert summary(output) == [(5.0, 25.0, placement == 1, placement), (50.0, 70.0, False, 5)]
