@@ -21,14 +21,13 @@ from victorious.layout import (
     aspect_ratio_label,
 )
 from victorious.screens import (
-    BANNER_SCALE_SWEEP,
     HUD_THRESHOLD,
     RESULTS_THRESHOLD,
-    SCALE_SWEEP,
     ResultsReading,
     counter_masks,
     hud_score,
     results_reading,
+    scale_range,
 )
 from victorious.video import RecordingError, VideoInfo, frame_at, probe
 
@@ -102,8 +101,7 @@ class SetupResult:
 
 
 def _scale_note(element: str, found: Found) -> str:
-    sweep = BANNER_SCALE_SWEEP if element == "results_banner" else SCALE_SWEEP
-    low, high = min(sweep), max(sweep)
+    low, high = scale_range(element)
     if low <= found.scale_factor <= high:
         return ""
     return (

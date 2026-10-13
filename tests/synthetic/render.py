@@ -15,7 +15,7 @@ NATIVE_WIDTH = 2560
 NATIVE_HEIGHT = 1440
 BANNER_CROP_SCALE = 4.0
 LARGE_BANNER_ZOOM = 1.45
-LARGE_BANNER_ORIGIN = (1103, 192)
+LARGE_BANNER_OFFSET = (-2, 82)
 DIGIT_GAP_NATIVE = 3.0
 DIGIT_HEIGHT_NATIVE = 17
 ICON_NATIVE_SIZE = 36
@@ -175,10 +175,9 @@ def _draw_large_banner(frame: np.ndarray) -> None:
     banner = load_crop("victory_royale_orange", True)
     scale = height / NATIVE_HEIGHT * BANNER_CROP_SCALE * LARGE_BANNER_ZOOM
     size = (round(banner.shape[1] * scale), round(banner.shape[0] * scale))
-    x, y = (
-        round(LARGE_BANNER_ORIGIN[0] / NATIVE_WIDTH * width),
-        round(LARGE_BANNER_ORIGIN[1] / NATIVE_HEIGHT * height),
-    )
+    left, top = NATIVE_RECTS["results_banner"][:2]
+    x = round((left + LARGE_BANNER_OFFSET[0]) / NATIVE_WIDTH * width)
+    y = round((top + LARGE_BANNER_OFFSET[1]) / NATIVE_HEIGHT * height)
     _paste(frame, cv2.resize(banner, size, interpolation=cv2.INTER_LINEAR), x, y)
 
 
