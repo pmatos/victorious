@@ -1,7 +1,6 @@
 """Telling Speakers apart: diarization, and naming voices enrolled from a `voices/` folder."""
 
 import functools
-import os
 import warnings
 from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor
@@ -11,6 +10,7 @@ from typing import Any
 
 import numpy as np
 
+from victorious.cpus import physical_cores
 from victorious.errors import SpeechError
 from victorious.video import AUDIO_RATE, RecordingError, sample_audio
 
@@ -214,6 +214,8 @@ class ParallelEmbedding:
         self._pool = ThreadPoolExecutor(max_workers=self._workers)
 
     def __getattr__(self, name: str) -> Any:
+        if name.startswith("_"):
+            raise AttributeError(name)
         return getattr(self._model, name)
 
     def __call__(self, waveforms: Any, masks: Any = None) -> np.ndarray:
@@ -263,9 +265,8 @@ class Diarizer:
                 f"cannot load the diarization model {str(folder)!r}; "
                 "pass --no-speech to skip speech"
             )
-        workers = max(1, (os.cpu_count() or 2) // 2)
         torch.set_num_threads(1)
-        pipeline._embedding = ParallelEmbedding(pipeline._embedding, workers)
+        pipeline._embedding = ParallelEmbedding(pipeline._embedding, physical_cores())
         return cls(pipeline, embedder, torch)
 
     def _input(self, audio: np.ndarray) -> dict[str, Any]:

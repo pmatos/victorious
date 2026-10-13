@@ -3,7 +3,6 @@
 import bisect
 import heapq
 import math
-import os
 import re
 from collections.abc import Sequence
 from dataclasses import dataclass, replace
@@ -12,6 +11,7 @@ from typing import Any
 
 import numpy as np
 
+from victorious.cpus import physical_cores
 from victorious.errors import SpeechError
 from victorious.music import (
     MaskedWindow,
@@ -132,7 +132,7 @@ def _load_model(name: str) -> Any:
             name,
             device="cpu",
             compute_type="int8",
-            cpu_threads=os.cpu_count() or 1,
+            cpu_threads=physical_cores(),
             use_auth_token=False,
             local_files_only=local_only,
         )
