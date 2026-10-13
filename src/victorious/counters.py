@@ -204,7 +204,7 @@ class _Pending:
 
 @dataclass(frozen=True)
 class _Change:
-    """The latest committed change of a counter: its Event and the value it left."""
+    """A committed change of a counter: its Event and the value it left."""
 
     index: int
     previous: int
@@ -214,7 +214,7 @@ class _Change:
 @dataclass
 class _State:
     committed: int | None = None
-    last_change: _Change | None = None
+    recent_changes: list[_Change] = field(default_factory=list)
     pending: _Pending | None = None
     gap_start: float | None = None
     last_seen: float | None = None
@@ -227,7 +227,7 @@ class CounterTracker:
     A jump of more than one between two readable seconds is recorded as a Gap; `close` hands the
     Gaps to a resolver and replaces each jump's single Event by one Event per step. A
     `players_left` change that goes back to the value it left within `TRANSIENT_SECONDS` is a
-    misread, not a change: neither it nor the return becomes an Event.
+    misread, not a change: neither it, nor any change made since, nor the return becomes an Event.
     """
 
     def __init__(self, elements: tuple[CounterElement, ...]) -> None:
@@ -252,7 +252,7 @@ class CounterTracker:
         if start is None or end - start <= UNREADABLE_SECONDS:
             return
         state.pending = None
-        state.last_change = None
+        state.recent_changes.clear()
         self._events.append(frame_event("unreadable", start, 0.0, end=end, element=element))
 
     def _accept(
@@ -267,39 +267,46 @@ class CounterTracker:
             state.pending = _Pending(reading.value, second, state.last_seen, [reading.confidence])
             return
         pending.confidences.append(reading.confidence)
-        if state.committed is not None:
-            if self._is_return(element, state, pending):
-                self._drop_transient(state)
+        previous = state.committed
+        if previous is not None:
+            returned_from = self._return_start(element, state, pending)
+            if returned_from is not None:
+                self._drop_transient(state, returned_from)
             else:
-                self._commit_change(element, state, pending)
+                self._commit_change(element, state, pending, previous)
         state.committed = pending.value
         state.furthest = _further(element, state.furthest, pending.value)
         state.pending = None
         state.last_seen = second
 
-    def _commit_change(self, element: CounterElement, state: _State, pending: _Pending) -> None:
+    def _commit_change(
+        self, element: CounterElement, state: _State, pending: _Pending, previous: int
+    ) -> None:
         confidence = sum(pending.confidences) / len(pending.confidences)
         self._events.append(frame_event(element, pending.time, confidence, pending.value))
-        if state.committed is not None:
-            state.last_change = _Change(len(self._events) - 1, state.committed, pending.time)
+        state.recent_changes = [
+            change
+            for change in state.recent_changes
+            if pending.time - change.time <= TRANSIENT_SECONDS
+        ]
+        state.recent_changes.append(_Change(len(self._events) - 1, previous, pending.time))
         self._record_gap(element, state, pending, confidence)
 
     @staticmethod
-    def _is_return(element: CounterElement, state: _State, pending: _Pending) -> bool:
-        change = state.last_change
-        return (
-            element == "players_left"
-            and change is not None
-            and pending.value == change.previous
-            and pending.time - change.time <= TRANSIENT_SECONDS
-        )
+    def _return_start(element: CounterElement, state: _State, pending: _Pending) -> int | None:
+        if element != "players_left":
+            return None
+        for position, change in enumerate(state.recent_changes):
+            if change.previous == pending.value:
+                within = pending.time - change.time <= TRANSIENT_SECONDS
+                return position if within else None
+        return None
 
-    def _drop_transient(self, state: _State) -> None:
-        change = state.last_change
-        if change is not None:
+    def _drop_transient(self, state: _State, start: int) -> None:
+        for change in state.recent_changes[start:]:
             self._dropped.add(change.index)
             self._gaps.pop(change.index, None)
-        state.last_change = None
+        del state.recent_changes[start:]
 
     def _record_gap(
         self, element: CounterElement, state: _State, pending: _Pending, confidence: float

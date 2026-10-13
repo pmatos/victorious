@@ -344,6 +344,37 @@ def test_a_reading_from_before_an_unreadable_span_does_not_pair_with_one_after_i
     assert [event.kind for event in tracker.close(30).events] == ["unreadable"]
 
 
+def _players_left_events(values: list[int]) -> list[tuple[float, int | None]]:
+    tracker = CounterTracker(("players_left",))
+    for second, value in enumerate(values):
+        tracker.observe(float(second), {"players_left": CounterReading(value, 0.9)})
+    return [(event.time, event.value) for event in tracker.close(float(len(values))).events]
+
+
+def test_a_players_left_return_exactly_at_the_window_is_dropped() -> None:
+    values = [99] * 5 + [98] * 5 + [99] * 5
+
+    assert _players_left_events(values) == []
+
+
+def test_a_players_left_return_just_past_the_window_is_kept() -> None:
+    values = [99] * 5 + [98] * 6 + [99] * 5
+
+    assert _players_left_events(values) == [(5.0, 98), (11.0, 99)]
+
+
+def test_a_players_left_misread_through_two_wrong_values_is_dropped_whole() -> None:
+    values = [99] * 5 + [98] * 2 + [97] * 2 + [99] * 5
+
+    assert _players_left_events(values) == []
+
+
+def test_a_real_players_left_fall_before_a_misread_chain_is_kept() -> None:
+    values = [100] * 5 + [99] * 10 + [98] * 2 + [97] * 2 + [99] * 5
+
+    assert _players_left_events(values) == [(5.0, 99)]
+
+
 def _read_players_left(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
