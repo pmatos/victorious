@@ -149,7 +149,6 @@ def run_machine(
     elements = tracked_elements(layout)
 
     peeked: dict[int, Counters] = {}
-    reset_at_return = False
 
     def read(second: int) -> Counters:
         return peeked.pop(second) if second in peeked else counters.read(second)
@@ -176,10 +175,10 @@ def run_machine(
         hud = observation.hud
         present = hud >= HUD_THRESHOLD
         if present:
-            reset_at_return = False
+            returned = False
             if current is not None and second - current.last_hud > NEW_MATCH_ABSENCE_SECONDS:
+                returned = True
                 counters.reset()
-                reset_at_return = True
                 ahead = _peek_lobby(observations, second, counters)
                 peeked.update(ahead)
                 if lobby_filling(list(ahead.values())):
@@ -188,7 +187,7 @@ def run_machine(
             if current is not None:
                 current.last_hud = second
             elif quiet_seen:
-                if not reset_at_return:
+                if not returned:
                     counters.reset()
                 current = _OpenMatch(
                     start=second,
