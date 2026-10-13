@@ -21,6 +21,7 @@ from victorious.layout import (
     aspect_ratio_label,
 )
 from victorious.screens import (
+    BANNER_SCALE_SWEEP,
     HUD_THRESHOLD,
     RESULTS_THRESHOLD,
     SCALE_SWEEP,
@@ -100,8 +101,9 @@ class SetupResult:
         return sum(len(panel.found) for panel in self.panels)
 
 
-def _scale_note(found: Found) -> str:
-    low, high = min(SCALE_SWEEP), max(SCALE_SWEEP)
+def _scale_note(element: str, found: Found) -> str:
+    sweep = BANNER_SCALE_SWEEP if element == "results_banner" else SCALE_SWEEP
+    low, high = min(sweep), max(sweep)
     if low <= found.scale_factor <= high:
         return ""
     return (
@@ -146,7 +148,7 @@ def _self_check(layout: Layout, panels: Sequence[Panel]) -> dict[str, str]:
                 best = max(score for score, _ in outcomes)
                 problems[element] = (
                     f"the Layout does not read back at {panel.kind}={panel.second} "
-                    f"(score {best:.2f}){_scale_note(found)}"
+                    f"(score {best:.2f}){_scale_note(element, found)}"
                 )
     return problems
 
