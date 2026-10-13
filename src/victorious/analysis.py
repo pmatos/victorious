@@ -1,7 +1,9 @@
 """Turn a Recording and a Layout into Matches with Events."""
 
+import time
 from collections import defaultdict
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Protocol
@@ -199,15 +201,31 @@ class _Readings:
         return self._observations[second].counters
 
 
+class Phases:
+    """Wall seconds spent in each named phase of an analysis, in the order they ran."""
+
+    def __init__(self) -> None:
+        self.seconds: dict[str, float] = {}
+
+    @contextmanager
+    def timed(self, name: str) -> Iterator[None]:
+        started = time.monotonic()
+        try:
+            yield
+        finally:
+            self.seconds[name] = self.seconds.get(name, 0.0) + time.monotonic() - started
+
+
 def _with_counters(
-    path: Path, info: VideoInfo, layout: Layout, jobs: int, chunk_seconds: int
+    path: Path, info: VideoInfo, layout: Layout, jobs: int, chunk_seconds: int, phases: Phases
 ) -> list[SecondObservation]:
     """The Observations of every second, reading counters exactly where a serial pass would.
 
     The Match loop is run once with a recorder to learn which seconds it reads counters at, the
     skip-OCR rule is replayed over that schedule, and only the pixels that rule keeps are OCR'd.
     """
-    seconds = extract_seconds(path, info, layout, jobs, chunk_seconds)
+    with phases.timed("frames"):
+        seconds = extract_seconds(path, info, layout, jobs, chunk_seconds)
     observations = [second.observation for second in seconds]
     recorder = _ScheduleRecorder()
     run_machine(layout, observations, recorder, None)
@@ -230,7 +248,8 @@ def _with_counters(
                 latest[element] = len(fresh) - 1
             source[call, element] = latest[element]
 
-    readings = read_counters(fresh, jobs)
+    with phases.timed("counters"):
+        readings = read_counters(fresh, jobs)
     counters: dict[int, Counters] = {}
     for (second, element), index in source.items():
         counters.setdefault(second, {})[element] = readings[index]
@@ -250,6 +269,7 @@ class Analysis:
     enrolled: int = 0
     categorized: int = 0
     category_failure: str | None = None
+    phases: dict[str, float] = field(default_factory=dict)
 
 
 def analyse_with_observations(
@@ -269,7 +289,9 @@ def analyse_with_observations(
     recording = RecordingInfo(
         path=str(path), duration=info.duration, started_at=started_at(path, info.creation_time)
     )
-    selection = select_layout(path, info, layouts, jobs=jobs, cache=cache)
+    phases = Phases()
+    with phases.timed("layout"):
+        selection = select_layout(path, info, layouts, jobs=jobs, cache=cache)
     if isinstance(selection, NoHud):
         require_complete(path, info)
         shown = ", ".join(str(loaded.path) for loaded in selection.tried)
@@ -290,7 +312,7 @@ def analyse_with_observations(
     cached = observations is not None
     if observations is None:
         require_complete(path, info)
-        observations = _with_counters(path, info, layout, jobs, chunk_seconds)
+        observations = _with_counters(path, info, layout, jobs, chunk_seconds, phases)
     resolver = JumpResolver(path, info, layout, entry)
     matches = run_machine(layout, observations, _Readings(observations), resolver)
     if entry is not None and not cached:
@@ -300,7 +322,8 @@ def analyse_with_observations(
     speakers = enrolled = categorized = 0
     category_failure: str | None = None
     if speech is not None:
-        spoken = transcribe_matches(path, info, matches, speech)
+        with phases.timed("speech"):
+            spoken = transcribe_matches(path, info, matches, speech)
         matches, segments, masked = spoken.matches, spoken.segments, spoken.masked
         speakers, enrolled = spoken.speakers, spoken.enrolled
         judged = categorize_matches(matches, categorizer)
@@ -324,6 +347,7 @@ def analyse_with_observations(
         enrolled,
         categorized,
         category_failure,
+        phases.seconds,
     )
 
 

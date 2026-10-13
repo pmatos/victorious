@@ -297,6 +297,7 @@ def _run_analyse(args: argparse.Namespace) -> tuple[str, str | None]:
     state = "off" if cache is None else "hit" if analysis.cached else "miss"
     elapsed = time.monotonic() - started
     chosen = analysis.output.layout
+    breakdown = ", ".join(f"{name} {seconds:.1f} s" for name, seconds in analysis.phases.items())
     if chosen is None:
         for warning in analysis.output.warnings:
             print(
@@ -315,7 +316,7 @@ def _run_analyse(args: argparse.Namespace) -> tuple[str, str | None]:
         print(
             f"victorious analyse: layout {chosen.path} (score {chosen.score:.2f}, "
             f"{analysis.candidates} candidate{'s' if analysis.candidates != 1 else ''}), "
-            f"cache {state}{spoken}, {elapsed:.1f} s",
+            f"cache {state}{spoken}, {elapsed:.1f} s ({breakdown})",
             file=sys.stderr,
         )
         if count:
