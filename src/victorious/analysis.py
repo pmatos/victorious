@@ -16,6 +16,7 @@ from victorious.counters import (
     CounterTracker,
     Resolver,
     ReuseTracker,
+    lobby_filling,
     tracked_elements,
 )
 from victorious.layout import Layout, LoadedLayout
@@ -43,6 +44,8 @@ from victorious.video import VideoInfo, probe, require_complete
 PLACEMENT_READINGS_PER_RUN = 5
 MAX_PLACEMENT = 100
 MAX_PLACEMENT_ATTEMPTS = 15
+NEW_MATCH_ABSENCE_SECONDS = 20
+LOBBY_PEEK_SECONDS = 6
 
 
 @dataclass
@@ -122,6 +125,17 @@ class CounterSource(Protocol):
     def read(self, second: int) -> Counters: ...
 
 
+def _peek_lobby(
+    observations: Sequence[SecondObservation], second: int, counters: CounterSource
+) -> dict[int, Counters]:
+    """Reads the counters of the in-match seconds right after the HUD returns, in time order."""
+    ahead: dict[int, Counters] = {}
+    for upcoming in observations[second : second + LOBBY_PEEK_SECONDS]:
+        if upcoming.hud >= HUD_THRESHOLD and not upcoming.results.is_results:
+            ahead[upcoming.second] = counters.read(upcoming.second)
+    return ahead
+
+
 def run_machine(
     layout: Layout,
     observations: Sequence[SecondObservation],
@@ -133,6 +147,11 @@ def run_machine(
     in_results = False
     quiet_seen = True
     elements = tracked_elements(layout)
+
+    peeked: dict[int, Counters] = {}
+
+    def read(second: int) -> Counters:
+        return peeked.pop(second) if second in peeked else counters.read(second)
 
     for observation in observations:
         second = observation.second
@@ -156,10 +175,20 @@ def run_machine(
         hud = observation.hud
         present = hud >= HUD_THRESHOLD
         if present:
+            returned = False
+            if current is not None and second - current.last_hud > NEW_MATCH_ABSENCE_SECONDS:
+                returned = True
+                counters.reset()
+                ahead = _peek_lobby(observations, second, counters)
+                peeked.update(ahead)
+                if lobby_filling(list(ahead.values())):
+                    matches.append(_finish(len(matches), current, resolver))
+                    current = None
             if current is not None:
                 current.last_hud = second
             elif quiet_seen:
-                counters.reset()
+                if not returned:
+                    counters.reset()
                 current = _OpenMatch(
                     start=second,
                     start_confidence=hud,
@@ -169,7 +198,7 @@ def run_machine(
         else:
             quiet_seen = True
         if current is not None:
-            current.tracker.observe(second, counters.read(second) if present else {})
+            current.tracker.observe(second, read(second) if present else {})
 
     if current is not None:
         matches.append(_finish(len(matches), current, resolver))

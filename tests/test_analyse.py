@@ -108,6 +108,49 @@ def test_match_without_a_hud_for_a_while_is_still_one_match(tmp_path: Path) -> N
     assert summary(output) == [(5.0, 30.0, False, 4)]
 
 
+LOBBY_FILLING = (26, 47, 72, 93, 95, 96, 98)
+
+
+def lobby_filling_shots(start: float) -> tuple[Shot, ...]:
+    return tuple(
+        Shot(Hud(0, 0, left), start + index, start + index + 1)
+        for index, left in enumerate(LOBBY_FILLING)
+    )
+
+
+@pytest.mark.parametrize("players_left", [81, 99], ids=["left_mid_game", "left_on_the_bus"])
+def test_match_left_before_its_results_screen_ends_when_the_next_one_starts(
+    tmp_path: Path, players_left: int
+) -> None:
+    shots = (
+        Shot(Hud(2, 3, players_left), 5, 15),
+        Shot(Lobby(), 15, 45),
+        *lobby_filling_shots(45),
+        Shot(Hud(0, 0, 95), 52, 70),
+        Shot(Results(placement=4), 70, 75),
+    )
+
+    output = analyse(tmp_path, small(80, shots))
+
+    assert summary(output) == [(5.0, 14.0, False, None), (45.0, 70.0, False, 4)]
+    first, second = output["matches"]
+    assert first["personal_eliminations"] == 2
+    assert second["personal_eliminations"] == 0
+
+
+def test_long_hud_absence_with_the_counters_unchanged_is_still_one_match(tmp_path: Path) -> None:
+    shots = (
+        Shot(Hud(3, 4, 16), 5, 15),
+        Shot(Lobby(), 15, 45),
+        Shot(Hud(3, 4, 15), 45, 60),
+        Shot(Results(placement=4), 60, 65),
+    )
+
+    output = analyse(tmp_path, small(70, shots))
+
+    assert summary(output) == [(5.0, 60.0, False, 4)]
+
+
 def test_match_with_counters_gone_is_still_one_match(tmp_path: Path) -> None:
     shots = (
         Shot(Hud(), 5, 12),

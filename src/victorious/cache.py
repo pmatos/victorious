@@ -20,7 +20,7 @@ from victorious.observations import (
 )
 from victorious.schema import CounterElement
 
-OBSERVATION_VERSION = 2
+OBSERVATION_VERSION = 3
 SELECTION_VERSION = 2
 FINGERPRINT_SAMPLE = 1 << 20
 

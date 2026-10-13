@@ -1,8 +1,9 @@
 """Reading the HUD counters and turning their readings into Events."""
 
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
+from itertools import pairwise
 from typing import get_args
 
 import numpy as np
@@ -25,6 +26,9 @@ MAX_RESOLVED_JUMP: dict[CounterElement, int] = {
 }
 MAX_GAP_SECONDS = 3.0
 TRANSIENT_SECONDS = 5.0
+LOBBY_FILL_STEP = 15
+LOBBY_FILL_RISES = 2
+LOBBY_FILL_CONFIDENCE = 0.5
 RISING: dict[CounterElement, int] = {
     "personal_eliminations": 1,
     "team_eliminations": 1,
@@ -72,6 +76,24 @@ def _further(element: CounterElement, current: int | None, value: int) -> int:
     if current is None or (value - current) * RISING[element] > 0:
         return value
     return current
+
+
+def lobby_filling(seconds: Sequence[Mapping[CounterElement, CounterReading | None]]) -> bool:
+    """Whether the players-left counter climbs the way it does as a new Match's lobby fills.
+
+    It runs from a few players to nearly a hundred within a few seconds; inside a Match it only
+    falls, so a steep net climb across consecutive confident readings marks a Match that just
+    began; noisy digits that jump up and down do not climb.
+    """
+    values = [
+        reading.value
+        for counters in seconds
+        if (reading := counters.get("players_left")) is not None
+        and reading.confidence >= LOBBY_FILL_CONFIDENCE
+    ]
+    rises = sum(new - old >= LOBBY_FILL_STEP for old, new in pairwise(values))
+    climbed = bool(values) and values[-1] - values[0] >= LOBBY_FILL_STEP * LOBBY_FILL_RISES
+    return rises >= LOBBY_FILL_RISES and climbed
 
 
 def is_ambiguous(element: CounterElement, old: int, new: int) -> bool:
