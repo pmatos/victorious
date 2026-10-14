@@ -314,35 +314,37 @@ def _neighbour_frames(
 def _detect_panel(
     recording: Path, info: VideoInfo, kind: str, second: int, details: dict[str, str]
 ) -> Panel:
-    """Reads `second` and its neighbours, reaching further out while an element is mis-sized.
-
-    The results text animates in size, so a second picked in the animation can show an element
-    at a size `analyse` does not read; a few seconds away it has usually settled.
-    """
+    """Reads `second` and its neighbours; on a results screen, reaches further out while an
+    element is at a size `analyse` does not read, since the text animates in size."""
     reference = frame_at(recording, info, second)
     if reference is None:
         raise RecordingError(f"cannot read a frame at {second} s of {recording}")
     frames = [reference]
     found: dict[str, Found] = {}
     _merge(found, kind, second, reference, details)
-    for offset in range(1, NEIGHBOUR_REACH + 1):
+    reach = NEIGHBOUR_REACH if kind == "results" else 1
+    for offset in range(1, reach + 1):
         if offset > 1 and all(_in_scale(name, hit) for name, hit in found.items()):
             break
         for frame in _neighbour_frames(recording, info, second, offset):
-            _merge(found, kind, second, frame, details)
-            frames.append(frame)
+            if _merge(found, kind, second, frame, details) or offset == 1:
+                frames.append(frame)
     return Panel(kind, second, tuple(frames), found)
 
 
 def _merge(
     found: dict[str, Found], kind: str, second: int, frame: np.ndarray, details: dict[str, str]
-) -> None:
+) -> bool:
+    """Keeps the better detections of `frame`; whether it supplied any."""
     detection = find_hud(frame) if kind == "hud" else find_results(frame)
+    improved = False
     for name, hit in detection.found.items():
         if _better(name, hit, found.get(name)):
             found[name] = hit
+            improved = True
     for name, reason in detection.missing.items():
         details.setdefault(name, f"{reason} at {kind}={second}")
+    return improved
 
 
 def run_setup(recording: Path, at: Sequence[tuple[str, int]]) -> SetupResult:
