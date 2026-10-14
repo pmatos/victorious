@@ -234,3 +234,22 @@ def test_early_chunks_use_a_free_gpu_slot_else_the_cpu_and_the_last_ones_wait_fo
         assert on_gpu == []
     else:
         assert len(on_gpu) >= 3
+
+
+def test_no_gpu_slots_means_software_for_every_decode(recording: Path, tmp_path: Path) -> None:
+    layout = write_layout(tmp_path / "layout.yaml")
+    shim = FfmpegShim(tmp_path / "shim")
+
+    result = analyse_text(
+        recording,
+        layout,
+        "--no-cache",
+        "--hwaccel",
+        "vaapi",
+        env={**shim.env, hwaccel.DEVICE_VARIABLE: BOGUS, parallel.SLOTS_VARIABLE: "0"},
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert shim.lines()
+    assert not [line for line in shim.lines() if "vaapi" in line]
+    assert "hardware decode" not in result.stderr

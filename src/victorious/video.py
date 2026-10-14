@@ -153,8 +153,8 @@ def _hardware_agrees(path: Path, info: VideoInfo, hardware: HwDecoder) -> str | 
     try:
         for fraction in PROBE_AT:
             at = math.floor(info.duration * fraction)
-            soft = _first_frame(path, info, at, None)
             hard = _first_frame(path, info, at, hardware)
+            soft = _first_frame(path, info, at, None) if hard is not None else None
             if soft is None or hard is None:
                 return f"no frame at {at} s"
             if not np.array_equal(soft, hard):

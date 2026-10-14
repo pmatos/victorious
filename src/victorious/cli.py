@@ -28,6 +28,7 @@ from victorious.layout import LayoutError, dump_layout, load_layouts
 from victorious.manual import serve_manual
 from victorious.observations import records
 from victorious.ocr import OcrError
+from victorious.parallel import gpu_slots
 from victorious.preview import render_preview
 from victorious.review import ReviewError, extract_frames, load_analysis, serve_review
 from victorious.schema import MaskedAudioRecord, json_schema
@@ -267,7 +268,7 @@ def _require_distinct(observations: Path | None, output: Path | None) -> None:
 
 
 def _run_analyse(args: argparse.Namespace) -> tuple[str, str | None]:
-    hwaccel.configure(args.hwaccel)
+    hwaccel.configure("off" if gpu_slots(os.environ) == 0 else args.hwaccel)
     speech = None
     categorizer = None
     if not args.no_speech:
