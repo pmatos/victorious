@@ -6,7 +6,7 @@ from math import isfinite
 from pathlib import Path
 from typing import Literal
 
-ResultsStyle = Literal["classic", "orange", "orange_large", "placed"]
+ResultsStyle = Literal["classic", "orange", "orange_large", "placed", "placed_shrunk"]
 
 
 @dataclass(frozen=True)
@@ -41,7 +41,8 @@ class Results:
 
     `style` is "classic" (blue banner, gold "#N"), "orange" (the orange banner skin, a Win),
     "orange_large" (the same banner while it is zoomed in and lower, before it settles; the
-    "#1" is part of its art) or "placed" (white "YOU PLACED #N" shown once eliminated).
+    "#1" is part of its art), "placed" (white "YOU PLACED #N" shown once eliminated) or
+    "placed_shrunk" (the same text at 0.8x, as it is drawn part-way through its size animation).
     """
 
     placement: int

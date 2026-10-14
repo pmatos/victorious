@@ -244,6 +244,40 @@ def test_the_orange_banner_is_found(tmp_path: Path) -> None:
     assert banner.w == pytest.approx(0.1, abs=0.01)
 
 
+def test_a_results_second_in_the_size_animation_uses_a_settled_neighbour(tmp_path: Path) -> None:
+    shots = (
+        Shot(Hud(1, 0, 90), 2, 10),
+        Shot(Results(1), 12, 18),
+        Shot(Results(5, "placed_shrunk"), 20, 26),
+        Shot(Results(5, "placed"), 26, 32),
+    )
+    recording = build_recording(compact(34, shots), tmp_path / "recording.mkv")
+    layout = tmp_path / "layout.yaml"
+
+    result = setup_at(recording, layout, "hud=5", "results=14", "results=22")
+
+    assert result.returncode == 0, result.stderr
+    assert "elimination_placement" not in result.stderr
+    assert load_layout(layout).screens.results.elimination_placement is not None
+
+
+def test_a_results_text_that_never_settles_stays_a_warning(tmp_path: Path) -> None:
+    shots = (
+        Shot(Hud(1, 0, 90), 2, 10),
+        Shot(Results(1), 12, 18),
+        Shot(Results(5, "placed_shrunk"), 20, 40),
+    )
+    recording = build_recording(compact(42, shots), tmp_path / "recording.mkv")
+    layout = tmp_path / "layout.yaml"
+
+    result = setup_at(recording, layout, "hud=5", "results=14", "results=30")
+
+    assert result.returncode == 0, result.stderr
+    assert "elimination_placement" in result.stderr
+    assert "0.80x" in result.stderr
+    assert load_layout(layout).screens.results.elimination_placement is None
+
+
 def test_an_ultrawide_recording_gets_the_21_9_label(tmp_path: Path) -> None:
     shots = (Shot(Hud(1, 0, 90), 2, 10), Shot(Results(1), 12, 18))
     spec = RecordingSpec(
