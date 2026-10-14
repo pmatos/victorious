@@ -22,10 +22,6 @@ def status(*changed: str) -> int:
     return result.returncode
 
 
-def needed(*changed: str) -> bool:
-    return status(*changed) == 0
-
-
 def collected(*arguments: str) -> list[str]:
     result = subprocess.run(
         [
@@ -76,7 +72,7 @@ def test_every_module_that_turns_speech_on_is_listed() -> None:
     ],
 )
 def test_a_change_to_a_listed_path_needs_the_model_tests(changed: str) -> None:
-    assert needed("README.md", changed)
+    assert status("README.md", changed) == 0
 
 
 @pytest.mark.parametrize(
@@ -84,11 +80,10 @@ def test_a_change_to_a_listed_path_needs_the_model_tests(changed: str) -> None:
     ["src/victorious/screens.py", "tests/test_setup.py", "docs/uv.lock", "docs/adr/0004.md"],
 )
 def test_a_change_elsewhere_does_not(changed: str) -> None:
-    assert not needed(changed)
+    assert status(changed) == 1
 
 
-def test_a_change_elsewhere_exits_one_so_a_broken_script_is_not_mistaken_for_it() -> None:
-    assert status("src/victorious/screens.py") == 1
+def test_no_change_does_not() -> None:
     assert status() == 1
 
 
