@@ -454,6 +454,45 @@ def test_a_weak_return_to_the_value_just_left_drops_the_misread_it_undoes() -> N
     assert tracker.close(float(len(readings))).events == []
 
 
+def _counter_events(
+    element: CounterElement, readings: list[tuple[int, float]]
+) -> list[tuple[float, int | None]]:
+    tracker = CounterTracker((element,))
+    for second, (value, confidence) in enumerate(readings):
+        tracker.observe(float(second), {element: CounterReading(value, confidence)})
+    return [(event.time, event.value) for event in tracker.close(float(len(readings))).events]
+
+
+def test_an_eliminations_return_exactly_at_the_window_is_dropped() -> None:
+    readings = [(3, 0.9)] * 5 + [(4, 0.9)] * 5 + [(3, 0.9)] * 5
+
+    assert _counter_events("team_eliminations", readings) == []
+
+
+def test_an_eliminations_return_just_past_the_window_is_kept() -> None:
+    readings = [(3, 0.9)] * 5 + [(4, 0.9)] * 6 + [(3, 0.9)] * 5
+
+    assert _counter_events("team_eliminations", readings) == [(5.0, 4), (11.0, 3)]
+
+
+def test_a_low_confidence_players_left_fall_is_kept() -> None:
+    readings = [(99, 0.9)] * 5 + [(98, 0.3)] * 10
+
+    assert _counter_events("players_left", readings) == [(5.0, 98)]
+
+
+def test_a_low_confidence_rise_of_an_eliminations_counter_is_kept() -> None:
+    readings = [(3, 0.9)] * 5 + [(4, 0.3)] * 10
+
+    assert _counter_events("team_eliminations", readings) == [(5.0, 4)]
+
+
+def test_a_fall_read_at_low_then_high_confidence_is_timed_at_the_confident_run() -> None:
+    readings = [(5, 0.9)] * 5 + [(3, 0.3)] * 2 + [(3, 0.9)] * 4
+
+    assert _counter_events("team_eliminations", readings) == [(7.0, 3)]
+
+
 def _read_players_left(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
