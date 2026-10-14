@@ -300,3 +300,4 @@ uv run pytest
 - OpenCV (opencv-python), NumPy, pydantic, PyYAML
 - `ffmpeg` and `ffprobe` on `PATH` (decoding)
 - `tesseract` on `PATH` (reading placement digits), e.g. `apt install tesseract-ocr`
+
