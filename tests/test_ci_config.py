@@ -1,3 +1,4 @@
+import os
 import re
 import subprocess
 import sys
@@ -35,6 +36,7 @@ def collected(*arguments: str) -> list[str]:
         capture_output=True,
         text=True,
         cwd=ROOT,
+        env={key: value for key, value in os.environ.items() if key != "PYTEST_ADDOPTS"},
     )
     return [line for line in result.stdout.splitlines() if "::" in line]
 
