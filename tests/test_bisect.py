@@ -270,13 +270,13 @@ def test_implausible_jumps_stay_one_event_without_sampling(
 def test_a_recovery_from_a_sustained_misread_is_not_bisected(
     tmp_path: Path, shim: FfmpegShim
 ) -> None:
-    steps = ((0.0, 0, 3, 99), (5.0, 0, 1, 99), (7.0, 0, 3, 99))
+    steps = ((0.0, 0, 3, 99), (5.0, 0, 1, 99), (12.0, 0, 3, 99))
     shots = match_shots(5, steps, results_at=30, placement=3)
 
     output = run(tmp_path, shim, 40, shots)
 
     (match,) = output["matches"]
-    assert counter(match, "team_eliminations") == [(10.0, 1), (12.0, 3)]
+    assert counter(match, "team_eliminations") == [(10.0, 1), (17.0, 3)]
     assert shim.windows() == []
 
 

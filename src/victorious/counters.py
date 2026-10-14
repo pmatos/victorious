@@ -26,6 +26,7 @@ MAX_RESOLVED_JUMP: dict[CounterElement, int] = {
 }
 MAX_GAP_SECONDS = 3.0
 TRANSIENT_SECONDS = 5.0
+FALL_CONFIDENCE = 0.5
 LOBBY_FILL_STEP = 15
 LOBBY_FILL_RISES = 2
 LOBBY_FILL_CONFIDENCE = 0.5
@@ -223,14 +224,19 @@ class _Pending:
     start: float | None
     confidences: list[float] = field(default_factory=list)
 
+    @property
+    def confidence(self) -> float:
+        return sum(self.confidences) / len(self.confidences)
+
 
 @dataclass(frozen=True)
 class _Change:
-    """A committed change of a counter: its Event and the value it left."""
+    """A committed change of a counter: its Event, the value it left and the furthest then."""
 
     index: int
     previous: int
     time: float
+    furthest: int | None
 
 
 @dataclass
@@ -243,13 +249,21 @@ class _State:
     furthest: int | None = None
 
 
+def _weak_fall(element: CounterElement, previous: int, pending: _Pending) -> bool:
+    if element == "players_left" or pending.value >= previous or pending.value == 0:
+        return False
+    return pending.confidence < FALL_CONFIDENCE
+
+
 class CounterTracker:
     """Emits an Event when a counter's value changes, once the new value is read twice in a row.
 
     A jump of more than one between two readable seconds is recorded as a Gap; `close` hands the
-    Gaps to a resolver and replaces each jump's single Event by one Event per step. A
-    `players_left` change that goes back to the value it left within `TRANSIENT_SECONDS` is a
-    misread, not a change: neither it, nor any change made since, nor the return becomes an Event.
+    Gaps to a resolver and replaces each jump's single Event by one Event per step. A change that
+    goes back to the value it left within `TRANSIENT_SECONDS` is a misread, not a change: neither
+    it, nor any change made since, nor the return becomes an Event. An eliminations counter never
+    falls within a Match short of a reset to 0, so another fall read below `FALL_CONFIDENCE` is a
+    misread too: Tesseract reads a genuine 0 at low confidence on some builds.
     """
 
     def __init__(self, elements: tuple[CounterElement, ...]) -> None:
@@ -291,6 +305,9 @@ class CounterTracker:
         pending.confidences.append(reading.confidence)
         previous = state.committed
         if previous is not None and not self._drop_returned(state, pending):
+            if _weak_fall(element, previous, pending):
+                state.pending = None
+                return
             self._commit_change(element, state, pending, previous)
         state.committed = pending.value
         state.furthest = _further(element, state.furthest, pending.value)
@@ -300,15 +317,16 @@ class CounterTracker:
     def _commit_change(
         self, element: CounterElement, state: _State, pending: _Pending, previous: int
     ) -> None:
-        confidence = sum(pending.confidences) / len(pending.confidences)
+        confidence = pending.confidence
         self._events.append(frame_event(element, pending.time, confidence, pending.value))
-        if element == "players_left":
-            state.recent_changes = [
-                change
-                for change in state.recent_changes
-                if pending.time - change.time <= TRANSIENT_SECONDS
-            ]
-            state.recent_changes.append(_Change(len(self._events) - 1, previous, pending.time))
+        state.recent_changes = [
+            change
+            for change in state.recent_changes
+            if pending.time - change.time <= TRANSIENT_SECONDS
+        ]
+        state.recent_changes.append(
+            _Change(len(self._events) - 1, previous, pending.time, state.furthest)
+        )
         self._record_gap(element, state, pending, confidence)
 
     def _drop_returned(self, state: _State, pending: _Pending) -> bool:
@@ -317,6 +335,7 @@ class CounterTracker:
                 for dropped in state.recent_changes[position:]:
                     self._dropped.add(dropped.index)
                     self._gaps.pop(dropped.index, None)
+                state.furthest = change.furthest
                 del state.recent_changes[position:]
                 return True
         return False

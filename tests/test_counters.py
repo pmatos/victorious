@@ -7,11 +7,20 @@ import numpy as np
 import pytest
 
 from tests.analyse_helpers import STEADY, analyse, small
-from tests.synthetic import Hud, Results, Shot, layout_document, match_shots, write_layout
+from tests.synthetic import (
+    Hud,
+    Results,
+    Shot,
+    build_recording,
+    layout_document,
+    match_shots,
+    write_layout,
+)
 from victorious import counters
+from victorious.analysis import analyse as analyse_recording
 from victorious.counters import CounterReader, CounterReading, CounterTracker
-from victorious.layout import load_layout
-from victorious.ocr import DigitReading
+from victorious.layout import load_layout, load_layouts
+from victorious.ocr import DigitReading, read_digits
 from victorious.schema import CounterElement
 
 pytestmark = pytest.mark.usefixtures("require_ffmpeg", "require_tesseract")
@@ -125,6 +134,82 @@ def test_players_left_rising_while_the_lobby_fills_is_kept(tmp_path: Path) -> No
 
     (match,) = output["matches"]
     assert changes(match, "players_left") == [(15.0, 97), (25.0, 98)]
+
+
+def test_a_personal_count_that_reads_another_value_for_two_seconds_is_not_an_event(
+    tmp_path: Path,
+) -> None:
+    steps = ((0.0, 2, 0, 99), (12.0, 9, 0, 99), (14.0, 2, 0, 99), (22.0, 3, 0, 99))
+    shots = match_shots(5, steps, results_at=40, placement=3)
+
+    output = analyse(tmp_path, small(50, shots))
+
+    (match,) = output["matches"]
+    assert changes(match, "personal_eliminations") == [(27.0, 3)]
+
+
+def test_a_misread_jump_that_returns_is_dropped_with_the_steps_it_was_resolved_into(
+    tmp_path: Path,
+) -> None:
+    steps = ((0.0, 7, 0, 99), (12.0, 9, 0, 99), (14.0, 7, 0, 99), (22.0, 8, 0, 99))
+    shots = match_shots(5, steps, results_at=40, placement=3)
+
+    output = analyse(tmp_path, small(50, shots))
+
+    (match,) = output["matches"]
+    assert changes(match, "personal_eliminations") == [(27.0, 8)]
+
+
+def _weaken(monkeypatch: pytest.MonkeyPatch, text: str, confidence: float) -> None:
+    real = read_digits
+
+    def read(mask: np.ndarray) -> DigitReading | None:
+        reading = real(mask)
+        if reading is not None and reading.text == text:
+            return DigitReading(text, confidence)
+        return reading
+
+    monkeypatch.setattr(counters, "read_digits", read)
+
+
+def test_a_low_confidence_fall_of_an_eliminations_counter_is_not_an_event(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _weaken(monkeypatch, "12", 0.23)
+    steps = ((0.0, 0, 13, 99), (10.0, 0, 12, 99), (22.0, 0, 13, 99), (30.0, 0, 18, 99))
+    shots = match_shots(5, steps, results_at=45, placement=3)
+    recording = build_recording(small(55, shots), tmp_path / "recording.mkv")
+    layout = load_layouts(write_layout(tmp_path / "layout.yaml"))
+
+    (match,) = analyse_recording(recording, layout).matches
+
+    team = [(e.time, e.value) for e in match.events if e.kind == "team_eliminations"]
+    assert team == [(35.0, 18)]
+
+
+def test_a_low_confidence_fall_of_an_eliminations_counter_to_zero_is_kept(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _weaken(monkeypatch, "0", 0.1)
+    steps = ((0.0, 0, 8, 99), (12.0, 0, 0, 99))
+    shots = match_shots(5, steps, results_at=40, placement=3)
+    recording = build_recording(small(50, shots), tmp_path / "recording.mkv")
+    layout = load_layouts(write_layout(tmp_path / "layout.yaml"))
+
+    (match,) = analyse_recording(recording, layout).matches
+
+    team = [(e.time, e.value) for e in match.events if e.kind == "team_eliminations"]
+    assert team[-1:] == [(17.0, 0)]
+
+
+def test_a_confident_fall_of_an_eliminations_counter_is_kept(tmp_path: Path) -> None:
+    steps = ((0.0, 8, 0, 99), (12.0, 0, 0, 99))
+    shots = match_shots(5, steps, results_at=40, placement=3)
+
+    output = analyse(tmp_path, small(50, shots))
+
+    (match,) = output["matches"]
+    assert changes(match, "personal_eliminations") == [(17.0, 0)]
 
 
 def test_counter_events_sit_between_match_start_and_match_end_in_time_order(
@@ -373,6 +458,54 @@ def test_a_real_players_left_fall_before_a_misread_chain_is_kept() -> None:
     values = [100] * 5 + [99] * 10 + [98] * 2 + [97] * 2 + [99] * 5
 
     assert _players_left_events(values) == [(5.0, 99)]
+
+
+def test_a_weak_return_to_the_value_just_left_drops_the_misread_it_undoes() -> None:
+    tracker = CounterTracker(("personal_eliminations",))
+    readings = [(6, 0.9)] * 5 + [(8, 0.3)] * 2 + [(6, 0.3)] * 2 + [(6, 0.9)] * 3
+    for second, (value, confidence) in enumerate(readings):
+        tracker.observe(float(second), {"personal_eliminations": CounterReading(value, confidence)})
+
+    assert tracker.close(float(len(readings))).events == []
+
+
+def _counter_events(
+    element: CounterElement, readings: list[tuple[int, float]]
+) -> list[tuple[float, int | None]]:
+    tracker = CounterTracker((element,))
+    for second, (value, confidence) in enumerate(readings):
+        tracker.observe(float(second), {element: CounterReading(value, confidence)})
+    return [(event.time, event.value) for event in tracker.close(float(len(readings))).events]
+
+
+def test_an_eliminations_return_exactly_at_the_window_is_dropped() -> None:
+    readings = [(3, 0.9)] * 5 + [(4, 0.9)] * 5 + [(3, 0.9)] * 5
+
+    assert _counter_events("team_eliminations", readings) == []
+
+
+def test_an_eliminations_return_just_past_the_window_is_kept() -> None:
+    readings = [(3, 0.9)] * 5 + [(4, 0.9)] * 6 + [(3, 0.9)] * 5
+
+    assert _counter_events("team_eliminations", readings) == [(5.0, 4), (11.0, 3)]
+
+
+def test_a_low_confidence_players_left_fall_is_kept() -> None:
+    readings = [(99, 0.9)] * 5 + [(98, 0.3)] * 10
+
+    assert _counter_events("players_left", readings) == [(5.0, 98)]
+
+
+def test_a_low_confidence_rise_of_an_eliminations_counter_is_kept() -> None:
+    readings = [(3, 0.9)] * 5 + [(4, 0.3)] * 10
+
+    assert _counter_events("team_eliminations", readings) == [(5.0, 4)]
+
+
+def test_a_fall_read_at_low_then_high_confidence_is_timed_at_the_confident_run() -> None:
+    readings = [(5, 0.9)] * 5 + [(3, 0.3)] * 2 + [(3, 0.9)] * 4
+
+    assert _counter_events("team_eliminations", readings) == [(7.0, 3)]
 
 
 def _read_players_left(
