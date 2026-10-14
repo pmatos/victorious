@@ -250,7 +250,7 @@ class _State:
 
 
 def _weak_fall(element: CounterElement, previous: int, pending: _Pending) -> bool:
-    if element == "players_left" or pending.value >= previous:
+    if element == "players_left" or pending.value >= previous or pending.value == 0:
         return False
     return pending.confidence < FALL_CONFIDENCE
 
@@ -262,7 +262,8 @@ class CounterTracker:
     Gaps to a resolver and replaces each jump's single Event by one Event per step. A change that
     goes back to the value it left within `TRANSIENT_SECONDS` is a misread, not a change: neither
     it, nor any change made since, nor the return becomes an Event. An eliminations counter never
-    falls within a Match short of a reset, so a fall read below `FALL_CONFIDENCE` is a misread too.
+    falls within a Match short of a reset to 0, so another fall read below `FALL_CONFIDENCE` is a
+    misread too: Tesseract reads a genuine 0 at low confidence on some builds.
     """
 
     def __init__(self, elements: tuple[CounterElement, ...]) -> None:

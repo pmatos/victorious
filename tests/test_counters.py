@@ -187,6 +187,21 @@ def test_a_low_confidence_fall_of_an_eliminations_counter_is_not_an_event(
     assert team == [(35.0, 18)]
 
 
+def test_a_low_confidence_fall_of_an_eliminations_counter_to_zero_is_kept(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _weaken(monkeypatch, "0", 0.1)
+    steps = ((0.0, 0, 8, 99), (12.0, 0, 0, 99))
+    shots = match_shots(5, steps, results_at=40, placement=3)
+    recording = build_recording(small(50, shots), tmp_path / "recording.mkv")
+    layout = load_layouts(write_layout(tmp_path / "layout.yaml"))
+
+    (match,) = analyse_recording(recording, layout).matches
+
+    team = [(e.time, e.value) for e in match.events if e.kind == "team_eliminations"]
+    assert team == [(17.0, 0)]
+
+
 def test_a_confident_fall_of_an_eliminations_counter_is_kept(tmp_path: Path) -> None:
     steps = ((0.0, 8, 0, 99), (12.0, 0, 0, 99))
     shots = match_shots(5, steps, results_at=40, placement=3)
