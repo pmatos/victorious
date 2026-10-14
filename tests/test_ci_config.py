@@ -15,11 +15,15 @@ def listed() -> list[str]:
     return PATHS_FILE.read_text().splitlines()
 
 
-def needed(*changed: str) -> bool:
+def status(*changed: str) -> int:
     result = subprocess.run(
         [str(SCRIPT)], input="".join(f"{name}\n" for name in changed), text=True
     )
-    return result.returncode == 0
+    return result.returncode
+
+
+def needed(*changed: str) -> bool:
+    return status(*changed) == 0
 
 
 def collected(*arguments: str) -> list[str]:
@@ -54,7 +58,7 @@ def test_every_module_that_turns_speech_on_is_listed() -> None:
     modules = [
         path.relative_to(ROOT).as_posix()
         for path in (ROOT / "tests").glob("test_*.py")
-        if re.search(r"^def speech_on\(", path.read_text(), re.MULTILINE)
+        if re.search(r"^def speech_on\(|delenv\(.VICTORIOUS_NO_SPEECH.\)", path.read_text(), re.M)
     ]
     assert modules
     assert [module for module in modules if module not in listed()] == []
@@ -76,14 +80,16 @@ def test_a_change_to_a_listed_path_needs_the_model_tests(changed: str) -> None:
 
 
 @pytest.mark.parametrize(
-    "changed", ["src/victorious/screens.py", "tests/test_setup.py", "docs/adr/0004.md"]
+    "changed",
+    ["src/victorious/screens.py", "tests/test_setup.py", "docs/uv.lock", "docs/adr/0004.md"],
 )
 def test_a_change_elsewhere_does_not(changed: str) -> None:
     assert not needed(changed)
 
 
-def test_an_empty_change_does_not() -> None:
-    assert not needed()
+def test_a_change_elsewhere_exits_one_so_a_broken_script_is_not_mistaken_for_it() -> None:
+    assert status("src/victorious/screens.py") == 1
+    assert status() == 1
 
 
 def test_tests_that_load_models_are_marked_and_the_rest_are_not() -> None:

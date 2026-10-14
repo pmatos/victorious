@@ -17,3 +17,6 @@ uv.lock
 .github/workflows/ci.yml
 .github/slow-models-paths.txt
 .github/scripts/slow-models-needed.sh
+tests/analyse_helpers.py
+tests/cli_runner.py
+src/victorious/errors.py
