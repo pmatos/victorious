@@ -1,8 +1,11 @@
 import os
 import shutil
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
+
+from victorious import hwaccel
 
 REAL_HF_HOME = os.environ.get("HF_HOME") or str(
     Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache") / "huggingface"
@@ -48,6 +51,15 @@ def speech_is_off_and_models_are_kept(monkeypatch: pytest.MonkeyPatch) -> None:
     """
     monkeypatch.setenv("VICTORIOUS_NO_SPEECH", "1")
     monkeypatch.setenv("HF_HOME", REAL_HF_HOME)
+
+
+@pytest.fixture(autouse=True)
+def decoding_is_software(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    """Keeps tests on software decode; the hardware tests ask for VAAPI themselves."""
+    monkeypatch.setenv("VICTORIOUS_HWACCEL", "off")
+    hwaccel.reset()
+    yield
+    hwaccel.reset()
 
 
 @pytest.fixture(autouse=True)

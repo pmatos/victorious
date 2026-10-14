@@ -11,6 +11,7 @@ from pathlib import Path
 import cv2
 from pydantic import ValidationError
 
+from victorious import hwaccel
 from victorious.analysis import analyse_with_observations
 from victorious.cache import ObservationCache, default_cache_root
 from victorious.categorize import KEY_VARIABLE, jev_from_env
@@ -27,6 +28,7 @@ from victorious.layout import LayoutError, dump_layout, load_layouts
 from victorious.manual import serve_manual
 from victorious.observations import records
 from victorious.ocr import OcrError
+from victorious.parallel import gpu_slots
 from victorious.preview import render_preview
 from victorious.review import ReviewError, extract_frames, load_analysis, serve_review
 from victorious.schema import MaskedAudioRecord, json_schema
@@ -108,6 +110,12 @@ def build_parser() -> argparse.ArgumentParser:
             )
             sub.add_argument(
                 "--chunk-seconds", type=_positive_int, default=60, help=argparse.SUPPRESS
+            )
+            sub.add_argument(
+                "--hwaccel",
+                choices=hwaccel.MODES,
+                default=hwaccel.mode_from(os.environ),
+                help=argparse.SUPPRESS,
             )
             sub.add_argument(
                 "--cache-dir",
@@ -260,6 +268,7 @@ def _require_distinct(observations: Path | None, output: Path | None) -> None:
 
 
 def _run_analyse(args: argparse.Namespace) -> tuple[str, str | None]:
+    hwaccel.configure("off" if gpu_slots(os.environ) == 0 else args.hwaccel)
     speech = None
     categorizer = None
     if not args.no_speech:
