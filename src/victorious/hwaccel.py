@@ -68,7 +68,7 @@ def candidates(
     devices = [Path(explicit)] if explicit else render_devices(directory)
     found: list[HwDecoder] = []
     for device in devices:
-        guessed: list[str | None] = [*vendor_drivers(_vendor(device, drm))]
+        guessed = vendor_drivers(_vendor(device, drm))
         drivers = [None, *guessed] if DRIVER_VARIABLE in env else [*guessed, None]
         found.extend(HwDecoder(str(device), driver) for driver in drivers)
     return found
@@ -170,15 +170,15 @@ def resolve(key: tuple[str, ...], check: Callable[[HwDecoder], str | None]) -> H
         if key in _resolved:
             return _resolved[key]
         tried = candidates()
-        reason = "no render device"
+        problems: list[str] = []
         chosen = None
         for candidate in tried:
             problem = check(candidate)
             if problem is None:
                 chosen = candidate
                 break
-            reason = reason if reason != "no render device" else problem
+            problems.append(problem)
         _resolved[key] = chosen
     if chosen is None and (tried or mode == "vaapi"):
-        note(f"hardware decode unavailable ({reason})")
+        note(f"hardware decode unavailable ({problems[0] if problems else 'no render device'})")
     return chosen
