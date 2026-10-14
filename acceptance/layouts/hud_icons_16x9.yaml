@@ -1,0 +1,11 @@
+aspect_ratio: '16:9'
+screens:
+  hud:
+    hud_anchor: {x: 0.852, y: 0.0299, w: 0.014, h: 0.0875}
+    personal_eliminations: {x: 0.823, y: 0.0375, w: 0.025, h: 0.0111}
+    team_eliminations: {x: 0.8215, y: 0.0653, w: 0.0265, h: 0.0118}
+    players_left: {x: 0.8219, y: 0.0986, w: 0.0265, h: 0.0118}
+  results:
+    results_banner: {x: 0.4301, y: 0.0764, w: 0.1484, h: 0.1333}
+    placement: {x: 0.3367, y: 0.1273, w: 0.1283, h: 0.0968}
+    elimination_placement: {x: 0.5141, y: 0.108, w: 0.1321, h: 0.1062}

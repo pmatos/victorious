@@ -1,0 +1,45 @@
+{
+  "labels_version": "1.0",
+  "recording": {
+    "path": "2026-10-08_11-11-58.mkv",
+    "duration": 4954.047
+  },
+  "analysis": {
+    "schema_version": "1.6",
+    "layout": "acceptance/layouts/hud_icons_16x9.yaml"
+  },
+  "matches": [
+    {
+      "start": 319,
+      "end": 1411,
+      "verdict": "confirmed",
+      "win": false,
+      "placement": 2,
+      "personal_eliminations": 4
+    },
+    {
+      "start": 1478,
+      "end": 2603,
+      "verdict": "confirmed",
+      "win": false,
+      "placement": 2,
+      "personal_eliminations": 6
+    },
+    {
+      "start": 2653,
+      "end": 3817,
+      "verdict": "confirmed",
+      "win": false,
+      "placement": 2,
+      "personal_eliminations": 3
+    },
+    {
+      "start": 3864,
+      "end": 4921,
+      "verdict": "confirmed",
+      "win": false,
+      "placement": 4,
+      "personal_eliminations": 0
+    }
+  ]
+}
