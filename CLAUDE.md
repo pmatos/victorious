@@ -74,6 +74,8 @@ uv run victorious <subcommand>
 
 Tests import the installed package (no `pythonpath` shim), so run them through `uv run`.
 
+Plain `uv run pytest` runs every test. Tests that load the real Whisper, YAMNet or pyannote models (every test that uses a `speech_on` fixture; `tests/conftest.py` marks them) carry the `slow_models` marker, and `uv run pytest -m "not slow_models"` skips them for a quick local loop. CI (`.github/workflows/ci.yml`) runs once per push: on `main`, nightly (03:17 UTC) and on `workflow_dispatch` it runs everything, and on a pull request it adds `-m "not slow_models"` unless the diff touches a path listed in `.github/slow-models-paths.txt` (checked by `.github/scripts/slow-models-needed.sh`). A new test module that turns speech on needs its file in that list (`tests/test_ci_config.py` checks this). The pytest step prints the 25 slowest tests.
+
 ## Test fixtures
 
 Tests build their Recordings on demand with `tests.synthetic`; no video is committed. `tests/fixtures/speech/` holds two short synthetic speech clips (`make_speech.py` regenerates them). `tests/test_speech.py` and `tests/test_music_masking.py` run the real `small` Whisper model and the real YAMNet ONNX model, so a cold Hugging Face cache needs network once; the music bed is synthesised at test time (`tests/synthetic/music.py`, chords, drums and a sung vowel line that Whisper reads as "You"), nothing binary is committed; `conftest.py` pins `HF_HOME` so the isolated XDG cache does not hide it.

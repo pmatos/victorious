@@ -15,6 +15,13 @@ REAL_HF_HOME = os.environ.get("HF_HOME") or str(
 os.environ["VICTORIOUS_NO_SPEECH"] = "1"
 
 
+def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
+    """Marks every test that turns speech on (so loads the real models) as `slow_models`."""
+    for item in items:
+        if "speech_on" in getattr(item, "fixturenames", ()):
+            item.add_marker(pytest.mark.slow_models)
+
+
 @pytest.fixture(scope="session")
 def require_ffmpeg() -> None:
     missing = [tool for tool in ("ffmpeg", "ffprobe") if shutil.which(tool) is None]

@@ -4,6 +4,9 @@ on:
   push:
     branches: [main]
   pull_request:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -20,6 +23,8 @@ jobs:
         python-version: ["3.13"]
     steps:
       - uses: actions/checkout@v7.0.1
+        with:
+          fetch-depth: 2
       - uses: astral-sh/setup-uv@v10.2.0
         with:
           enable-cache: true
@@ -36,4 +41,19 @@ jobs:
       - run: uv run ruff check --output-format=github
       - run: uv run ruff format --check
       - run: uv run mypy .
+      - name: Choose the tests to run
+        env:
+          EVENT: ${{ github.event_name }}
+        # The tests that load the real speech models run on main, nightly, on demand and when a
+        # pull request touches a path in slow-models-paths.txt (HEAD^1 is the merge commit's base).
+        run: |
+          models=true
+          if [ "$EVENT" = pull_request ]; then
+            changed=$(git diff --name-only HEAD^1 HEAD)
+            if ! printf '%s\n' "$changed" | .github/scripts/slow-models-needed.sh; then
+              models=false
+              echo 'PYTEST_ADDOPTS=-m "not slow_models"' >> "$GITHUB_ENV"
+            fi
+          fi
+          echo "model tests: $models"
       - run: uv run pytest --durations=25 --cov=. --cov-report=term-missing
