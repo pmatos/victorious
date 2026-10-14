@@ -3,7 +3,7 @@
 import math
 import multiprocessing
 import os
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from concurrent.futures import (
     FIRST_EXCEPTION,
     BrokenExecutor,
@@ -13,19 +13,30 @@ from concurrent.futures import (
     wait,
 )
 from dataclasses import dataclass
-from multiprocessing.synchronize import Event
+from multiprocessing.synchronize import BoundedSemaphore, Event
 from pathlib import Path
 
 import cv2
 import numpy as np
 
+from victorious import hwaccel
 from victorious.counters import CounterReading, best_reading
 from victorious.layout import Layout
 from victorious.observations import Aborted, ChunkSecond, extract_chunk
 from victorious.ocr import concurrent_readers
-from victorious.video import TAIL_TOLERANCE, RecordingError, VideoInfo, sample_chunk
+from victorious.video import (
+    TAIL_TOLERANCE,
+    RecordingError,
+    VideoInfo,
+    resolve_hardware,
+    sample_chunk,
+)
+
+HW_SLOTS = 2
+SLOTS_VARIABLE = "VICTORIOUS_HW_SLOTS"
 
 _ABORT: Event | None = None
+_GPU: BoundedSemaphore | None = None
 _WORKER_DIED = "a decoding worker died unexpectedly"
 
 
@@ -37,11 +48,15 @@ class _Chunk:
     start: int
     length: int | None
     threads: int
+    hardware: bool = False
+    gpu_only: bool = False
 
 
-def _initialise_worker(abort: Event) -> None:
-    global _ABORT
+def _initialise_worker(abort: Event, shared: hwaccel.Shared, gpu: BoundedSemaphore) -> None:
+    global _ABORT, _GPU
     _ABORT = abort
+    _GPU = gpu
+    hwaccel.adopt(shared)
     cv2.setNumThreads(1)
 
 
@@ -50,8 +65,34 @@ def _stopped() -> bool:
 
 
 def _extract(chunk: _Chunk) -> list[ChunkSecond]:
-    frames = sample_chunk(chunk.path, chunk.info, chunk.start, chunk.length, chunk.threads)
-    return extract_chunk(frames, chunk.layout, _stopped)
+    """Decodes on the GPU when a slot is free and on the CPU otherwise.
+
+    The last chunks wait for a slot instead: a CPU decode started late would outlast the GPU's
+    queue and leave the other workers idle.
+    """
+    gate = _GPU if chunk.hardware and not hwaccel.is_disabled() else None
+    on_gpu = gate is not None and gate.acquire(block=chunk.gpu_only)
+    try:
+        frames = sample_chunk(
+            chunk.path,
+            chunk.info,
+            chunk.start,
+            chunk.length,
+            chunk.threads,
+            hardware=chunk.hardware and (gate is None or on_gpu),
+        )
+        return extract_chunk(frames, chunk.layout, _stopped)
+    finally:
+        if on_gpu and gate is not None:
+            gate.release()
+
+
+def gpu_slots(env: Mapping[str, str]) -> int:
+    """How many chunks decode on the GPU at once: its decode engines saturate at about two."""
+    try:
+        return max(0, int(env.get(SLOTS_VARIABLE, HW_SLOTS)))
+    except ValueError:
+        return HW_SLOTS
 
 
 def plan_chunks(duration: float, chunk_seconds: int) -> list[tuple[int, int | None]]:
@@ -60,14 +101,16 @@ def plan_chunks(duration: float, chunk_seconds: int) -> list[tuple[int, int | No
     return [(start, chunk_seconds) for start in starts[:-1]] + [(starts[-1], None)]
 
 
-def _run_in_pool(chunks: list[_Chunk], workers: int) -> list[list[ChunkSecond]]:
+def _run_in_pool(chunks: list[_Chunk], workers: int, slots: int) -> list[list[ChunkSecond]]:
     context = multiprocessing.get_context("spawn")
     abort = context.Event()
+    shared = hwaccel.share(context.Event())
+    gpu = context.BoundedSemaphore(max(1, slots))
     with ProcessPoolExecutor(
         max_workers=workers,
         mp_context=context,
         initializer=_initialise_worker,
-        initargs=(abort,),
+        initargs=(abort, shared, gpu),
     ) as pool:
         futures: list[Future[list[ChunkSecond]]] = []
         try:
@@ -98,14 +141,19 @@ def extract_seconds(
     path: Path, info: VideoInfo, layout: Layout, jobs: int, chunk_seconds: int
 ) -> list[ChunkSecond]:
     """Every sampled second of the Recording, read in chunks on up to `jobs` processes."""
+    slots = gpu_slots(os.environ)
+    hardware = slots > 0 and resolve_hardware(path, info) is not None
     plan = plan_chunks(info.duration, chunk_seconds)
     workers = max(1, min(jobs, len(plan)))
     threads = max(1, (os.cpu_count() or 1) // workers)
-    chunks = [_Chunk(path, info, layout, start, length, threads) for start, length in plan]
+    chunks = [
+        _Chunk(path, info, layout, start, length, threads, hardware, k >= len(plan) - workers)
+        for k, (start, length) in enumerate(plan)
+    ]
     if workers == 1:
         results = [_extract(chunk) for chunk in chunks]
     else:
-        results = _run_in_pool(chunks, workers)
+        results = _run_in_pool(chunks, workers, slots)
     seconds = [second for chunk in results for second in chunk]
     if [second.observation.second for second in seconds] != list(range(len(seconds))):
         raise RecordingError(f"cannot decode Recording {path}: frames are missing")
