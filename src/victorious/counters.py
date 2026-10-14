@@ -224,10 +224,14 @@ class _Pending:
     start: float | None
     confidences: list[float] = field(default_factory=list)
 
+    @property
+    def confidence(self) -> float:
+        return sum(self.confidences) / len(self.confidences)
+
 
 @dataclass(frozen=True)
 class _Change:
-    """A committed change of a counter: its Event and the value it left."""
+    """A committed change of a counter: its Event, the value it left and the furthest then."""
 
     index: int
     previous: int
@@ -248,7 +252,7 @@ class _State:
 def _weak_fall(element: CounterElement, previous: int, pending: _Pending) -> bool:
     if element == "players_left" or pending.value >= previous:
         return False
-    return sum(pending.confidences) / len(pending.confidences) < FALL_CONFIDENCE
+    return pending.confidence < FALL_CONFIDENCE
 
 
 class CounterTracker:
@@ -312,7 +316,7 @@ class CounterTracker:
     def _commit_change(
         self, element: CounterElement, state: _State, pending: _Pending, previous: int
     ) -> None:
-        confidence = sum(pending.confidences) / len(pending.confidences)
+        confidence = pending.confidence
         self._events.append(frame_event(element, pending.time, confidence, pending.value))
         state.recent_changes = [
             change
