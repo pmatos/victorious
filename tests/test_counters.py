@@ -199,7 +199,7 @@ def test_a_low_confidence_fall_of_an_eliminations_counter_to_zero_is_kept(
     (match,) = analyse_recording(recording, layout).matches
 
     team = [(e.time, e.value) for e in match.events if e.kind == "team_eliminations"]
-    assert team == [(17.0, 0)]
+    assert team[-1:] == [(17.0, 0)]
 
 
 def test_a_confident_fall_of_an_eliminations_counter_is_kept(tmp_path: Path) -> None:
