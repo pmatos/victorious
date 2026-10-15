@@ -69,24 +69,32 @@ class _OpenMatch:
     eliminations: list[Event] = field(default_factory=list)
     spectating_run: list[tuple[int, float]] = field(default_factory=list)
     hud_back: int = 0
+    last_out: int | None = None
 
     def watch_spectating(self, second: int, spectating: float, hud_present: bool) -> None:
         """Opens an elimination once the label has been seen on consecutive seconds.
 
-        The player is out until the HUD is back for a few seconds; a map screen or a one second
-        flicker in between does not start a new one.
+        The label only counts soon after the HUD was last seen. The player is out until the HUD
+        is back for a few seconds; a map screen or a one second flicker in between does not
+        start a new one.
         """
-        if spectating >= SPECTATING_THRESHOLD and not hud_present:
+        if spectating >= SPECTATING_THRESHOLD:
             self.hud_back = 0
             if self.out:
+                self.last_out = second
+                return
+            if second - self.last_hud > NEW_MATCH_ABSENCE_SECONDS:
+                self.spectating_run.clear()
                 return
             if self.spectating_run and second != self.spectating_run[-1][0] + 1:
                 self.spectating_run.clear()
             self.spectating_run.append((second, spectating))
             if len(self.spectating_run) >= OUT_CONFIRM_SECONDS:
                 self.out = True
-                first, confidence = self.spectating_run[0]
-                self.eliminations.append(frame_event("eliminated", float(first), confidence))
+                self.last_out = second
+                first = float(self.spectating_run[0][0])
+                confidence = max(score for _, score in self.spectating_run)
+                self.eliminations.append(frame_event("eliminated", first, confidence))
                 self.spectating_run.clear()
             return
         self.spectating_run.clear()
@@ -119,7 +127,9 @@ def _vote(readings: list[ResultsReading]) -> tuple[int, float] | None:
 def _finish(index: int, match: _OpenMatch, resolver: Resolver | None) -> Match:
     outcome: list[Event] = []
     if match.results_start is None:
-        end = float(match.last_hud)
+        end = float(
+            match.last_hud if match.last_out is None else max(match.last_hud, match.last_out)
+        )
         win, placement = False, None
         closing = frame_event("match_end", end, 0.0)
     else:
@@ -144,7 +154,9 @@ def _finish(index: int, match: _OpenMatch, resolver: Resolver | None) -> Match:
         results_confidence = max(max(r.banner, r.hash) for r in match.readings)
         closing = frame_event("match_end", end, results_confidence)
 
-    counted = match.tracker.close(end, resolver)
+    counted = match.tracker.close(
+        float(match.last_hud) if match.results_start is None else end, resolver
+    )
     middle = sorted([*counted.events, *match.eliminations, *outcome], key=lambda event: event.time)
     start = float(match.start)
     opening = frame_event("match_start", start, match.start_confidence)

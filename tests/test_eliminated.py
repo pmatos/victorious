@@ -6,7 +6,7 @@ from typing import Any
 import pytest
 
 from tests.analyse_helpers import STEADY, analyse, small
-from tests.synthetic import Hud, Results, Shot, Spectating, match_shots
+from tests.synthetic import Hud, Lobby, Results, Shot, Spectating, match_shots
 
 pytestmark = pytest.mark.usefixtures("require_ffmpeg", "require_tesseract")
 
@@ -109,3 +109,24 @@ def test_a_brief_hud_flicker_while_out_is_the_same_elimination(tmp_path: Path) -
     output = analyse(tmp_path, small(55, shots))
 
     assert eliminations(output["matches"][0]) == [(15.0, None)]
+
+
+def test_a_match_left_while_spectating_ends_at_its_last_spectating_second(tmp_path: Path) -> None:
+    shots = (Shot(Hud(), 5, 15), Shot(Spectating(), 15, 30))
+
+    output = analyse(tmp_path, small(30, shots))
+
+    (match,) = output["matches"]
+    assert eliminations(match) == [(15.0, None)]
+    assert match["end"] == 29
+    times = [event["time"] for event in match["events"]]
+    assert times == sorted(times)
+    assert match["events"][-1]["kind"] == "match_end"
+
+
+def test_the_label_long_after_the_hud_was_last_seen_is_not_an_elimination(tmp_path: Path) -> None:
+    shots = (Shot(Hud(), 5, 15), Shot(Lobby(), 15, 45), Shot(Spectating(), 45, 55))
+
+    output = analyse(tmp_path, small(60, shots))
+
+    assert all(eliminations(match) == [] for match in output["matches"])

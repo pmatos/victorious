@@ -47,9 +47,9 @@ class Event(_Model):
     confidence: float = Field(ge=0, le=1)
     value: int | None = Field(
         description=(
-            "The placement for final_placement, the new count for a counter, the placement "
-            "shown for eliminated when the squad is out too (null while the squad plays on), "
-            "else null."
+            "The placement for final_placement, the new count for a counter, the placement on "
+            "the YOU PLACED screen for eliminated (null for one detected while the squad plays "
+            "on, even if the squad is later out too), else null."
         )
     )
     end: float | None = Field(
