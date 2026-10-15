@@ -5,7 +5,7 @@ import os
 import secrets
 import sys
 import time
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 import cv2
@@ -35,7 +35,7 @@ from victorious.schema import MaskedAudioRecord, json_schema
 from victorious.setup import AT_KINDS, SetupResult, TimeError, parse_at, run_setup
 from victorious.speakers import DIARIZATION_REPO
 from victorious.speech import DEFAULT_MODEL, SpeechOptions, require_ready
-from victorious.video import RecordingError
+from victorious.video import RecordingError, RouteKind
 
 SUBCOMMANDS: tuple[tuple[str, str], ...] = (
     ("setup", "produce a Layout from a Recording"),
@@ -267,6 +267,20 @@ def _require_distinct(observations: Path | None, output: Path | None) -> None:
         raise OSError("--observations and --output name the same file")
 
 
+def decode_note(chunks: Mapping[RouteKind, int]) -> str | None:
+    """Where the chunks were decoded, for a run that used the GPU at all."""
+    gpu, cpu, resumed = (chunks.get(kind, 0) for kind in ("gpu", "cpu", "resumed"))
+    if gpu + resumed == 0:
+        return None
+    note = (
+        f"victorious analyse: decode: {gpu} of {sum(chunks.values())} chunks on the GPU, "
+        f"{cpu} on the CPU"
+    )
+    if resumed:
+        note += f", {resumed} resumed on the CPU after a GPU failure"
+    return note
+
+
 def _run_analyse(args: argparse.Namespace) -> tuple[str, str | None]:
     hwaccel.configure("off" if gpu_slots(os.environ) == 0 else args.hwaccel)
     speech = None
@@ -330,6 +344,8 @@ def _run_analyse(args: argparse.Namespace) -> tuple[str, str | None]:
             f"cache {state}{spoken}, {elapsed:.1f} s ({breakdown})",
             file=sys.stderr,
         )
+        if (decoded := decode_note(analysis.chunks)) is not None:
+            print(decoded, file=sys.stderr)
         if count:
             segments = f"{count} segment{'s' if count != 1 else ''}"
             if categorizer is None:

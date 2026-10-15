@@ -102,3 +102,26 @@ def test_the_mode_comes_from_the_environment_and_defaults_to_auto() -> None:
     assert hwaccel.mode_from({"VICTORIOUS_HWACCEL": "off"}) == "off"
     assert hwaccel.mode_from({"VICTORIOUS_HWACCEL": "vaapi"}) == "vaapi"
     assert hwaccel.mode_from({"VICTORIOUS_HWACCEL": "nonsense"}) == "auto"
+
+
+def test_one_failure_does_not_switch_hardware_decode_off() -> None:
+    hwaccel.reset()
+
+    hwaccel.record_failure()
+
+    assert not hwaccel.is_disabled()
+
+
+def test_consecutive_failures_switch_it_off_and_a_success_resets_the_count() -> None:
+    hwaccel.reset()
+    for _ in range(hwaccel.FAILURE_LIMIT - 1):
+        hwaccel.record_failure()
+    hwaccel.record_success()
+    for _ in range(hwaccel.FAILURE_LIMIT - 1):
+        hwaccel.record_failure()
+    assert not hwaccel.is_disabled()
+
+    hwaccel.record_failure()
+
+    assert hwaccel.is_disabled()
+    hwaccel.reset()

@@ -3,6 +3,7 @@
 import math
 import multiprocessing
 import os
+from collections import Counter
 from collections.abc import Mapping, Sequence
 from concurrent.futures import (
     FIRST_EXCEPTION,
@@ -27,6 +28,8 @@ from victorious.ocr import concurrent_readers
 from victorious.video import (
     TAIL_TOLERANCE,
     RecordingError,
+    Route,
+    RouteKind,
     VideoInfo,
     resolve_hardware,
     sample_chunk,
@@ -64,7 +67,7 @@ def _stopped() -> bool:
     return _ABORT is not None and _ABORT.is_set()
 
 
-def _extract(chunk: _Chunk) -> list[ChunkSecond]:
+def _extract(chunk: _Chunk) -> tuple[list[ChunkSecond], RouteKind]:
     """Decodes on the GPU when a slot is free and on the CPU otherwise.
 
     The last chunks wait for a slot instead: a CPU decode started late would outlast the GPU's
@@ -72,6 +75,7 @@ def _extract(chunk: _Chunk) -> list[ChunkSecond]:
     """
     gate = _GPU if chunk.hardware and not hwaccel.is_disabled() else None
     on_gpu = gate is not None and gate.acquire(block=chunk.gpu_only)
+    route = Route()
     try:
         frames = sample_chunk(
             chunk.path,
@@ -80,8 +84,9 @@ def _extract(chunk: _Chunk) -> list[ChunkSecond]:
             chunk.length,
             chunk.threads,
             hardware=chunk.hardware and (gate is None or on_gpu),
+            route=route,
         )
-        return extract_chunk(frames, chunk.layout, _stopped)
+        return extract_chunk(frames, chunk.layout, _stopped), route.kind
     finally:
         if on_gpu and gate is not None:
             gate.release()
@@ -101,7 +106,9 @@ def plan_chunks(duration: float, chunk_seconds: int) -> list[tuple[int, int | No
     return [(start, chunk_seconds) for start in starts[:-1]] + [(starts[-1], None)]
 
 
-def _run_in_pool(chunks: list[_Chunk], workers: int, slots: int) -> list[list[ChunkSecond]]:
+def _run_in_pool(
+    chunks: list[_Chunk], workers: int, slots: int
+) -> list[tuple[list[ChunkSecond], RouteKind]]:
     context = multiprocessing.get_context("spawn")
     abort = context.Event()
     shared = hwaccel.share(context.Event())
@@ -112,7 +119,7 @@ def _run_in_pool(chunks: list[_Chunk], workers: int, slots: int) -> list[list[Ch
         initializer=_initialise_worker,
         initargs=(abort, shared, gpu),
     ) as pool:
-        futures: list[Future[list[ChunkSecond]]] = []
+        futures: list[Future[tuple[list[ChunkSecond], RouteKind]]] = []
         try:
             futures.extend(pool.submit(_extract, c) for c in chunks)
             wait(futures, return_when=FIRST_EXCEPTION)
@@ -139,8 +146,12 @@ def _run_in_pool(chunks: list[_Chunk], workers: int, slots: int) -> list[list[Ch
 
 def extract_seconds(
     path: Path, info: VideoInfo, layout: Layout, jobs: int, chunk_seconds: int
-) -> list[ChunkSecond]:
-    """Every sampled second of the Recording, read in chunks on up to `jobs` processes."""
+) -> tuple[list[ChunkSecond], dict[RouteKind, int]]:
+    """Every sampled second of the Recording, read in chunks on up to `jobs` processes.
+
+    Also how many chunks were decoded on the `gpu`, on the `cpu`, and `resumed` on the CPU after
+    the GPU failed part-way.
+    """
     slots = gpu_slots(os.environ)
     hardware = slots > 0 and resolve_hardware(path, info) is not None
     plan = plan_chunks(info.duration, chunk_seconds)
@@ -154,7 +165,8 @@ def extract_seconds(
         results = [_extract(chunk) for chunk in chunks]
     else:
         results = _run_in_pool(chunks, workers, slots)
-    seconds = [second for chunk in results for second in chunk]
+    seconds = [second for chunk, _ in results for second in chunk]
+    routes = Counter(route for _, route in results)
     if [second.observation.second for second in seconds] != list(range(len(seconds))):
         raise RecordingError(f"cannot decode Recording {path}: frames are missing")
     if len(seconds) < math.floor(info.duration) - TAIL_TOLERANCE:
@@ -162,7 +174,7 @@ def extract_seconds(
             f"cannot read Recording {path}: it is truncated (decoded {len(seconds)} s, "
             f"its header claims {info.duration:.0f} s)"
         )
-    return seconds
+    return seconds, dict(routes)
 
 
 def read_counters(masks: Sequence[list[np.ndarray]], jobs: int) -> list[CounterReading | None]:
