@@ -210,7 +210,7 @@ def test_a_missing_diarization_model_fails_cleanly(tmp_path: Path) -> None:
 
 
 def test_the_speaker_is_part_of_the_schema() -> None:
-    assert SCHEMA_VERSION == "1.6"
+    assert SCHEMA_VERSION == "1.7"
     assert "speaker" in Event.model_fields
     assert "speaker" in json_schema()["$defs"]["Event"]["properties"]
 

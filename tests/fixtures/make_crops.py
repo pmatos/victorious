@@ -43,6 +43,16 @@ WIN_RECORDING = Path(
     )
 )
 
+SPECTATING_RECORDING = Path(
+    os.environ.get(
+        "VICTORIOUS_SPECTATING_RECORDING",
+        str(REPO / "assets" / "recordings" / "2026-10-08_11-11-58.mkv"),
+    )
+)
+SPECTATING_TIMESTAMP = 3540
+SPECTATING_BOX = (1100, 0, 1460, 80)
+SPECTATING_MIN_AREA = 20
+
 COUNTER_NUMBERS_X = (2060, 2178)
 ICON_HALF = ICON_NATIVE_SIZE // 2
 ROW_HALF_HEIGHT = 17
@@ -190,13 +200,30 @@ def cut_variants() -> dict[str, np.ndarray]:
     return {"victory_royale_orange": (orange // 8) * 8, "hash_white": hash_mask}
 
 
+def cut_spectating() -> dict[str, np.ndarray]:
+    """The white "SPECTATING" label an eliminated player sees while watching a teammate."""
+    frame = extract_frame(SPECTATING_RECORDING, SPECTATING_TIMESTAMP)
+    x0, y0, x1, y1 = SPECTATING_BOX
+    hsv = cv2.cvtColor(frame[y0:y1, x0:x1], cv2.COLOR_BGR2HSV)
+    white = cv2.inRange(hsv, WHITE_LOW, WHITE_HIGH)
+    _, _, stats, _ = cv2.connectedComponentsWithStats(white, connectivity=8)
+    letters = [s for s in stats[1:] if s[cv2.CC_STAT_AREA] > SPECTATING_MIN_AREA]
+    left = min(int(s[cv2.CC_STAT_LEFT]) for s in letters)
+    top = min(int(s[cv2.CC_STAT_TOP]) for s in letters)
+    right = max(int(s[cv2.CC_STAT_LEFT] + s[cv2.CC_STAT_WIDTH]) for s in letters)
+    bottom = max(int(s[cv2.CC_STAT_TOP] + s[cv2.CC_STAT_HEIGHT]) for s in letters)
+    return {"spectating": cv2.GaussianBlur(white[top:bottom, left:right], (3, 3), 0)}
+
+
 def main() -> None:
-    missing = [p for p in (HUD_RECORDING, WIN_RECORDING) if not p.is_file()]
+    sources = (HUD_RECORDING, WIN_RECORDING, SPECTATING_RECORDING)
+    missing = [p for p in sources if not p.is_file()]
     if missing:
         sys.exit(
             "missing source Recording(s): "
             + ", ".join(str(p) for p in missing)
-            + "\nset VICTORIOUS_HUD_RECORDING / VICTORIOUS_WIN_RECORDING to local files"
+            + "\nset VICTORIOUS_HUD_RECORDING / VICTORIOUS_WIN_RECORDING / "
+            "VICTORIOUS_SPECTATING_RECORDING to local files"
         )
     CROPS.mkdir(parents=True, exist_ok=True)
     written = {
@@ -204,6 +231,7 @@ def main() -> None:
         **cut_icons(),
         **cut_win(),
         **cut_variants(),
+        **cut_spectating(),
     }
     for name, image in written.items():
         path = (CROPS if name.startswith("digit_") else REFERENCES) / f"{name}.png"

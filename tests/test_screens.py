@@ -4,11 +4,17 @@ from pathlib import Path
 
 import pytest
 
-from tests.synthetic import Hud, Lobby, Results, write_layout
+from tests.synthetic import Hud, Lobby, Results, Spectating, write_layout
 from tests.synthetic.render import render_scene
 from tests.synthetic.spec import ResultsStyle, Scene
 from victorious.layout import Layout, load_layout
-from victorious.screens import RESULTS_THRESHOLD, results_reading, scale_range
+from victorious.screens import (
+    RESULTS_THRESHOLD,
+    SPECTATING_THRESHOLD,
+    results_reading,
+    scale_range,
+    spectating_score,
+)
 
 SIZES = [(1280, 720), (1920, 1080)]
 
@@ -45,3 +51,10 @@ def test_the_wide_banner_search_finds_nothing_on_other_screens(
 def test_only_the_banner_is_read_at_large_sizes() -> None:
     assert scale_range("results_banner") == (0.9, 1.6)
     assert scale_range("hud_anchor") == (0.9, 1.1)
+
+
+@pytest.mark.parametrize("size", SIZES, ids=lambda size: f"{size[1]}p")
+def test_the_spectating_label_is_found_at_any_size_and_nowhere_else(size: tuple[int, int]) -> None:
+    assert spectating_score(render_scene(Spectating(), *size)) >= SPECTATING_THRESHOLD
+    for scene in (Hud(), Lobby(), Results(7, "placed"), Results(1, "classic")):
+        assert spectating_score(render_scene(scene, *size)) < SPECTATING_THRESHOLD - 0.3

@@ -7,8 +7,9 @@ from typing import Any
 import pytest
 
 from tests.analyse_helpers import FfmpegShim, analyse_text, prepare, small
-from tests.synthetic import ELEMENT_RECTS, Hud, Shot, layout_document, match_shots
+from tests.synthetic import ELEMENT_RECTS, Hud, Shot, Spectating, layout_document, match_shots
 from victorious.schema import ObservationRecord
+from victorious.screens import SPECTATING_BAND
 
 pytestmark = pytest.mark.usefixtures("require_ffmpeg", "require_tesseract")
 
@@ -21,6 +22,7 @@ ORDER = [
     "results_banner",
     "placement",
     "elimination_placement",
+    "spectating",
 ]
 STEPS = ((0.0, 0, 0, 99), (10.0, 1, 0, 98))
 
@@ -57,7 +59,11 @@ def test_one_record_per_element_per_second(sidecar: list[ObservationRecord]) -> 
     assert [r.element for r in sidecar] == ORDER * DURATION
     assert [r.second for r in sidecar] == [s for s in range(DURATION) for _ in ORDER]
     for record in sidecar:
-        x, y, w, h = ELEMENT_RECTS[record.element]
+        x, y, w, h = (
+            (SPECTATING_BAND.x, SPECTATING_BAND.y, SPECTATING_BAND.w, SPECTATING_BAND.h)
+            if record.element == "spectating"
+            else ELEMENT_RECTS[record.element]
+        )
         assert (record.region.x, record.region.y) == pytest.approx((x, y))
         assert (record.region.w, record.region.h) == pytest.approx((w, h))
 
@@ -87,6 +93,21 @@ def test_placement_digits_are_read_on_the_results_screen(sidecar: list[Observati
     assert at(sidecar, 22, "elimination_placement").value is None
     assert at(sidecar, 15, "placement").value is None
     assert at(sidecar, 22, "results_banner").value is None
+
+
+def test_the_spectating_score_is_read_only_off_the_hud(tmp_path: Path) -> None:
+    shots = (Shot(Hud(), 2, 8), Shot(Spectating(), 8, 14))
+    recording, layout = prepare(tmp_path, small(16, shots))
+    destination = tmp_path / "observations.jsonl"
+
+    result = analyse_text(recording, layout, "--no-cache", "--observations", str(destination))
+
+    assert result.returncode == 0, result.stderr
+    records = parse(destination)
+    lobby, hud, label = (at(records, s, "spectating").score or 0.0 for s in (0, 5, 10))
+    assert lobby < 0.7
+    assert hud == 0.0
+    assert label >= 0.7
 
 
 def test_layout_without_optional_elements_has_fewer_records(tmp_path: Path) -> None:

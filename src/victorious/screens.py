@@ -14,6 +14,8 @@ from victorious.references import load_reference, reference_scale
 
 HUD_THRESHOLD = 0.7
 RESULTS_THRESHOLD = 0.7
+SPECTATING_THRESHOLD = 0.7
+SPECTATING_BAND = Rect(x=0.4, y=0.0, w=0.2, h=0.09)
 ICON_NAMES = ("icon_skull", "icon_squad", "icon_person")
 BANNER_NAMES = ("victory_royale", "victory_royale_orange")
 SCALE_SWEEP = (0.9, 1.0, 1.1)
@@ -118,6 +120,15 @@ def hud_score(frame: np.ndarray, layout: Layout) -> float:
     region = _crop(frame, layout.screens.hud.hud_anchor, ANCHOR_MARGIN)
     height = frame.shape[0]
     return min(_score(region, name, True, height)[0] for name in ICON_NAMES)
+
+
+def spectating_score(frame: np.ndarray) -> float:
+    """How surely the white "SPECTATING" label of an eliminated player is on screen, 0..1.
+
+    The label sits at the top centre whatever the HUD, so it is searched in a fixed band.
+    """
+    region = white_mask(_crop(frame, SPECTATING_BAND, 0.0))
+    return _score(region, "spectating", False, frame.shape[0])[0]
 
 
 def _band_masks(

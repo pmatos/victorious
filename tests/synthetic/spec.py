@@ -55,7 +55,12 @@ class Results:
             raise ValueError("the orange banner is a Win, so its placement must be 1")
 
 
-Scene = Lobby | Hud | Results
+@dataclass(frozen=True)
+class Spectating:
+    """The player is out and watching a teammate: no HUD counters, the white "SPECTATING" label."""
+
+
+Scene = Lobby | Hud | Results | Spectating
 
 
 @dataclass(frozen=True)

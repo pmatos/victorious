@@ -36,7 +36,12 @@ from victorious.schema import (
     RecordingInfo,
     frame_event,
 )
-from victorious.screens import HUD_THRESHOLD, RESULTS_THRESHOLD, ResultsReading
+from victorious.screens import (
+    HUD_THRESHOLD,
+    RESULTS_THRESHOLD,
+    SPECTATING_THRESHOLD,
+    ResultsReading,
+)
 from victorious.selection import NOT_FORTNITE_WINDOW, NoHud, select_layout
 from victorious.speech import SpeechOptions, require_audio_stream, transcribe_matches
 from victorious.video import VideoInfo, probe, require_complete
@@ -47,6 +52,8 @@ MAX_PLACEMENT_ATTEMPTS = 15
 NEW_MATCH_ABSENCE_SECONDS = 20
 LOBBY_PEEK_SECONDS = 6
 ABANDONED_LOBBY_SECONDS = 30
+OUT_CONFIRM_SECONDS = 2
+BACK_CONFIRM_SECONDS = 2
 
 
 @dataclass
@@ -58,6 +65,37 @@ class _OpenMatch:
     results_start: int | None = None
     readings: list[ResultsReading] = field(default_factory=list)
     opening: list[Counters] = field(default_factory=list)
+    out: bool = False
+    eliminations: list[Event] = field(default_factory=list)
+    spectating_run: list[tuple[int, float]] = field(default_factory=list)
+    hud_back: int = 0
+
+    def watch_spectating(self, second: int, spectating: float, hud_present: bool) -> None:
+        """Opens an elimination once the label has been seen on consecutive seconds.
+
+        The player is out until the HUD is back for a few seconds; a map screen or a one second
+        flicker in between does not start a new one.
+        """
+        if spectating >= SPECTATING_THRESHOLD and not hud_present:
+            self.hud_back = 0
+            if self.out:
+                return
+            if self.spectating_run and second != self.spectating_run[-1][0] + 1:
+                self.spectating_run.clear()
+            self.spectating_run.append((second, spectating))
+            if len(self.spectating_run) >= OUT_CONFIRM_SECONDS:
+                self.out = True
+                first, confidence = self.spectating_run[0]
+                self.eliminations.append(frame_event("eliminated", float(first), confidence))
+                self.spectating_run.clear()
+            return
+        self.spectating_run.clear()
+        if not self.out:
+            return
+        self.hud_back = self.hud_back + 1 if hud_present else 0
+        if self.hud_back >= BACK_CONFIRM_SECONDS:
+            self.out = False
+            self.hud_back = 0
 
     def abandoned_lobby(self) -> bool:
         """A short HUD run that only showed a lobby filling: the player left before the game."""
@@ -96,6 +134,9 @@ def _finish(index: int, match: _OpenMatch, resolver: Resolver | None) -> Match:
         else:
             win, placement, placement_confidence = False, None, 0.0
 
+        placed = max(reading.elimination_placement_score for reading in match.readings)
+        if not win and not match.out and placed >= RESULTS_THRESHOLD:
+            outcome.append(frame_event("eliminated", end, placed, placement))
         if win:
             outcome.append(frame_event("win", end, placement_confidence))
         if placement is not None:
@@ -104,7 +145,7 @@ def _finish(index: int, match: _OpenMatch, resolver: Resolver | None) -> Match:
         closing = frame_event("match_end", end, results_confidence)
 
     counted = match.tracker.close(end, resolver)
-    middle = sorted([*counted.events, *outcome], key=lambda event: event.time)
+    middle = sorted([*counted.events, *match.eliminations, *outcome], key=lambda event: event.time)
     start = float(match.start)
     opening = frame_event("match_start", start, match.start_confidence)
     return Match(
@@ -209,6 +250,7 @@ def run_machine(
             if second - current.start < ABANDONED_LOBBY_SECONDS:
                 current.opening.append(taken)
             current.tracker.observe(second, taken)
+            current.watch_spectating(second, observation.spectating, present)
 
     if current is not None:
         matches.append(_finish(len(matches), current, resolver))

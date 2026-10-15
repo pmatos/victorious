@@ -12,6 +12,7 @@ from tests.synthetic.spec import (
     Results,
     Scene,
     Shot,
+    Spectating,
     match_shots,
 )
 
@@ -24,6 +25,7 @@ __all__ = [
     "Results",
     "Scene",
     "Shot",
+    "Spectating",
     "build_recording",
     "decode_frame",
     "layout_document",

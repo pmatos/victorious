@@ -192,7 +192,7 @@ def test_confirmed_and_rejected_matches_are_saved_to_a_labels_file(
     matches = json.loads(analysed.read_text())["matches"]
     assert saved["labels_version"] == "1.0"
     assert saved["recording"]["path"] == json.loads(analysed.read_text())["recording"]["path"]
-    assert saved["analysis"]["schema_version"] == "1.6"
+    assert saved["analysis"]["schema_version"] == "1.7"
     assert [item["verdict"] for item in saved["matches"]] == ["confirmed", "rejected", "confirmed"]
     for item, match in zip(saved["matches"], matches, strict=True):
         assert {key: item[key] for key in ("start", "end", "win", "placement")} == {
@@ -317,7 +317,7 @@ def test_output_must_not_be_the_analysis_or_the_recording(
 
         assert running.wait(timeout=60) == 1
         assert "http://" not in running.stderr_text
-    assert json.loads((workdir / "analysis.json").read_text())["schema_version"] == "1.6"
+    assert json.loads((workdir / "analysis.json").read_text())["schema_version"] == "1.7"
 
 
 def test_a_recording_path_given_overrides_the_one_in_the_analysis(

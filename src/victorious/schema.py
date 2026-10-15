@@ -6,13 +6,14 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from victorious.layout import Rect
 
-SCHEMA_VERSION = "1.6"
+SCHEMA_VERSION = "1.7"
 
 CounterElement = Literal["personal_eliminations", "team_eliminations", "players_left"]
 EventKind = Literal[
     "match_start",
     "win",
     "final_placement",
+    "eliminated",
     "match_end",
     "personal_eliminations",
     "team_eliminations",
@@ -31,6 +32,7 @@ ObservedElement = Literal[
     "results_banner",
     "placement",
     "elimination_placement",
+    "spectating",
 ]
 
 
@@ -44,7 +46,11 @@ class Event(_Model):
     source: EventSource
     confidence: float = Field(ge=0, le=1)
     value: int | None = Field(
-        description="The placement for final_placement, the new count for a counter, else null."
+        description=(
+            "The placement for final_placement, the new count for a counter, the placement "
+            "shown for eliminated when the squad is out too (null while the squad plays on), "
+            "else null."
+        )
     )
     end: float | None = Field(
         ge=0,
@@ -185,7 +191,7 @@ class AnalysisWarning(_Model):
 
 
 class AnalysisOutput(_Model):
-    schema_version: Literal["1.6"] = SCHEMA_VERSION  # type: ignore[assignment]
+    schema_version: Literal["1.7"] = SCHEMA_VERSION  # type: ignore[assignment]
     recording: RecordingInfo
     layout: ChosenLayout | None = Field(
         description="The Layout used, null when no in-match HUD was found to choose one."
