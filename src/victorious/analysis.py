@@ -307,14 +307,14 @@ class Phases:
 
 def _with_counters(
     path: Path, info: VideoInfo, layout: Layout, jobs: int, chunk_seconds: int, phases: Phases
-) -> list[SecondObservation]:
+) -> tuple[list[SecondObservation], dict[str, int]]:
     """The Observations of every second, reading counters exactly where a serial pass would.
 
     The Match loop is run once with a recorder to learn which seconds it reads counters at, the
     skip-OCR rule is replayed over that schedule, and only the pixels that rule keeps are OCR'd.
     """
     with phases.timed("frames"):
-        seconds = extract_seconds(path, info, layout, jobs, chunk_seconds)
+        seconds, chunks = extract_seconds(path, info, layout, jobs, chunk_seconds)
     observations = [second.observation for second in seconds]
     recorder = _ScheduleRecorder()
     run_machine(layout, observations, recorder, None)
@@ -342,7 +342,7 @@ def _with_counters(
     counters: dict[int, Counters] = {}
     for (second, element), index in source.items():
         counters.setdefault(second, {})[element] = readings[index]
-    return [replace(o, counters=counters.get(o.second, {})) for o in observations]
+    return [replace(o, counters=counters.get(o.second, {})) for o in observations], chunks
 
 
 @dataclass(frozen=True)
@@ -359,6 +359,7 @@ class Analysis:
     categorized: int = 0
     category_failure: str | None = None
     phases: dict[str, float] = field(default_factory=dict)
+    chunks: dict[str, int] = field(default_factory=dict)
 
 
 def analyse_with_observations(
@@ -404,9 +405,10 @@ def analyse_with_observations(
     entry = cache.entry(path, layout) if cache is not None else None
     observations = entry.load() if entry is not None else None
     cached = observations is not None
+    chunks: dict[str, int] = {}
     if observations is None:
         require_complete(path, info)
-        observations = _with_counters(path, info, layout, jobs, chunk_seconds, phases)
+        observations, chunks = _with_counters(path, info, layout, jobs, chunk_seconds, phases)
     resolver = JumpResolver(path, info, layout, entry)
     matches = run_machine(layout, observations, _Readings(observations), resolver)
     if entry is not None and not cached:
@@ -442,6 +444,7 @@ def analyse_with_observations(
         categorized,
         category_failure,
         phases.seconds,
+        chunks,
     )
 
 

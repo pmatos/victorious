@@ -3,6 +3,7 @@
 import json
 import math
 import shutil
+import signal
 import subprocess
 import tempfile
 from collections.abc import Iterator
@@ -21,6 +22,13 @@ PROBE_AT = (0.4, 0.6)
 
 class RecordingError(Exception):
     """The Recording cannot be read."""
+
+
+@dataclass
+class Route:
+    """How a chunk was decoded: `gpu`, `cpu`, or `resumed` (the GPU failed and the CPU finished)."""
+
+    kind: str = "cpu"
 
 
 @dataclass(frozen=True)
@@ -99,8 +107,22 @@ def _decode(
         status = process.wait()
         if truncated or status != 0:
             errors.seek(0)
-            detail = errors.read().decode(errors="replace").strip() or "truncated frame"
+            detail = errors.read().decode(errors="replace").strip() or _silent_exit(
+                truncated, status
+            )
             raise RecordingError(f"cannot decode Recording {path}: {detail}")
+
+
+def _silent_exit(truncated: bool, status: int) -> str:
+    """What to say when ffmpeg stopped without a word: a frame cut short, and how it ended."""
+    if status < 0:
+        try:
+            how = f"killed by {signal.Signals(-status).name}"
+        except ValueError:
+            how = f"killed by signal {-status}"
+    else:
+        how = f"exit status {status}"
+    return f"truncated frame ({how})" if truncated else f"ffmpeg ended with {how}"
 
 
 def _seconds(value: float) -> str:
@@ -182,6 +204,7 @@ def _frames(
     rate: int,
     threads: int,
     allow_hardware: bool = True,
+    route: Route | None = None,
 ) -> Iterator[np.ndarray]:
     """Frames at `rate` per second, on the GPU when it works and in software when it stops.
 
@@ -192,14 +215,19 @@ def _frames(
     hardware = resolve_hardware(path, info) if allow_hardware else None
     if hardware is not None:
         command = _command(path, start, length, rate, threads, hardware)
+        if route is not None:
+            route.kind = "gpu"
         try:
             for frame in _decode(path, info, command, hwaccel.environment(hardware)):
                 done += 1
                 yield frame
         except RecordingError as error:
-            hwaccel.disable()
+            hwaccel.record_failure()
             hwaccel.note(f"hardware decode failed ({_last_line(error)})")
+            if route is not None:
+                route.kind = "resumed"
         else:
+            hwaccel.record_success()
             return
     remaining = None if length is None else length - done / rate
     if remaining is not None and remaining <= 0:
@@ -215,13 +243,14 @@ def sample_chunk(
     length: int | None,
     threads: int,
     hardware: bool = True,
+    route: Route | None = None,
 ) -> Iterator[tuple[int, np.ndarray]]:
     """Yield (whole seconds from the start of the Recording, BGR frame), one per second.
 
     Covers [start, start + length), or to the end of the Recording when `length` is None. The
     boundaries are whole seconds, so the frames are the ones a single decode would sample.
     """
-    frames = _frames(path, info, start, length, 1, max(1, threads), hardware)
+    frames = _frames(path, info, start, length, 1, max(1, threads), hardware, route)
     return ((start + k, frame) for k, frame in enumerate(frames))
 
 

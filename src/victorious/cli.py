@@ -267,6 +267,18 @@ def _require_distinct(observations: Path | None, output: Path | None) -> None:
         raise OSError("--observations and --output name the same file")
 
 
+def decode_note(chunks: dict[str, int]) -> str | None:
+    """Where the chunks were decoded, for a run that used the GPU at all."""
+    gpu, cpu, resumed = (chunks.get(kind, 0) for kind in ("gpu", "cpu", "resumed"))
+    if gpu + resumed == 0:
+        return None
+    total = gpu + cpu + resumed
+    note = f"victorious analyse: decode: {gpu} of {total} chunks on the GPU, {cpu} on the CPU"
+    if resumed:
+        note += f", {resumed} resumed on the CPU after a GPU failure"
+    return note
+
+
 def _run_analyse(args: argparse.Namespace) -> tuple[str, str | None]:
     hwaccel.configure("off" if gpu_slots(os.environ) == 0 else args.hwaccel)
     speech = None
@@ -330,6 +342,8 @@ def _run_analyse(args: argparse.Namespace) -> tuple[str, str | None]:
             f"cache {state}{spoken}, {elapsed:.1f} s ({breakdown})",
             file=sys.stderr,
         )
+        if (decoded := decode_note(analysis.chunks)) is not None:
+            print(decoded, file=sys.stderr)
         if count:
             segments = f"{count} segment{'s' if count != 1 else ''}"
             if categorizer is None:

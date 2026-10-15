@@ -94,6 +94,8 @@ _resolved: dict[tuple[str, ...], HwDecoder | None] = {}
 _mode: str | None = None
 _noted: Any = threading.Event()
 _failed = False
+_failures = 0
+FAILURE_LIMIT = 3
 
 
 @dataclass(frozen=True)
@@ -116,18 +118,28 @@ def current_mode() -> str:
 
 
 def reset() -> None:
-    global _mode, _noted, _failed
+    global _mode, _noted, _failed, _failures
     with _lock:
         _resolved.clear()
         _mode = None
         _failed = False
+        _failures = 0
         _noted = threading.Event()
 
 
-def disable() -> None:
-    """Hardware decode failed mid-stream: this process stops trying it."""
-    global _failed
-    _failed = True
+def record_failure() -> None:
+    """A hardware decode failed mid-stream; `FAILURE_LIMIT` in a row make this process stop."""
+    global _failed, _failures
+    with _lock:
+        _failures += 1
+        if _failures >= FAILURE_LIMIT:
+            _failed = True
+
+
+def record_success() -> None:
+    global _failures
+    with _lock:
+        _failures = 0
 
 
 def is_disabled() -> bool:
