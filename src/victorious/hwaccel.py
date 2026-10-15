@@ -160,12 +160,12 @@ def adopt(shared: Shared) -> None:
     _noted = shared.noted
 
 
-def note(message: str) -> None:
+def note(message: str, outcome: str = "using software decode") -> None:
     """One stderr line per run, however many threads or workers hit the failure."""
     if _noted.is_set():
         return
     _noted.set()
-    print(f"victorious: {message}; using software decode", file=sys.stderr)
+    print(f"victorious: {message}; {outcome}", file=sys.stderr)
 
 
 def resolve(key: tuple[str, ...], check: Callable[[HwDecoder], str | None]) -> HwDecoder | None:

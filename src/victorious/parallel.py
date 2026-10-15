@@ -29,6 +29,7 @@ from victorious.video import (
     TAIL_TOLERANCE,
     RecordingError,
     Route,
+    RouteKind,
     VideoInfo,
     resolve_hardware,
     sample_chunk,
@@ -66,7 +67,7 @@ def _stopped() -> bool:
     return _ABORT is not None and _ABORT.is_set()
 
 
-def _extract(chunk: _Chunk) -> tuple[list[ChunkSecond], str]:
+def _extract(chunk: _Chunk) -> tuple[list[ChunkSecond], RouteKind]:
     """Decodes on the GPU when a slot is free and on the CPU otherwise.
 
     The last chunks wait for a slot instead: a CPU decode started late would outlast the GPU's
@@ -107,7 +108,7 @@ def plan_chunks(duration: float, chunk_seconds: int) -> list[tuple[int, int | No
 
 def _run_in_pool(
     chunks: list[_Chunk], workers: int, slots: int
-) -> list[tuple[list[ChunkSecond], str]]:
+) -> list[tuple[list[ChunkSecond], RouteKind]]:
     context = multiprocessing.get_context("spawn")
     abort = context.Event()
     shared = hwaccel.share(context.Event())
@@ -118,7 +119,7 @@ def _run_in_pool(
         initializer=_initialise_worker,
         initargs=(abort, shared, gpu),
     ) as pool:
-        futures: list[Future[tuple[list[ChunkSecond], str]]] = []
+        futures: list[Future[tuple[list[ChunkSecond], RouteKind]]] = []
         try:
             futures.extend(pool.submit(_extract, c) for c in chunks)
             wait(futures, return_when=FIRST_EXCEPTION)
@@ -145,7 +146,7 @@ def _run_in_pool(
 
 def extract_seconds(
     path: Path, info: VideoInfo, layout: Layout, jobs: int, chunk_seconds: int
-) -> tuple[list[ChunkSecond], dict[str, int]]:
+) -> tuple[list[ChunkSecond], dict[RouteKind, int]]:
     """Every sampled second of the Recording, read in chunks on up to `jobs` processes.
 
     With them, how many chunks were decoded on the `gpu`, on the `cpu` and `resumed` on the CPU

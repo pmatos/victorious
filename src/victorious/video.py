@@ -9,6 +9,7 @@ import tempfile
 from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 
 import numpy as np
 
@@ -24,11 +25,14 @@ class RecordingError(Exception):
     """The Recording cannot be read."""
 
 
+RouteKind = Literal["gpu", "cpu", "resumed"]
+
+
 @dataclass
 class Route:
     """How a chunk was decoded: `gpu`, `cpu`, or `resumed` (the GPU failed and the CPU finished)."""
 
-    kind: str = "cpu"
+    kind: RouteKind = "cpu"
 
 
 @dataclass(frozen=True)
@@ -223,7 +227,9 @@ def _frames(
                 yield frame
         except RecordingError as error:
             hwaccel.record_failure()
-            hwaccel.note(f"hardware decode failed ({_last_line(error)})")
+            hwaccel.note(
+                f"hardware decode failed ({_last_line(error)})", "finishing the chunk in software"
+            )
             if route is not None:
                 route.kind = "resumed"
         else:

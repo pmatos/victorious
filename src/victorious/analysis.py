@@ -44,7 +44,7 @@ from victorious.screens import (
 )
 from victorious.selection import NOT_FORTNITE_WINDOW, NoHud, select_layout
 from victorious.speech import SpeechOptions, require_audio_stream, transcribe_matches
-from victorious.video import VideoInfo, probe, require_complete
+from victorious.video import RouteKind, VideoInfo, probe, require_complete
 
 PLACEMENT_READINGS_PER_RUN = 5
 MAX_PLACEMENT = 100
@@ -307,7 +307,7 @@ class Phases:
 
 def _with_counters(
     path: Path, info: VideoInfo, layout: Layout, jobs: int, chunk_seconds: int, phases: Phases
-) -> tuple[list[SecondObservation], dict[str, int]]:
+) -> tuple[list[SecondObservation], dict[RouteKind, int]]:
     """The Observations of every second, reading counters exactly where a serial pass would.
 
     The Match loop is run once with a recorder to learn which seconds it reads counters at, the
@@ -359,7 +359,7 @@ class Analysis:
     categorized: int = 0
     category_failure: str | None = None
     phases: dict[str, float] = field(default_factory=dict)
-    chunks: dict[str, int] = field(default_factory=dict)
+    chunks: dict[RouteKind, int] = field(default_factory=dict)
 
 
 def analyse_with_observations(
@@ -405,7 +405,7 @@ def analyse_with_observations(
     entry = cache.entry(path, layout) if cache is not None else None
     observations = entry.load() if entry is not None else None
     cached = observations is not None
-    chunks: dict[str, int] = {}
+    chunks: dict[RouteKind, int] = {}
     if observations is None:
         require_complete(path, info)
         observations, chunks = _with_counters(path, info, layout, jobs, chunk_seconds, phases)
