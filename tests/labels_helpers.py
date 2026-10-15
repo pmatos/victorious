@@ -82,7 +82,7 @@ def write_labels(
     document = {
         "labels_version": labels_version,
         "recording": {"path": path, "duration": duration},
-        "analysis": {"schema_version": "1.6", "layout": None},
+        "analysis": {"schema_version": "1.7", "layout": None},
         "matches": list(labels),
     }
     target = directory / name

@@ -6,7 +6,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from tests.synthetic.spec import Hud, Lobby, Results, Scene
+from tests.synthetic.spec import Hud, Lobby, Results, Scene, Spectating
 from victorious.references import load_reference
 
 CROPS = Path(__file__).parent.parent / "fixtures" / "crops"
@@ -34,6 +34,7 @@ NATIVE_RECTS: dict[str, tuple[int, int, int, int]] = {
     "placement": (918, 150, 280, 140),
     "elimination_placement": (1290, 150, 320, 160),
 }
+SPECTATING_ORIGIN = (1172, 24)
 ELEMENT_RECTS: dict[str, tuple[float, float, float, float]] = {
     name: (x / NATIVE_WIDTH, y / NATIVE_HEIGHT, w / NATIVE_WIDTH, h / NATIVE_HEIGHT)
     for name, (x, y, w, h) in NATIVE_RECTS.items()
@@ -138,7 +139,7 @@ def _digits(value: int) -> list[np.ndarray]:
 
 
 def render_scene(scene: Scene, width: int, height: int) -> np.ndarray:
-    in_match = isinstance(scene, Hud | Results)
+    in_match = isinstance(scene, Hud | Results | Spectating)
     frame = (
         _background(width, height, (70, 30, 5), (110, 55, 15), seed=2)
         if in_match
@@ -148,6 +149,8 @@ def render_scene(scene: Scene, width: int, height: int) -> np.ndarray:
         _draw_hud(frame, scene)
     elif isinstance(scene, Results):
         _draw_results(frame, scene)
+    elif isinstance(scene, Spectating):
+        _draw_spectating(frame)
     elif not isinstance(scene, Lobby):
         raise TypeError(f"unknown scene {scene!r}")
     return frame
@@ -204,3 +207,13 @@ def _draw_results(frame: np.ndarray, results: Results) -> None:
     if results.style == "placed_shrunk":
         glyph_height = round(glyph_height * SHRUNK_TEXT)
     _draw_text(frame, glyphs, rect, height=glyph_height, align="left", color=color)
+
+
+def _draw_spectating(frame: np.ndarray) -> None:
+    height, width = frame.shape[:2]
+    label = load_crop("spectating")
+    scale = height / NATIVE_HEIGHT
+    size = (round(label.shape[1] * scale), round(label.shape[0] * scale))
+    x = round(SPECTATING_ORIGIN[0] / NATIVE_WIDTH * width)
+    y = round(SPECTATING_ORIGIN[1] * scale)
+    _blend(frame, cv2.resize(label, size, interpolation=cv2.INTER_AREA), x, y, WHITE)

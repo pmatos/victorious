@@ -32,6 +32,10 @@ _Avoid_: Sample, reading, detection
 One timestamped fact about a Match or the speech during it, such as match start, an elimination, or the final placement.
 _Avoid_: Detection, hit, occurrence
 
+**Eliminated**:
+The player themselves being out of the Match, watching a teammate while the squad plays on (the Event kind `eliminated`). It is not the personal eliminations counter, which counts the kills the player made. A Match can have several, since a teammate's reboot card brings the player back, and it ends only at its results screen: "YOU PLACED #N" once the squad is out too.
+_Avoid_: Death, knocked
+
 **Setup**:
 The one-off step that produces a Layout from a Recording.
 _Avoid_: Calibration, training

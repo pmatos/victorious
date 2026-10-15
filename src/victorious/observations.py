@@ -16,10 +16,12 @@ from victorious.ocr import DigitReading
 from victorious.schema import CounterElement, ObservationRecord, ObservedElement
 from victorious.screens import (
     HUD_THRESHOLD,
+    SPECTATING_BAND,
     ResultsReading,
     counter_masks,
     hud_score,
     results_reading,
+    spectating_score,
 )
 
 Counters = dict[CounterElement, CounterReading | None]
@@ -30,13 +32,15 @@ class SecondObservation:
     """Everything read at one sampled second.
 
     `counters` holds the readings the Match loop used, so it is empty at a second where no Match
-    was open or the HUD was absent.
+    was open or the HUD was absent. `spectating` is the "SPECTATING" label's score, read only at
+    seconds that show neither the HUD nor a results screen.
     """
 
     second: int
     hud: float
     results: ResultsReading
     counters: Counters = field(default_factory=dict)
+    spectating: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -83,12 +87,14 @@ def extract_chunk(
             raise Aborted
         results = results_reading(frame, layout, read_placement=True)
         hud = hud_score(frame, layout)
+        spectating = 0.0 if hud >= HUD_THRESHOLD or results.is_results else spectating_score(frame)
         masks: dict[CounterElement, tuple[PackedMask, PackedMask]] = {}
         if not results.is_results and hud >= HUD_THRESHOLD:
             for element, rect in rects:
                 tight, loose = counter_masks(frame, rect)
                 masks[element] = (PackedMask.pack(tight), PackedMask.pack(loose))
-        seconds.append(ChunkSecond(SecondObservation(second, hud, results), masks))
+        observation = SecondObservation(second, hud, results, spectating=spectating)
+        seconds.append(ChunkSecond(observation, masks))
     return seconds
 
 
@@ -113,6 +119,7 @@ def to_json(observation: SecondObservation) -> dict[str, Any]:
         "digits": None if digits is None else [digits.text, digits.confidence],
         "digits_element": results.digits_element,
         "counters": {k: reading_to_json(v) for k, v in observation.counters.items()},
+        "spectating": observation.spectating,
     }
 
 
@@ -130,7 +137,9 @@ def from_json(raw: dict[str, Any]) -> SecondObservation:
     for element in COUNTER_ELEMENTS:
         if element in raw["counters"]:
             counters[element] = reading_from_json(raw["counters"][element])
-    return SecondObservation(int(raw["second"]), float(raw["hud"]), results, counters)
+    return SecondObservation(
+        int(raw["second"]), float(raw["hud"]), results, counters, float(raw["spectating"])
+    )
 
 
 def _placement_digits(
@@ -146,7 +155,11 @@ def records(
     observations: Iterable[SecondObservation], layout: Layout
 ) -> Iterator[ObservationRecord]:
     """One record per second per HUD element the Layout describes."""
-    regions: dict[str, Rect | None] = {**dict(layout.screens.hud), **dict(layout.screens.results)}
+    regions: dict[str, Rect | None] = {
+        **dict(layout.screens.hud),
+        **dict(layout.screens.results),
+        "spectating": SPECTATING_BAND,
+    }
     for observation in observations:
         results = observation.results
         rows: list[tuple[ObservedElement, float | None, int | None, float]] = [
@@ -169,6 +182,7 @@ def records(
                 *_placement_digits(results, "elimination_placement"),
             )
         )
+        rows.append(("spectating", observation.spectating, None, 0.0))
         for element, score, value, confidence in rows:
             region = regions[element]
             if region is not None:
