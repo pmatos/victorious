@@ -314,8 +314,8 @@ def _neighbour_frames(
 def _detect_panel(
     recording: Path, info: VideoInfo, kind: str, second: int, details: dict[str, str]
 ) -> Panel:
-    """Reads `second` and its neighbours; on a results screen, reaches further out while an
-    element is at a size `analyse` does not read, since the text animates in size."""
+    """Reads `second` and its neighbours; on a results screen, reaches further out while nothing
+    is found or an element is at a size `analyse` does not read, since the text animates."""
     reference = frame_at(recording, info, second)
     if reference is None:
         raise RecordingError(f"cannot read a frame at {second} s of {recording}")
@@ -324,7 +324,7 @@ def _detect_panel(
     _merge(found, kind, second, reference, details)
     reach = NEIGHBOUR_REACH if kind == "results" else 1
     for offset in range(1, reach + 1):
-        if offset > 1 and all(_in_scale(name, hit) for name, hit in found.items()):
+        if offset > 1 and found and all(_in_scale(name, hit) for name, hit in found.items()):
             break
         for frame in _neighbour_frames(recording, info, second, offset):
             if _merge(found, kind, second, frame, details) or offset == 1:
