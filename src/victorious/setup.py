@@ -40,6 +40,8 @@ OPTIONAL_HINT = (
     "pass a second --at results= on a screen that shows YOU PLACED #N to find it, or use --manual"
 )
 ROUNDING = 1e-4
+SCALE_SLACK = 1e-3
+NEIGHBOUR_REACH = 8
 _CLOCK = re.compile(r"\d+(:[0-5]?\d){1,2}(\.\d+)?|\d+(\.\d+)?")
 
 
@@ -100,10 +102,22 @@ class SetupResult:
         return sum(len(panel.found) for panel in self.panels)
 
 
-def _scale_note(element: str, found: Found) -> str:
+def _in_scale(element: str, found: Found) -> bool:
     low, high = scale_range(element)
-    if low <= found.scale_factor <= high:
+    return low - SCALE_SLACK <= found.scale_factor <= high + SCALE_SLACK
+
+
+def _better(element: str, found: Found, current: Found | None) -> bool:
+    """Whether `found` beats `current`: a size `analyse` reads first, then the score."""
+    if current is None:
+        return True
+    return (_in_scale(element, found), found.score) > (_in_scale(element, current), current.score)
+
+
+def _scale_note(element: str, found: Found) -> str:
+    if _in_scale(element, found):
         return ""
+    low, high = scale_range(element)
     return (
         f"; it is {found.scale_factor:.2f}x the reference size and analyse only reads "
         f"{low:.1f}x to {high:.1f}x"
@@ -174,7 +188,7 @@ def _best_per_element(panels: Sequence[Panel]) -> dict[str, tuple[Found, int]]:
     best: dict[str, tuple[Found, int]] = {}
     for index, panel in enumerate(panels):
         for name, found in panel.found.items():
-            if name not in best or found.score > best[name][0].score:
+            if _better(name, found, best[name][0] if name in best else None):
                 best[name] = (found, index)
     return best
 
@@ -280,10 +294,12 @@ def manual_result(panels: Sequence[Panel], submitted: object) -> SetupResult | l
     return SetupResult(layout, drawn, {}, warnings)
 
 
-def _neighbour_frames(recording: Path, info: VideoInfo, second: int) -> list[np.ndarray]:
-    """The frames either side of `second`; a neighbour that cannot be decoded is skipped."""
+def _neighbour_frames(
+    recording: Path, info: VideoInfo, second: int, offset: int
+) -> list[np.ndarray]:
+    """The frames `offset` s either side of `second`; one that cannot be decoded is skipped."""
     frames: list[np.ndarray] = []
-    for neighbour in (second - 1, second + 1):
+    for neighbour in (second - offset, second + offset):
         if not 0 <= neighbour < info.duration:
             continue
         try:
@@ -293,6 +309,42 @@ def _neighbour_frames(recording: Path, info: VideoInfo, second: int) -> list[np.
         if frame is not None:
             frames.append(frame)
     return frames
+
+
+def _detect_panel(
+    recording: Path, info: VideoInfo, kind: str, second: int, details: dict[str, str]
+) -> Panel:
+    """Reads `second` and its neighbours; on a results screen, reaches further out while nothing
+    is found or an element is at a size `analyse` does not read, since the text animates."""
+    reference = frame_at(recording, info, second)
+    if reference is None:
+        raise RecordingError(f"cannot read a frame at {second} s of {recording}")
+    frames = [reference]
+    found: dict[str, Found] = {}
+    _merge(found, kind, second, reference, details)
+    reach = NEIGHBOUR_REACH if kind == "results" else 1
+    for offset in range(1, reach + 1):
+        if offset > 1 and found and all(_in_scale(name, hit) for name, hit in found.items()):
+            break
+        for frame in _neighbour_frames(recording, info, second, offset):
+            if _merge(found, kind, second, frame, details) or offset == 1:
+                frames.append(frame)
+    return Panel(kind, second, tuple(frames), found)
+
+
+def _merge(
+    found: dict[str, Found], kind: str, second: int, frame: np.ndarray, details: dict[str, str]
+) -> bool:
+    """Keeps the better detections of `frame`; whether it supplied any."""
+    detection = find_hud(frame) if kind == "hud" else find_results(frame)
+    improved = False
+    for name, hit in detection.found.items():
+        if _better(name, hit, found.get(name)):
+            found[name] = hit
+            improved = True
+    for name, reason in detection.missing.items():
+        details.setdefault(name, f"{reason} at {kind}={second}")
+    return improved
 
 
 def run_setup(recording: Path, at: Sequence[tuple[str, int]]) -> SetupResult:
@@ -305,17 +357,5 @@ def run_setup(recording: Path, at: Sequence[tuple[str, int]]) -> SetupResult:
             raise RecordingError(
                 f"--at {kind}={second} is past the end of {recording} ({info.duration:.1f} s long)"
             )
-        reference = frame_at(recording, info, second)
-        if reference is None:
-            raise RecordingError(f"cannot read a frame at {second} s of {recording}")
-        readable = (reference, *_neighbour_frames(recording, info, second))
-        found: dict[str, Found] = {}
-        for frame in readable:
-            detection = find_hud(frame) if kind == "hud" else find_results(frame)
-            for name, hit in detection.found.items():
-                if name not in found or hit.score > found[name].score:
-                    found[name] = hit
-            for name, reason in detection.missing.items():
-                details.setdefault(name, f"{reason} at {kind}={second}")
-        candidates.append(Panel(kind, second, readable, found))
+        candidates.append(_detect_panel(recording, info, kind, second, details))
     return _assemble(info.width, info.height, candidates, details)

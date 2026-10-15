@@ -16,6 +16,7 @@ NATIVE_HEIGHT = 1440
 BANNER_CROP_SCALE = 4.0
 LARGE_BANNER_ZOOM = 1.45
 LARGE_BANNER_OFFSET = (-2, 82)
+SHRUNK_TEXT = 0.8
 DIGIT_GAP_NATIVE = 3.0
 DIGIT_HEIGHT_NATIVE = 17
 ICON_NATIVE_SIZE = 36
@@ -186,7 +187,7 @@ def _draw_results(frame: np.ndarray, results: Results) -> None:
     if results.style == "orange_large":
         _draw_large_banner(frame)
         return
-    if results.style == "placed":
+    if results.style in ("placed", "placed_shrunk"):
         hash_mask, rect_name, color = load_crop("hash_white"), "elimination_placement", WHITE
     else:
         hash_mask, rect_name, color = load_crop("hash"), "placement", GOLD
@@ -200,4 +201,6 @@ def _draw_results(frame: np.ndarray, results: Results) -> None:
     glyphs = [hash_mask, *_digits(results.placement)]
     rect = _pixel_rect(rect_name, width, height)
     glyph_height = round(hash_mask.shape[0] * height / NATIVE_HEIGHT)
+    if results.style == "placed_shrunk":
+        glyph_height = round(glyph_height * SHRUNK_TEXT)
     _draw_text(frame, glyphs, rect, height=glyph_height, align="left", color=color)

@@ -3,6 +3,8 @@
 import json
 from dataclasses import dataclass
 from pathlib import Path
+from types import SimpleNamespace
+from typing import cast
 
 import cv2
 import jsonschema
@@ -33,8 +35,11 @@ from tests.synthetic import (
     layout_document,
     write_layout,
 )
-from victorious.layout import Layout, aspect_ratio_label, load_layout
+from victorious import setup
+from victorious.detect import Detection, Found
+from victorious.layout import Layout, Rect, aspect_ratio_label, load_layout
 from victorious.schema import json_schema
+from victorious.video import VideoInfo
 
 pytestmark = pytest.mark.usefixtures("require_ffmpeg", "require_tesseract")
 
@@ -242,6 +247,61 @@ def test_the_orange_banner_is_found(tmp_path: Path) -> None:
     assert result.returncode == 0, result.stderr
     banner = load_layout(layout).screens.results.results_banner
     assert banner.w == pytest.approx(0.1, abs=0.01)
+
+
+def test_a_results_second_in_the_size_animation_uses_a_settled_neighbour(tmp_path: Path) -> None:
+    shots = (
+        Shot(Hud(1, 0, 90), 2, 10),
+        Shot(Results(1), 12, 18),
+        Shot(Results(5, "placed_shrunk"), 20, 26),
+        Shot(Results(5, "placed"), 26, 32),
+    )
+    recording = build_recording(compact(34, shots), tmp_path / "recording.mkv")
+    layout = tmp_path / "layout.yaml"
+
+    result = setup_at(recording, layout, "hud=5", "results=14", "results=22")
+
+    assert result.returncode == 0, result.stderr
+    assert "elimination_placement" not in result.stderr
+    assert load_layout(layout).screens.results.elimination_placement is not None
+
+
+def test_a_results_text_that_never_settles_stays_a_warning(tmp_path: Path) -> None:
+    shots = (
+        Shot(Hud(1, 0, 90), 2, 10),
+        Shot(Results(1), 12, 18),
+        Shot(Results(5, "placed_shrunk"), 20, 40),
+    )
+    recording = build_recording(compact(42, shots), tmp_path / "recording.mkv")
+    layout = tmp_path / "layout.yaml"
+
+    result = setup_at(recording, layout, "hud=5", "results=14", "results=30")
+
+    assert result.returncode == 0, result.stderr
+    assert "elimination_placement" in result.stderr
+    assert "0.80x" in result.stderr
+    assert load_layout(layout).screens.results.elimination_placement is None
+
+
+def test_a_results_second_that_shows_nothing_yet_reaches_further_out(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def frame_at(_recording: Path, _info: object, second: int) -> np.ndarray:
+        return np.full((2, 2, 3), second, dtype=np.uint8)
+
+    def find_results(frame: np.ndarray) -> Detection:
+        if int(frame[0, 0, 0]) < 4:
+            return Detection()
+        hit = Found(Rect(x=0.5, y=0.1, w=0.1, h=0.1), 0.9, 1.0)
+        return Detection(found={"elimination_placement": hit})
+
+    monkeypatch.setattr(setup, "frame_at", frame_at)
+    monkeypatch.setattr(setup, "find_results", find_results)
+    info = cast(VideoInfo, SimpleNamespace(duration=20.0))
+
+    panel = setup._detect_panel(Path("recording.mkv"), info, "results", 2, {})
+
+    assert "elimination_placement" in panel.found
 
 
 def test_an_ultrawide_recording_gets_the_21_9_label(tmp_path: Path) -> None:
