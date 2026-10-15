@@ -272,8 +272,10 @@ def decode_note(chunks: Mapping[RouteKind, int]) -> str | None:
     gpu, cpu, resumed = (chunks.get(kind, 0) for kind in ("gpu", "cpu", "resumed"))
     if gpu + resumed == 0:
         return None
-    total = gpu + cpu + resumed
-    note = f"victorious analyse: decode: {gpu} of {total} chunks on the GPU, {cpu} on the CPU"
+    note = (
+        f"victorious analyse: decode: {gpu} of {sum(chunks.values())} chunks on the GPU, "
+        f"{cpu} on the CPU"
+    )
     if resumed:
         note += f", {resumed} resumed on the CPU after a GPU failure"
     return note

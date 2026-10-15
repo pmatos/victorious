@@ -149,8 +149,8 @@ def extract_seconds(
 ) -> tuple[list[ChunkSecond], dict[RouteKind, int]]:
     """Every sampled second of the Recording, read in chunks on up to `jobs` processes.
 
-    With them, how many chunks were decoded on the `gpu`, on the `cpu` and `resumed` on the CPU
-    after the GPU failed part-way.
+    Also how many chunks were decoded on the `gpu`, on the `cpu`, and `resumed` on the CPU after
+    the GPU failed part-way.
     """
     slots = gpu_slots(os.environ)
     hardware = slots > 0 and resolve_hardware(path, info) is not None

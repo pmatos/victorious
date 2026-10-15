@@ -216,11 +216,11 @@ def _frames(
     kept and software resumes at the slot after the last of them.
     """
     done = 0
+    route = route if route is not None else Route()
     hardware = resolve_hardware(path, info) if allow_hardware else None
     if hardware is not None:
         command = _command(path, start, length, rate, threads, hardware)
-        if route is not None:
-            route.kind = "gpu"
+        route.kind = "gpu"
         try:
             for frame in _decode(path, info, command, hwaccel.environment(hardware)):
                 done += 1
@@ -230,8 +230,7 @@ def _frames(
             hwaccel.note(
                 f"hardware decode failed ({_last_line(error)})", "finishing the chunk in software"
             )
-            if route is not None:
-                route.kind = "resumed"
+            route.kind = "resumed"
         else:
             hwaccel.record_success()
             return
