@@ -101,5 +101,5 @@ build_recording(spec, tmp_path / "recording.mkv")
 
 - **Ruff**: 100-character line length, Python 3.13 target
 - **mypy**: strict
-- **Dependencies** (`pyproject.toml`, all installed by `uv sync`): Python >=3.13, OpenCV, NumPy, pydantic, PyYAML; the speech stack (ADR 0001): faster-whisper, pyannote-audio, torch and torchaudio (CPU wheels on Linux), onnxruntime (YAMNet), huggingface-hub; runtime binaries ffmpeg, ffprobe and tesseract (libtesseract or the command; it reads every counter and placement, not only placements). Speech needs a Hugging Face token and downloads its models on first use (Whisper `large-v3-turbo` about 1.6 GB, diarization about 35 MB, YAMNet about 16 MB)
+- **Dependencies** (`pyproject.toml`, all installed by `uv sync`): Python >=3.13, OpenCV, NumPy, pydantic, PyYAML; the speech stack (ADR 0001): faster-whisper, pyannote-audio, torch and torchaudio (CPU wheels on Linux), onnxruntime (YAMNet), huggingface-hub; runtime binaries ffmpeg, ffprobe and tesseract (reads every counter and placement; see `ocr.py`). Speech needs a Hugging Face token and downloads its models on first use (Whisper about 1.6 GB, diarization about 35 MB, YAMNet about 16 MB)
 - **Commits and PR titles**: Conventional Commits (enforced in CI)
