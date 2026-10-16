@@ -6,6 +6,8 @@ from pathlib import Path
 import pytest
 
 from tests.cli_runner import run_cli
+from victorious.cli import build_parser
+from victorious.speech import DEFAULT_MODEL, SpeechOptions
 
 SUBCOMMANDS = ["setup", "analyse", "review", "schema"]
 
@@ -84,9 +86,6 @@ def test_manual_only_options_are_refused_without_manual(option: list[str], tmp_p
 
 def test_analyse_transcribes_with_large_v3_turbo_by_default() -> None:
     from faster_whisper import available_models
-
-    from victorious.cli import build_parser
-    from victorious.speech import DEFAULT_MODEL, SpeechOptions
 
     arguments = build_parser().parse_args(["analyse", "rec.mkv", "--layout", "layout.yaml"])
 

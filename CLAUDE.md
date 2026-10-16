@@ -78,7 +78,7 @@ Plain `uv run pytest` runs every test. Tests that load the real Whisper, YAMNet 
 
 ## Test fixtures
 
-Tests build their Recordings on demand with `tests.synthetic`; no video is committed. `tests/fixtures/speech/` holds two short synthetic speech clips (`make_speech.py` regenerates them). `tests/test_speech.py` and `tests/test_music_masking.py` run the real `large-v3-turbo` Whisper model (the default, 1.6 GB on a cold cache; CI's Hugging Face cache key names it) and the real YAMNet ONNX model, so a cold Hugging Face cache needs network once; the music bed is synthesised at test time (`tests/synthetic/music.py`, chords, drums and a sung vowel line that Whisper reads as "You"), nothing binary is committed; `conftest.py` pins `HF_HOME` so the isolated XDG cache does not hide it.
+Tests build their Recordings on demand with `tests.synthetic`; no video is committed. `tests/fixtures/speech/` holds two short synthetic speech clips (`make_speech.py` regenerates them). `tests/test_speech.py` and `tests/test_music_masking.py` run the real `large-v3-turbo` Whisper model (the default, 1.6 GB on a cold cache) and the real YAMNet ONNX model, so a cold Hugging Face cache needs network once; the music bed is synthesised at test time (`tests/synthetic/music.py`, chords, drums and a sung vowel line that Whisper reads as "You"), nothing binary is committed; `conftest.py` pins `HF_HOME` so the isolated XDG cache does not hide it.
 
 ```python
 from tests.synthetic import RecordingSpec, build_recording, match_shots
