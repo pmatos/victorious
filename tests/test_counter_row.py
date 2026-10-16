@@ -38,12 +38,16 @@ def counter_changes(match: dict[str, Any], kind: str) -> list[int]:
     return [event["value"] for event in match["events"] if event["kind"] == kind]
 
 
+@pytest.mark.parametrize("size", [(1280, 720), (1920, 1080), (2560, 1440)])
 def test_counter_row_counters_are_read_while_the_row_moves_with_the_digits(
-    tmp_path: Path,
+    tmp_path: Path, size: tuple[int, int]
 ) -> None:
     shots = match_shots(2, ROW_STEPS, results_at=24, placement=1, hud_design="counter_row")
+    spec = RecordingSpec(
+        duration=34, shots=shots, fps=FPS, width=size[0], height=size[1], keyframe_interval=2
+    )
 
-    output = analyse(tmp_path, small(34, shots), layout_document("counter_row"))
+    output = analyse(tmp_path, spec, layout_document("counter_row"))
 
     (match,) = output["matches"]
     assert (match["start"], match["end"], match["win"], match["placement"]) == (2.0, 24.0, True, 1)

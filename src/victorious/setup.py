@@ -282,14 +282,17 @@ def _submitted_rects(
 def _drawn_design(
     width: int, height: int, found: dict[str, Found], panels: Sequence[Panel]
 ) -> HudDesign:
-    """The HUD design whose icons are under the anchor drawn by hand, the column on a tie."""
+    """The HUD design whose icons are under the anchor drawn by hand, the default one unless
+    another is clearly on screen."""
     frames = [frame for panel in panels if panel.kind == "hud" for frame in panel.frames]
 
     def anchor_score(design: HudDesign) -> float:
         layout = _build_layout(width, height, found, design)
         return max((hud_score(frame, layout) for frame in frames), default=0.0) if layout else 0.0
 
-    return max(DESIGNS, key=anchor_score)
+    scores = {design: anchor_score(design) for design in DESIGNS}
+    best = max(scores, key=lambda design: scores[design])
+    return best if scores[best] >= HUD_THRESHOLD else DEFAULT_HUD_DESIGN
 
 
 def manual_result(panels: Sequence[Panel], submitted: object) -> SetupResult | list[str]:
