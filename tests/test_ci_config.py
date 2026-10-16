@@ -5,6 +5,7 @@ import sys
 from pathlib import Path
 
 import pytest
+import yaml
 
 ROOT = Path(__file__).parent.parent
 PATHS_FILE = ROOT / ".github" / "slow-models-paths.txt"
@@ -94,3 +95,10 @@ def test_tests_that_load_models_are_marked_and_the_rest_are_not() -> None:
     assert all(item.startswith("tests/test_speech.py::") for item in marked)
     assert any(item.startswith("tests/test_screens.py::") for item in unmarked)
     assert not any(item.startswith("tests/test_speech.py::") for item in unmarked)
+
+
+def test_pull_requests_that_only_change_docs_skip_ci() -> None:
+    workflow = yaml.safe_load((ROOT / ".github" / "workflows" / "ci.yml").read_text())
+    triggers = workflow.get("on", workflow.get(True))
+    assert set(triggers["pull_request"]["paths-ignore"]) == {"**.md", "docs/**"}
+    assert "paths-ignore" not in (triggers["push"] or {})
