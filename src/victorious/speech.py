@@ -44,7 +44,7 @@ MIN_AVG_LOGPROB = -1.5
 MAX_COMPRESSION_RATIO = 2.4
 LOOP_LENGTH = 3
 AMBIGUITY = 0.5
-DEFAULT_MODEL = "small"
+DEFAULT_MODEL = "large-v3-turbo"
 
 
 @dataclass(frozen=True)
