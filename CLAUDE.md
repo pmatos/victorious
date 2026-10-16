@@ -47,6 +47,8 @@ Installable package in `src/victorious/` (hatchling build, console script `victo
 
 `review` takes `ANALYSIS_JSON [--recording PATH] [-o LABELS] [--no-browser] [--port N]` to serve the page and write the labels (exit 1 when cancelled), or `ANALYSIS_JSON --against LABELS [--tolerance SECONDS]` to print the differences (exit 1 when there are any or the labels are for another Recording); combining `--against` with the serving options exits 2. `setup` takes `RECORDING --at KIND=TIME ... -o LAYOUT [--preview PNG] [--manual [--no-browser] [--port N]]`; it exits 2 when a kind is missing, 1 when a required element is not found (it names them and points to `--manual`, writing no Layout). `analyse` takes `--jobs` (default: CPU count), `--cache-dir`/`--no-cache`, `--observations out.jsonl`, `--audio-stream N`, `--voices DIR` (enrollment clips, default `./voices`; speaker tests pass it or run in a temp directory), `--no-speech` (default on when `VICTORIOUS_NO_SPEECH` is set; the tests set it) and hidden `--chunk-seconds`, `--whisper-model` and `--diarization-model`. Without `--no-speech` a Hugging Face token must be set or it exits 1 before any decode. Errors in `analyse` print `victorious analyse: <reason>` to stderr, exit 1 and write nothing.
 
+The README Tutorial is what a tester follows (setup, analyse, speech, review, a loop over a folder of Recordings, run times, hardware decode, the Events, how to report feedback). When a flag, an environment variable, the stderr summary or decode lines, a warning code or an Event kind changes, update the Tutorial and the run-time figures that quote them in the same change.
+
 ## Development Commands
 
 ```bash
