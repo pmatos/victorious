@@ -213,18 +213,13 @@ def _transcribe_window(
         indices = [i for i, languages in enumerate(candidates) if language in languages]
         if not indices:
             continue
-        starts = [groups[i][0] / AUDIO_RATE for i in indices]
+        bounds = [(groups[i][0] / AUDIO_RATE, groups[i][1] / AUDIO_RATE) for i in indices]
+        starts = [start for start, _ in bounds]
         spoken, _ = model.transcribe(
             audio,
             language=language,
-            clip_timestamps=[
-                second
-                for i in indices
-                for second in (groups[i][0] / AUDIO_RATE, groups[i][1] / AUDIO_RATE)
-            ],
+            clip_timestamps=[second for bound in bounds for second in bound],
             condition_on_previous_text=True,
-            without_timestamps=False,
-            vad_filter=False,
         )
         for part in spoken:
             if not is_speech(

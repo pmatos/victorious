@@ -11,6 +11,7 @@ from types import SimpleNamespace
 from typing import Any
 
 import jsonschema
+import numpy as np
 import pytest
 
 from tests.analyse_helpers import STEADY, FfmpegShim, analyse_text, small
@@ -26,7 +27,7 @@ from victorious.speech import (
     outside_spans,
     pick_reading,
 )
-from victorious.video import sample_audio
+from victorious.video import AUDIO_RATE, sample_audio
 
 pytestmark = pytest.mark.usefixtures("require_ffmpeg", "require_tesseract")
 
@@ -399,9 +400,22 @@ class ScriptedModel:
     def detect_language(self, audio: Any) -> tuple[str, float, list[tuple[str, float]]]:
         return "en", 0.0, list(self.scores.items())
 
-    def transcribe(self, audio: Any, **options: Any) -> tuple[Any, None]:
-        self.calls.append(options)
-        return iter(self.scripts[options["language"]]), None
+    def transcribe(
+        self,
+        audio: Any,
+        *,
+        language: str,
+        clip_timestamps: list[float],
+        condition_on_previous_text: bool,
+    ) -> tuple[Any, None]:
+        self.calls.append(
+            {
+                "language": language,
+                "clip_timestamps": clip_timestamps,
+                "condition_on_previous_text": condition_on_previous_text,
+            }
+        )
+        return iter(self.scripts[language]), None
 
 
 def test_speech_is_decoded_in_order_with_the_text_before_it_as_context() -> None:
@@ -412,7 +426,6 @@ def test_speech_is_decoded_in_order_with_the_text_before_it_as_context() -> None
 
     [call] = model.calls
     assert call["condition_on_previous_text"] is True
-    assert call["vad_filter"] is False
     start, end = call["clip_timestamps"]
     assert 0.0 <= start < end <= CLIP_SECONDS
     assert [(s.text, s.language, s.start, s.end) for s in segments] == [
@@ -442,3 +455,19 @@ def test_an_unsure_language_is_decoded_twice_and_the_better_reading_is_kept() ->
 
     assert [call["language"] for call in model.calls] == ["en", "pt"]
     assert [(s.text, s.language) for s in segments] == [("Hello there.", "en")]
+
+
+def test_stretches_of_speech_apart_are_decoded_in_one_ordered_call() -> None:
+    clip = sample_audio(ENGLISH, 0.0, CLIP_SECONDS, 0)
+    gap = np.zeros(int(10 * AUDIO_RATE), dtype=clip.dtype)
+    audio = np.concatenate([clip, gap, clip])
+    script = [_part(0.2, 3.0, " First."), _part(14.2, 17.0, " Second.")]
+    model = ScriptedModel({"en": 0.95, "pt": 0.01}, {"en": script})
+
+    segments = _transcribe_window(model, audio, 50.0)
+
+    [call] = model.calls
+    first, second = call["clip_timestamps"][:2], call["clip_timestamps"][2:]
+    assert len(first) == len(second) == 2
+    assert first[0] < first[1] < second[0] < second[1]
+    assert [(s.text, s.start) for s in segments] == [("First.", 50.2), ("Second.", 64.2)]
