@@ -113,6 +113,7 @@ To test the tool on a folder of Recordings, run one `analyse` per file with its 
 mkdir -p results
 for recording in recordings/*.mkv; do
   name=$(basename "${recording%.*}")
+  rm -f "results/$name.analysis.json"
   if uv run victorious analyse "$recording" --layout layouts/ --no-speech \
       -o "results/$name.analysis.json" 2> "results/$name.log"; then
     echo "ok      $name"
@@ -122,10 +123,10 @@ for recording in recordings/*.mkv; do
 done
 ```
 
-`mkdir -p` comes first because `analyse` refuses an output folder that does not exist. Quote `"$recording"`: OBS names can hold a space (`2026-10-09 11-59-53.mkv`). Add `recordings/*.mp4` to the list for other containers. Drop `--no-speech` (and `cd` to the folder that holds `voices/`) for a speech pass once the frames look right; see [how long a run takes](#how-long-a-run-takes) before running that on many hours of video.
+`mkdir -p` comes first because `analyse` refuses an output folder that does not exist, and `rm -f` clears an older result so that a failure leaves no stale JSON behind. Quote `"$recording"`: OBS names can hold a space (`2026-10-09 11-59-53.mkv`). Add `recordings/*.mp4` to the list for other containers. Drop `--no-speech` (and `cd` to the folder that holds `voices/`) for a speech pass once the frames look right; see [how long a run takes](#how-long-a-run-takes) before running that on many hours of video.
 
 - **One Layout per HUD design and aspect ratio.** `--layout layouts/` takes the whole folder, and `analyse` picks, for each Recording, the Layout whose aspect ratio fits and whose HUD scores best (the choice is in `layout` of the JSON and on stderr). A Layout made once on one Recording serves every Recording with the same HUD design and aspect ratio, at any resolution of it.
-- **Another HUD design or aspect ratio.** The Recording fails with exit 1 and an error that names `victorious setup`: `no Layout fits this 1920x1080 Recording (...)` when no Layout has its aspect ratio, `no Layout matches this Recording's HUD: ...` when the aspect ratio fits but the HUD differs. Run `setup` on that Recording (see step 1), save the new Layout in the same `layouts/` folder and run the loop again; a Recording that already worked keeps its Layout unless the new one scores better on it.
+- **Another HUD design or aspect ratio.** The Recording fails with exit 1 and an error that names `victorious setup` when it shows an in-match HUD (one that shows none is a `not_fortnite` warning with exit 0 instead): `no Layout fits this 1920x1080 Recording (...)` when no Layout has its aspect ratio, `no Layout matches this Recording's HUD: ...` when the aspect ratio fits but the HUD differs. Run `setup` on that Recording (see step 1), save the new Layout in the same `layouts/` folder and run the loop again; a Recording that already worked keeps its Layout unless the new one scores better on it.
 - **Spotting failures.** The exit code is the verdict: `0` is a result, `1` is an error (the reason is the last line of `results/NAME.log`, `victorious analyse: <reason>`) and nothing is written for that Recording, so a missing `results/NAME.analysis.json` is a failure too. A run that exits `0` can still deserve a look: `warnings` in the JSON (today only `not_fortnite`: no in-match HUD in the first 10 minutes, so `matches` is empty and `layout` is `null`, repeated on stderr as `victorious analyse: warning: not_fortnite: ...`) and Matches with `placement: null` (see below).
 
 One line per Recording summarises the whole folder:
@@ -144,7 +145,7 @@ results/win.analysis.json	1	1	0
 
 The columns are the file, the Matches, the Wins, the Matches with no placement and the warnings. A Match with no placement ended without a results screen (the player left it) or was still running at the end of the Recording, or its placement could not be read: open `review` on that one. A Recording with no Matches and no warning is worth a look too.
 
-To list the Recordings that have no result yet (to retry the failures after adding a Layout):
+To list the Recordings that have no result yet (to retry the failures after adding a Layout; use the same file list as the loop above, `.mp4` included):
 
 ```bash
 for recording in recordings/*.mkv; do
@@ -166,7 +167,7 @@ Times below were measured on three real 2560x1440 AV1 Recordings of 61 to 83 min
 | frames-only rerun of the same Recording and Layout | from the cache, no `frames` or `counters` phase: 0.1 s on an 8 minute cut |
 | speech-on rerun | still pays the whole speech phase: transcripts are not cached |
 
-Speech is about 80% of a speech-on run, and it grows with the time inside Match windows (each Match plus 10 s either side), not with the length of the Recording. `large-v3-turbo` is the default for accuracy ([ADR 0005](docs/adr/0005-large-v3-turbo-default-whisper-model.md)). At the ratio above a 3 h Recording with speech would take close to 2 h (a projection, not a measurement), so do the frames-only pass first, check it with `review`, and add speech after. The cache keeps its Observations in `~/.cache/victorious` and is keyed by the Recording and the Layout, so running again with nothing changed costs seconds; `--no-cache` ignores it. The stderr summary line ends with the phases; these are a cold run and its rerun on an 8 minute cut (speech off), where the fixed Layout selection weighs more than on a long Recording:
+Speech is about 80% of a speech-on run, and it grows with the time inside Match windows (each Match plus 10 s either side), not with the length of the Recording. `large-v3-turbo` is the default for accuracy ([ADR 0005](docs/adr/0005-large-v3-turbo-default-whisper-model.md)). At the ratio above a 3 h Recording with speech would take close to 2 h (a projection from one Recording, not a measurement: a Recording with less time inside Matches takes less), so do the frames-only pass first, check it with `review`, and add speech after. The cache keeps its Observations in `~/.cache/victorious` and is keyed by the Recording and the Layout, so running again with nothing changed costs seconds; `--no-cache` ignores it. The stderr summary line ends with the phases; these are a cold run and its rerun on an 8 minute cut (speech off), where the fixed Layout selection weighs more than on a long Recording:
 
 ```text
 victorious analyse: layout layout.yaml (score 0.99, 1 candidate), cache miss, 79.9 s (layout 12.4 s, frames 63.5 s, counters 2.7 s)
@@ -225,7 +226,7 @@ Open an issue at <https://github.com/pmatos/victorious/issues> (or send the file
 - **For a HUD problem** (a Layout that does not fit, a `no Layout matches` error, wrong counters), the **`setup --preview` PNG** (`layout.preview.png`, or the path you gave with `--preview`) and the Layout file, and the `--at` times you used.
 - The exact command line, and the output of `git rev-parse --short HEAD` (the version of the tool).
 
-Do not attach your Hugging Face token or `TYPESAFE_API_KEY`. A speech-on Analysis JSON contains the text of what was said, including personal conversation; read it before posting it in a public issue, or share it privately, or send the frames-only JSON.
+Do not attach your Hugging Face token or `TYPESAFE_API_KEY`. A speech-on Analysis JSON contains the text of what was said, including personal conversation; read it before posting it in a public issue, or share it privately, or send the frames-only JSON. Every Analysis JSON also holds the full path of the Recording (`recording.path`), which can contain your user name; edit it before posting.
 
 ### Common errors
 
