@@ -167,7 +167,11 @@ def test_overlapping_margins_make_one_mask_decision(tmp_path: Path) -> None:
     _, masks = sidecar(source, tmp_path)
 
     assert masks
-    assert sum(len(transcripts(match)) for match in matches) == 1
+    spoken = [transcripts(match) for match in matches]
+    assert sum(bool(found) for found in spoken) == 1
+    heard = sorted((event for found in spoken for event in found), key=lambda event: event["time"])
+    for earlier, later in pairwise(heard):
+        assert earlier["end"] <= later["time"]
     for first, second in pairwise(masks):
         assert first.end < second.start
     for match in matches:

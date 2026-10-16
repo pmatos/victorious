@@ -80,3 +80,16 @@ def test_manual_only_options_are_refused_without_manual(option: list[str], tmp_p
 
     assert result.returncode == 2
     assert "--manual" in result.stderr
+
+
+def test_analyse_transcribes_with_large_v3_turbo_by_default() -> None:
+    from faster_whisper import available_models
+
+    from victorious.cli import build_parser
+    from victorious.speech import DEFAULT_MODEL, SpeechOptions
+
+    arguments = build_parser().parse_args(["analyse", "rec.mkv", "--layout", "layout.yaml"])
+
+    assert arguments.whisper_model == "large-v3-turbo"
+    assert SpeechOptions().model == "large-v3-turbo"
+    assert DEFAULT_MODEL in available_models()
