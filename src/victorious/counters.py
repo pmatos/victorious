@@ -11,7 +11,7 @@ import numpy as np
 from victorious.layout import Layout, Rect
 from victorious.ocr import DigitReading, read_digits
 from victorious.schema import CounterElement, Event, frame_event
-from victorious.screens import counter_masks
+from victorious.screens import counter_icons, counter_masks
 
 COUNTER_ELEMENTS: tuple[CounterElement, ...] = get_args(CounterElement)
 MIN_COUNTER_CONFIDENCE = 0.05
@@ -163,7 +163,7 @@ def read_counter_series(
     previous: np.ndarray | None = None
     reading: CounterReading | None = None
     for time, frame in frames:
-        masks = counter_masks(frame, rect)
+        masks = counter_masks(frame, layout, element, counter_icons(frame, layout))
         if previous is None or not _same_pixels(previous, masks[0]):
             previous, reading = masks[0], best_reading(masks)
         series.append((time, reading))
@@ -202,11 +202,11 @@ class CounterReader:
     ) -> dict[CounterElement, CounterReading | None]:
         readings: dict[CounterElement, CounterReading | None] = {}
         fresh: dict[CounterElement, list[np.ndarray]] = {}
+        icons = counter_icons(frame, layout)
         for element in COUNTER_ELEMENTS:
-            rect = counter_rect(layout, element)
-            if rect is None:
+            if counter_rect(layout, element) is None:
                 continue
-            masks = counter_masks(frame, rect)
+            masks = counter_masks(frame, layout, element, icons)
             if self._reuse.needs_ocr(element, masks[0]):
                 fresh[element] = masks
             else:

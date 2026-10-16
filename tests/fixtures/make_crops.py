@@ -85,6 +85,13 @@ DIGIT_SOURCES = (
 )
 ICON_SOURCE_TIMESTAMP = 135
 BANNER_TIMESTAMP = 38
+ROW_ICON_TIMESTAMP = 5
+ROW_ICON_SIZE = 32
+ROW_ICON_ORIGINS = {
+    "row_person": (2315, 372),
+    "row_crosshair": (2376, 372),
+    "row_squad": (2444, 372),
+}
 
 
 def extract_frame(video: Path, timestamp: float) -> np.ndarray:
@@ -142,6 +149,15 @@ def cut_icons() -> dict[str, np.ndarray]:
             cy - ICON_HALF : cy + ICON_HALF, ICON_CENTRE_X - ICON_HALF : ICON_CENTRE_X + ICON_HALF
         ]
     return icons
+
+
+def cut_row_icons() -> dict[str, np.ndarray]:
+    """The three icons of the horizontal counter row, from the last-minute clip."""
+    frame = extract_frame(WIN_RECORDING, ROW_ICON_TIMESTAMP)
+    return {
+        name: frame[y : y + ROW_ICON_SIZE, x : x + ROW_ICON_SIZE]
+        for name, (x, y) in ROW_ICON_ORIGINS.items()
+    }
 
 
 def cut_win() -> dict[str, np.ndarray]:
@@ -229,6 +245,7 @@ def main() -> None:
     written = {
         **{f"digit_{c}": g for c, g in cut_digits().items()},
         **cut_icons(),
+        **cut_row_icons(),
         **cut_win(),
         **cut_variants(),
         **cut_spectating(),

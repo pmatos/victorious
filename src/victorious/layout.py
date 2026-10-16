@@ -4,6 +4,7 @@ import math
 import re
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
@@ -11,6 +12,8 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_valida
 EPSILON = 1e-9
 ASPECT_RATIO_TOLERANCE = 0.02
 LAYOUT_SUFFIXES = (".yaml", ".yml")
+HudDesign = Literal["icon_column", "counter_row"]
+DEFAULT_HUD_DESIGN: HudDesign = "icon_column"
 COMMON_ASPECT_RATIOS = ((16, 9), (16, 10), (21, 9), (32, 9), (4, 3), (5, 4), (3, 2))
 
 
@@ -56,6 +59,7 @@ class Screens(_Model):
 
 class Layout(_Model):
     aspect_ratio: str
+    hud_design: HudDesign = DEFAULT_HUD_DESIGN
     screens: Screens
 
     @field_validator("aspect_ratio")

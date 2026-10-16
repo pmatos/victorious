@@ -4,25 +4,27 @@ from pathlib import Path
 
 import yaml
 
-from tests.synthetic.render import ELEMENT_RECTS
+from tests.synthetic.render import ELEMENT_RECTS, ROW_ELEMENT_RECTS
+from tests.synthetic.spec import HudDesign
 
 HUD_ELEMENTS = ("hud_anchor", "personal_eliminations", "team_eliminations", "players_left")
 RESULTS_ELEMENTS = ("results_banner", "placement", "elimination_placement")
 
 
-def _rect(name: str) -> dict[str, float]:
-    x, y, w, h = ELEMENT_RECTS[name]
+def _rect(name: str, design: HudDesign) -> dict[str, float]:
+    x, y, w, h = (ROW_ELEMENT_RECTS if design == "counter_row" else ELEMENT_RECTS)[name]
     return {"x": x, "y": y, "w": w, "h": h}
 
 
-def layout_document() -> dict[str, object]:
-    return {
-        "aspect_ratio": "16:9",
-        "screens": {
-            "hud": {name: _rect(name) for name in HUD_ELEMENTS},
-            "results": {name: _rect(name) for name in RESULTS_ELEMENTS},
-        },
+def layout_document(design: HudDesign = "icon_column") -> dict[str, object]:
+    document: dict[str, object] = {"aspect_ratio": "16:9"}
+    if design != "icon_column":
+        document["hud_design"] = design
+    document["screens"] = {
+        "hud": {name: _rect(name, design) for name in HUD_ELEMENTS},
+        "results": {name: _rect(name, design) for name in RESULTS_ELEMENTS},
     }
+    return document
 
 
 def write_layout(path: Path, document: dict[str, object] | None = None) -> Path:

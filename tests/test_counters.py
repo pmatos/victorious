@@ -514,7 +514,7 @@ def _read_players_left(
     by_mask: dict[int, DigitReading | None],
 ) -> CounterReading | None:
     masks = [np.full((4, 4), index, np.uint8) for index in range(len(by_mask))]
-    monkeypatch.setattr(counters, "counter_masks", lambda frame, rect: masks)
+    monkeypatch.setattr(counters, "counter_masks", lambda frame, layout, element, icons: masks)
     monkeypatch.setattr(counters, "read_digits", lambda mask: by_mask[int(mask[0, 0])])
     layout = load_layout(write_layout(tmp_path / "layout.yaml"))
     frame = np.zeros((1080, 1920, 3), np.uint8)

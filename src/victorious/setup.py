@@ -13,6 +13,8 @@ from pydantic import ValidationError
 from victorious.counters import COUNTER_ELEMENTS, best_reading
 from victorious.detect import Found, find_hud, find_results
 from victorious.layout import (
+    DEFAULT_HUD_DESIGN,
+    HudDesign,
     HudScreen,
     Layout,
     Rect,
@@ -21,11 +23,12 @@ from victorious.layout import (
     aspect_ratio_label,
 )
 from victorious.screens import (
+    DESIGNS,
     HUD_THRESHOLD,
     RESULTS_THRESHOLD,
     ResultsReading,
     counter_masks,
-    hud_score,
+    hud_reading,
     results_reading,
     scale_range,
 )
@@ -80,6 +83,7 @@ class Panel:
     second: int
     frames: tuple[np.ndarray, ...]
     found: dict[str, Found] = field(default_factory=dict)
+    design: HudDesign | None = None
 
     @property
     def frame(self) -> np.ndarray:
@@ -87,7 +91,7 @@ class Panel:
 
     def keeping(self, names: Collection[str]) -> "Panel":
         kept = {name: found for name, found in self.found.items() if name in names}
-        return Panel(self.kind, self.second, self.frames, kept)
+        return Panel(self.kind, self.second, self.frames, kept, self.design)
 
 
 @dataclass(frozen=True)
@@ -130,13 +134,12 @@ def _read_back(
     """How well `analyse` reads each of `elements` from `frame`, and whether that is enough."""
     outcomes: dict[str, tuple[float, bool]] = {}
     results: ResultsReading | None = None
+    hud = hud_reading(frame, layout)
     for element in elements:
         if element == "hud_anchor":
-            score = hud_score(frame, layout)
-            outcomes[element] = score, score >= HUD_THRESHOLD
+            outcomes[element] = hud.score, hud.score >= HUD_THRESHOLD
         elif element in COUNTER_ELEMENTS:
-            rect = getattr(layout.screens.hud, element)
-            reading = best_reading(counter_masks(frame, rect))
+            reading = best_reading(counter_masks(frame, layout, element, hud.icons))
             outcomes[element] = (reading.confidence, True) if reading is not None else (0.0, False)
         else:
             results = results or results_reading(frame, layout, read_placement=False)
@@ -165,7 +168,9 @@ def _self_check(layout: Layout, panels: Sequence[Panel]) -> dict[str, str]:
     return problems
 
 
-def _build_layout(width: int, height: int, found: dict[str, Found]) -> Layout | None:
+def _build_layout(
+    width: int, height: int, found: dict[str, Found], design: HudDesign = DEFAULT_HUD_DESIGN
+) -> Layout | None:
     if any(name not in found for name in REQUIRED):
         return None
     elimination_placement = found.get("elimination_placement")
@@ -181,7 +186,7 @@ def _build_layout(width: int, height: int, found: dict[str, Found]) -> Layout | 
         elimination_placement=elimination_placement.rect if elimination_placement else None,
     )
     label = aspect_ratio_label(width, height)
-    return Layout(aspect_ratio=label, screens=Screens(hud=hud, results=results))
+    return Layout(aspect_ratio=label, hud_design=design, screens=Screens(hud=hud, results=results))
 
 
 def _best_per_element(panels: Sequence[Panel]) -> dict[str, tuple[Found, int]]:
@@ -194,7 +199,11 @@ def _best_per_element(panels: Sequence[Panel]) -> dict[str, tuple[Found, int]]:
 
 
 def _assemble(
-    width: int, height: int, candidates: list[Panel], details: dict[str, str]
+    width: int,
+    height: int,
+    candidates: list[Panel],
+    details: dict[str, str],
+    design: HudDesign,
 ) -> SetupResult:
     best = _best_per_element(candidates)
     panels = [
@@ -204,14 +213,14 @@ def _assemble(
     found = {name: pair[0] for name, pair in best.items()}
     missing = {name: details.get(name, "not found") for name in REQUIRED if name not in found}
     warnings: list[str] = []
-    layout = _build_layout(width, height, found)
+    layout = _build_layout(width, height, found, design)
     if layout is not None:
         problems = _self_check(layout, panels)
         if "elimination_placement" in problems:
             found.pop("elimination_placement")
             details["elimination_placement"] = problems.pop("elimination_placement")
             panels = [panel.keeping(found) for panel in panels]
-            layout = _build_layout(width, height, found)
+            layout = _build_layout(width, height, found, design)
         if problems:
             missing.update(problems)
             layout = None
@@ -270,6 +279,26 @@ def _submitted_rects(
     return placed, problems
 
 
+def _drawn_design(
+    width: int, height: int, found: dict[str, Found], panels: Sequence[Panel]
+) -> HudDesign:
+    """The HUD design whose icons are under the anchor drawn by hand, the default one unless
+    another is clearly on screen."""
+    frames = [frame for panel in panels if panel.kind == "hud" for frame in panel.frames]
+
+    def anchor_score(design: HudDesign) -> float:
+        layout = _build_layout(width, height, found, design)
+        return (
+            max((hud_reading(frame, layout).score for frame in frames), default=0.0)
+            if layout
+            else 0.0
+        )
+
+    scores = {design: anchor_score(design) for design in DESIGNS}
+    best = max(scores, key=lambda design: scores[design])
+    return best if scores[best] >= HUD_THRESHOLD else DEFAULT_HUD_DESIGN
+
+
 def manual_result(panels: Sequence[Panel], submitted: object) -> SetupResult | list[str]:
     """The Layout drawn by hand on `panels`, or every reason it cannot be one.
 
@@ -283,11 +312,14 @@ def manual_result(panels: Sequence[Panel], submitted: object) -> SetupResult | l
     found = {name: hit for names in placed for name, hit in names.items()}
     problems.extend(f"{name}: required, not placed" for name in REQUIRED if name not in found)
     height, width = panels[0].frame.shape[:2]
-    layout = None if problems else _build_layout(width, height, found)
+    design = _drawn_design(width, height, found, panels) if not problems else DEFAULT_HUD_DESIGN
+    layout = None if problems else _build_layout(width, height, found, design)
     if layout is None:
         return problems
     drawn = [
-        Panel(panel.kind, panel.second, panel.frames, names)
+        Panel(
+            panel.kind, panel.second, panel.frames, names, design if panel.kind == "hud" else None
+        )
         for panel, names in zip(panels, placed, strict=True)
     ]
     warnings = [f"{name}: {reason}" for name, reason in _self_check(layout, drawn).items()]
@@ -312,39 +344,56 @@ def _neighbour_frames(
 
 
 def _detect_panel(
-    recording: Path, info: VideoInfo, kind: str, second: int, details: dict[str, str]
+    recording: Path,
+    info: VideoInfo,
+    kind: str,
+    second: int,
+    details: dict[str, str],
+    design: HudDesign | None,
 ) -> Panel:
     """Reads `second` and its neighbours; on a results screen, reaches further out while nothing
-    is found or an element is at a size `analyse` does not read, since the text animates."""
+    is found or an element is at a size `analyse` does not read, since the text animates.
+
+    A HUD panel settles on the design of the first frame that shows its icons; `design` is the
+    one an earlier panel settled on, which this one then has to match.
+    """
     reference = frame_at(recording, info, second)
     if reference is None:
         raise RecordingError(f"cannot read a frame at {second} s of {recording}")
     frames = [reference]
     found: dict[str, Found] = {}
-    _merge(found, kind, second, reference, details)
+    design = _merge(found, kind, second, reference, details, design)
     reach = NEIGHBOUR_REACH if kind == "results" else 1
     for offset in range(1, reach + 1):
         if offset > 1 and found and all(_in_scale(name, hit) for name, hit in found.items()):
             break
         for frame in _neighbour_frames(recording, info, second, offset):
-            if _merge(found, kind, second, frame, details) or offset == 1:
+            before = dict(found)
+            design = _merge(found, kind, second, frame, details, design)
+            if found != before or offset == 1:
                 frames.append(frame)
-    return Panel(kind, second, tuple(frames), found)
+    return Panel(kind, second, tuple(frames), found, design if kind == "hud" else None)
 
 
 def _merge(
-    found: dict[str, Found], kind: str, second: int, frame: np.ndarray, details: dict[str, str]
-) -> bool:
-    """Keeps the better detections of `frame`; whether it supplied any."""
-    detection = find_hud(frame) if kind == "hud" else find_results(frame)
-    improved = False
+    found: dict[str, Found],
+    kind: str,
+    second: int,
+    frame: np.ndarray,
+    details: dict[str, str],
+    design: HudDesign | None,
+) -> HudDesign | None:
+    """Keeps the better detections of `frame`; the HUD design, once a frame shows one."""
+    detection = find_hud(frame, design) if kind == "hud" else find_results(frame)
+    unsettled = kind == "hud" and design is None and "hud_anchor" not in detection.found
     for name, hit in detection.found.items():
-        if _better(name, hit, found.get(name)):
+        if not unsettled and _better(name, hit, found.get(name)):
             found[name] = hit
-            improved = True
     for name, reason in detection.missing.items():
         details.setdefault(name, f"{reason} at {kind}={second}")
-    return improved
+    if kind == "hud" and design is None and "hud_anchor" in detection.found:
+        return detection.design
+    return design
 
 
 def run_setup(recording: Path, at: Sequence[tuple[str, int]]) -> SetupResult:
@@ -352,10 +401,13 @@ def run_setup(recording: Path, at: Sequence[tuple[str, int]]) -> SetupResult:
     info = probe(recording)
     candidates: list[Panel] = []
     details: dict[str, str] = {}
+    design: HudDesign | None = None
     for kind, second in at:
         if second >= info.duration:
             raise RecordingError(
                 f"--at {kind}={second} is past the end of {recording} ({info.duration:.1f} s long)"
             )
-        candidates.append(_detect_panel(recording, info, kind, second, details))
-    return _assemble(info.width, info.height, candidates, details)
+        panel = _detect_panel(recording, info, kind, second, details, design)
+        design = panel.design or design
+        candidates.append(panel)
+    return _assemble(info.width, info.height, candidates, details, design or DEFAULT_HUD_DESIGN)

@@ -299,7 +299,7 @@ def test_a_results_second_that_shows_nothing_yet_reaches_further_out(
     monkeypatch.setattr(setup, "find_results", find_results)
     info = cast(VideoInfo, SimpleNamespace(duration=20.0))
 
-    panel = setup._detect_panel(Path("recording.mkv"), info, "results", 2, {})
+    panel = setup._detect_panel(Path("recording.mkv"), info, "results", 2, {}, None)
 
     assert "elimination_placement" in panel.found
 
