@@ -31,6 +31,8 @@ uv run victorious setup recording.mkv --at hud=12:34 --at results=1:05:20 --at r
 - With only a Win frame, the Layout is still written and stderr warns that `elimination_placement` was not found. Add a `--at results=` second showing "YOU PLACED #N" and rerun.
 - `could not find N element`: try another `--at hud=` second where the digits are crisp, or add `--manual` to drag the rectangles into place on a page served on `127.0.0.1` (pre-filled with what was found; add `--no-browser` to only print its address; `Save Layout` writes the same files).
 
+Keep the Layouts in one folder (for example `layouts/hud_icons_16x9.yaml`): `analyse` takes that folder and picks the one that fits each Recording, which is what [many Recordings](#6-analyse-many-recordings) rely on. One Layout serves every resolution of the same HUD design at the same aspect ratio, so you set up again only for a new HUD design or a new aspect ratio.
+
 ### 2. Analyse
 
 ```bash
@@ -39,22 +41,23 @@ uv run victorious analyse recording.mkv --layout layout.yaml --no-speech -o anal
 
 Start with `--no-speech`: it needs no token and no models, and gives the Matches, Wins, placement and counters. `--layout` also takes a directory of Layouts (one per HUD design or aspect ratio); the best fit for the Recording is chosen. Without `-o` the JSON goes to stdout. `--observations observations.jsonl` also writes every raw HUD reading, one line per element per second, which is what to read when a counter looks wrong.
 
-Reruns on the same Recording and Layout reuse the cached Observations (`--no-cache` to ignore them, `--jobs N` to limit the processes).
+Reruns on the same Recording and Layout reuse the cached Observations (`--no-cache` to ignore them, `--jobs N` to limit the processes). For a folder of Recordings, see [step 6](#6-analyse-many-recordings); for how long a run takes, [how long a run takes](#how-long-a-run-takes).
 
 ### 3. Read the output
 
-Every time is in seconds from the start of the Recording.
+Every time is in seconds from the start of the Recording. The output below is from a 10 minute cut that starts in the middle of a Match (so the first Match starts at `0.0`); the second Match is one the player left before its results screen.
 
 ```bash
 jq -c '.matches[] | {start, end, win, placement, personal_eliminations}' analysis.json
 ```
 
 ```text
-{"start":2.0,"end":20.0,"win":true,"placement":1,"personal_eliminations":1}
-{"start":30.0,"end":45.0,"win":false,"placement":6,"personal_eliminations":0}
+{"start":0.0,"end":144.0,"win":false,"placement":2,"personal_eliminations":4}
+{"start":218.0,"end":265.0,"win":false,"placement":null,"personal_eliminations":0}
+{"start":355.0,"end":599.0,"win":false,"placement":null,"personal_eliminations":0}
 ```
 
-Each Match also has an `events` list in time order: `match_start`, `personal_eliminations` and `team_eliminations` (with the new count in `value`), `players_left`, `win`, `final_placement` (`value` is the placement), `eliminated` (the player went out, see below), `match_end` and, with speech, `transcript`. `placement: null` means the Match was still running at the end of the Recording or its placement could not be read. A `warnings` entry of `not_fortnite` (see [Common errors](#common-errors)) means no in-match HUD was found, so `matches` is empty.
+Each Match also has an `events` list in time order: `match_start`, `personal_eliminations` and `team_eliminations` (with the new count in `value`), `players_left`, `win`, `final_placement` (`value` is the placement), `eliminated` (the player went out, see [Reading the Events](#reading-the-events)), `unreadable`, `match_end` and, with speech, `transcript`. `placement: null` means the Match was left before a results screen, was still running at the end of the Recording, or its placement could not be read. A `warnings` entry of `not_fortnite` (see [Common errors](#common-errors)) means no in-match HUD was found, so `matches` is empty.
 
 ```bash
 uv run victorious schema -o analysis.schema.json
@@ -64,18 +67,19 @@ uv run victorious schema -o analysis.schema.json
 
 ### 4. Add speech (transcripts, Speakers, categories)
 
-Speech is on unless `--no-speech` is given, and needs three things set up once:
+Speech is on unless `--no-speech` is given, and needs this set up once:
 
-1. **Hugging Face token.** Export `HF_TOKEN` (or `HUGGING_FACE_HUB_TOKEN`, or run `hf auth login`). Without one, `analyse` exits 1 before reading the Recording. The models are downloaded on first use (Whisper `large-v3-turbo` is about 1.6 GB).
-2. **Enrolled voices (optional).** Put one clip of a few seconds per person in a `voices/` folder in the directory you run the tool from, named by the person: `voices/alice.wav` becomes the Speaker `alice`. Any other voice is `unknown_1`, `unknown_2`, ... Use `--voices DIR` for another folder.
-3. **Jev API key (optional).** `export TYPESAFE_API_KEY=...` makes each transcript `category` `personal` or `game_related`. Only the text of each segment is sent to the external service (see [ADR 0002](docs/adr/0002-external-categorization-of-transcript-text.md)). Without a key a note goes to stderr; segments Jev cannot judge are `null` too. Either way the run still exits 0.
+1. **Hugging Face token.** Create a read-only token at <https://huggingface.co/settings/tokens> and either `export HF_TOKEN=hf_...` (or `HUGGING_FACE_HUB_TOKEN`) or run `hf auth login`. Every model used is public, so no access request is needed; the tool only checks that a token exists, and without one `analyse` exits 1 before reading the Recording. Never paste the token into a report (see [Reporting feedback](#reporting-feedback)).
+2. **First-run downloads.** The first speech run downloads, into the Hugging Face cache (`~/.cache/huggingface`), the audio tagger that finds music (YAMNet, about 16 MB), the diarization pipeline (the `pyannote-community` mirror, about 35 MB) and, when the first Match window is transcribed, Whisper `large-v3-turbo` (about 1.6 GB, with no progress line of ours, so a long silent pause there is the download). Later runs load them from the cache; a machine that is offline on its first run fails with a message naming `--no-speech`.
+3. **Enrolled voices (optional).** Put one clip of a few seconds per person in a `voices/` folder in the directory you run the tool from, named by the person: `voices/alice.wav` becomes the Speaker `alice`. Any other voice is `unknown_1`, `unknown_2`, ... (numbered by first appearance, so stable within one Recording and not across Recordings). A missing `voices/` is not an error; use `--voices DIR` for another folder, and run every Recording of a [batch](#6-analyse-many-recordings) from the same directory so they all see the same voices.
+4. **Jev API key (optional).** `export TYPESAFE_API_KEY=...` makes each transcript `category` `personal` or `game_related`. Only the text of each segment is sent to the external service (see [ADR 0002](docs/adr/0002-external-categorization-of-transcript-text.md)). Without a key every `category` and `category_confidence` is `null` and a `note` goes to stderr; segments Jev cannot judge are `null` too. Either way the run still exits 0, so null categories are expected when you have no key, not a failure.
 
 ```bash
 export HF_TOKEN=hf_...
-uv run victorious analyse recording.mkv --layout layout.yaml -o analysis.json
+uv run victorious analyse recording.mkv --layout layouts/ -o analysis.json
 ```
 
-The first audio stream is transcribed; if the voices (microphone, party chat) are on another track, pass `--audio-stream N` (counted from 0 among the audio streams). Speech takes a large share of the run time, so keep `--no-speech` (or `VICTORIOUS_NO_SPEECH=1`) while iterating on a Layout.
+The first audio stream is transcribed; if the voices (microphone, party chat) are on another track, pass `--audio-stream N` (counted from 0 among the audio streams). Speech takes most of the run time (see [how long a run takes](#how-long-a-run-takes)), so keep `--no-speech` (or `VICTORIOUS_NO_SPEECH=1`) while iterating on a Layout. Transcripts are not cached: a rerun transcribes again even when the frames come from the cache.
 
 ### 5. Review the Matches
 
@@ -91,7 +95,137 @@ Keep the labels file beside the Recording. After changing the tool or the Layout
 uv run victorious review analysis.json --against analysis.labels.json
 ```
 
-It prints one line per difference (`missing`, `changed`, `shifted`, `reappeared`, `unlabelled`) and exits 1, or prints `no differences (N matches)` and exits 0. `--tolerance SECONDS` sets how far a boundary may move (default 2).
+It prints one line per difference (`missing`, `changed`, `shifted`, `reappeared`, `unlabelled`) and exits 1, or prints `no differences (N matches)` and exits 0.
+
+```text
+changed     0:00:00-0:02:24  placement: expected 2, found 3
+missing     0:05:55-0:09:59  confirmed, and not found
+2 differences (2 matches)
+```
+
+`--tolerance SECONDS` sets how far a boundary may move (default 2).
+
+### 6. Analyse many Recordings
+
+To test the tool on a folder of Recordings, run one `analyse` per file with its own `-o`, so every Recording has its own JSON and its own stderr log. Run them one after another: each `analyse` already uses every CPU (`--jobs`), and the GPU has only a few decode engines.
+
+```bash
+mkdir -p results
+for recording in recordings/*.mkv; do
+  name=$(basename "${recording%.*}")
+  if uv run victorious analyse "$recording" --layout layouts/ --no-speech \
+      -o "results/$name.analysis.json" 2> "results/$name.log"; then
+    echo "ok      $name"
+  else
+    echo "FAILED  $name (exit $?)"
+  fi
+done
+```
+
+`mkdir -p` comes first because `analyse` refuses an output folder that does not exist. Quote `"$recording"`: OBS names can hold a space (`2026-10-09 11-59-53.mkv`). Add `recordings/*.mp4` to the list for other containers. Drop `--no-speech` (and `cd` to the folder that holds `voices/`) for a speech pass once the frames look right; see [how long a run takes](#how-long-a-run-takes) before running that on many hours of video.
+
+- **One Layout per HUD design and aspect ratio.** `--layout layouts/` takes the whole folder, and `analyse` picks, for each Recording, the Layout whose aspect ratio fits and whose HUD scores best (the choice is in `layout` of the JSON and on stderr). A Layout made once on one Recording serves every Recording with the same HUD design and aspect ratio, at any resolution of it.
+- **Another HUD design or aspect ratio.** The Recording fails with exit 1 and an error that names `victorious setup`: `no Layout fits this 1920x1080 Recording (...)` when no Layout has its aspect ratio, `no Layout matches this Recording's HUD: ...` when the aspect ratio fits but the HUD differs. Run `setup` on that Recording (see step 1), save the new Layout in the same `layouts/` folder and run the loop again; a Recording that already worked keeps its Layout unless the new one scores better on it.
+- **Spotting failures.** The exit code is the verdict: `0` is a result, `1` is an error (the reason is the last line of `results/NAME.log`, `victorious analyse: <reason>`) and nothing is written for that Recording, so a missing `results/NAME.analysis.json` is a failure too. A run that exits `0` can still deserve a look: `warnings` in the JSON (today only `not_fortnite`: no in-match HUD in the first 10 minutes, so `matches` is empty and `layout` is `null`, repeated on stderr as `victorious analyse: warning: not_fortnite: ...`) and Matches with `placement: null` (see below).
+
+One line per Recording summarises the whole folder:
+
+```bash
+jq -r '[input_filename, (.matches | length), ([.matches[] | select(.win)] | length),
+        ([.matches[] | select(.placement == null)] | length),
+        (.warnings | map(.code) | join(","))] | @tsv' results/*.analysis.json
+```
+
+```text
+results/notgame.analysis.json	0	0	0	not_fortnite
+results/out.analysis.json	3	0	2	
+results/win.analysis.json	1	1	0	
+```
+
+The columns are the file, the Matches, the Wins, the Matches with no placement and the warnings. A Match with no placement ended without a results screen (the player left it) or was still running at the end of the Recording, or its placement could not be read: open `review` on that one. A Recording with no Matches and no warning is worth a look too.
+
+To list the Recordings that have no result yet (to retry the failures after adding a Layout):
+
+```bash
+for recording in recordings/*.mkv; do
+  [ -e "results/$(basename "${recording%.*}").analysis.json" ] || echo "$recording"
+done
+```
+
+and the reason for each failure is the last line of its log: `tail -n 1 results/NAME.log`.
+
+### How long a run takes
+
+Times below were measured on three real 2560x1440 AV1 Recordings of 61 to 83 minutes, on a machine with 24 logical CPUs and VAAPI hardware decode. Treat them as indicative: the machine was also busy with other work, and times on an overloaded one stretch a lot (frames-only runs of 10 minute cuts took 197 s and 233 s while its load average was about 40; an 8 minute cut took 80 s once the load fell).
+
+| Run | Time |
+|-----|------|
+| frames only (`--no-speech`), cold cache | about 0.11 x real time (0.106 x to 0.116 x on the three Recordings); a 3 h Recording is about 20 min |
+| speech on (Whisper `large-v3-turbo`), one 61 min Recording, loaded machine | 2295 s (38 min), about 0.63 x real time |
+| the same run by phase | layout 22 s, frames 320 s, counters 21 s, speech 1895 s; 34 of 61 chunks decoded on the GPU; 592 transcript segments |
+| frames-only rerun of the same Recording and Layout | from the cache, no `frames` or `counters` phase: 0.1 s on an 8 minute cut |
+| speech-on rerun | still pays the whole speech phase: transcripts are not cached |
+
+Speech is about 80% of a speech-on run, and it grows with the time inside Match windows (each Match plus 10 s either side), not with the length of the Recording. `large-v3-turbo` is the default for accuracy ([ADR 0005](docs/adr/0005-large-v3-turbo-default-whisper-model.md)). At the ratio above a 3 h Recording with speech would take close to 2 h (a projection, not a measurement), so do the frames-only pass first, check it with `review`, and add speech after. The cache keeps its Observations in `~/.cache/victorious` and is keyed by the Recording and the Layout, so running again with nothing changed costs seconds; `--no-cache` ignores it. The stderr summary line ends with the phases; these are a cold run and its rerun on an 8 minute cut (speech off), where the fixed Layout selection weighs more than on a long Recording:
+
+```text
+victorious analyse: layout layout.yaml (score 0.99, 1 candidate), cache miss, 79.9 s (layout 12.4 s, frames 63.5 s, counters 2.7 s)
+victorious analyse: decode: 9 of 9 chunks on the GPU, 0 on the CPU
+victorious analyse: layout layout.yaml (score 0.99, 1 candidate), cache hit, 0.1 s (layout 0.0 s)
+```
+
+### Hardware decode
+
+A GPU is used for decoding when one works, and nothing needs to be set up: `analyse` tries VAAPI on a `/dev/dri/renderD*` device, keeps it only when two probe frames come out byte for byte the same as software decoding (so results never depend on it) and otherwise decodes in software without saying anything. It needs an 8-bit 4:2:0 Recording.
+
+- A run that used the GPU prints one more stderr line saying how many chunks (60 s of video each) went where, for example `victorious analyse: decode: 34 of 61 chunks on the GPU, 27 on the CPU`. No such line means software decode only. A failed GPU decode costs one chunk, which is finished in software (`..., 2 resumed on the CPU after a GPU failure`), and prints one `victorious: hardware decode ...; using software decode` line; the exit code and the output are the same.
+- `VICTORIOUS_HWACCEL=off` forces software decode (use it when comparing runs or when the GPU misbehaves); `VICTORIOUS_HWACCEL=vaapi` insists on the GPU and says so when it cannot be used.
+- `VICTORIOUS_HW_SLOTS=N` sets how many chunks decode on the GPU at once (default 2, `0` is software); a chunk that finds no free slot decodes on the CPU. `VICTORIOUS_VAAPI_DEVICE=/dev/dri/renderD129` picks another device.
+- If the note says the device cannot be created, see the troubleshooting paragraph under [Parallel decode](#parallel-decode-cache-and---observations).
+
+### Reading the Events
+
+The `events` of each Match are in time order; `time` is in seconds from the start of the Recording.
+
+| `kind` | Meaning |
+|--------|---------|
+| `match_start`, `match_end` | the Match opens on the in-match HUD and closes on its results screen (or at its last in-match second when it was left) |
+| `win` | the Victory Royale screen; `final_placement` carries the placement in `value` |
+| `eliminated` | the player went out (see below) |
+| `personal_eliminations`, `team_eliminations` | a kills counter changed; `value` is the new count |
+| `players_left` | the players-left counter changed; `value` is the new count |
+| `unreadable` | a counter (`element`) had no usable reading for more than 10 s, from `time` to `end`; `value` is `null` |
+| `transcript` | one segment of speech with `text`, `language`, `speaker` and `category`; only with speech |
+
+`eliminated` is the player themselves going out, which is not the same as `personal_eliminations` (the kills the player made). It is emitted when the white SPECTATING label shows (the squad plays on and the player watches a teammate), with `value: null`, and also on the "YOU PLACED #N" screen when the player was not already out, with the placement in `value`. A teammate's reboot card brings the player back, so one Match can have several `eliminated` Events, one per time the player goes out. Expect the last of them just before `final_placement` and `match_end` in a Match the squad lost. `unreadable` says a counter had no usable reading for a while (hidden, covered or too unclear to read); the Matches and the other counters around it are unaffected.
+
+```bash
+jq -c '.matches[] | {start, end, events: [.events[] | select(.kind == "eliminated" or .kind == "unreadable") | {kind, time, end, value}]}' analysis.json
+```
+
+```text
+{"start":0.0,"end":144.0,"events":[{"kind":"eliminated","time":144.0,"end":null,"value":2}]}
+{"start":218.0,"end":265.0,"events":[]}
+{"start":355.0,"end":599.0,"events":[]}
+```
+
+### Reporting feedback
+
+Open an issue at <https://github.com/pmatos/victorious/issues> (or send the files to the owner) and say what you expected and what you got. Most problems can be reproduced from these, so attach what applies:
+
+- **The Analysis JSON** (`results/NAME.analysis.json`) and the **stderr summary line** (the `victorious analyse: layout ... cache ... (layout ... s, frames ... s, ...)` line and the `decode:` line, or the whole `results/NAME.log`).
+- **The labels file** from `review` (`NAME.labels.json`) when the Matches are wrong: it says which Matches you confirmed and which you rejected. Say which Match, with its start and end, and what it should be.
+- **A `--observations` dump** (`analyse ... --observations NAME.observations.jsonl`) when a counter, placement or Win looks wrong: it is every raw reading of every second, so it shows what was read where. It is large (tens of thousands of lines for a long Recording): `gzip` it.
+- **The Recording's resolution and codec**, which `ffprobe` prints:
+
+  ```bash
+  ffprobe -v error -select_streams v:0 -show_entries stream=codec_name,width,height,pix_fmt,r_frame_rate -show_entries format=duration -of default=nw=1 recording.mkv
+  ```
+
+- **For a HUD problem** (a Layout that does not fit, a `no Layout matches` error, wrong counters), the **`setup --preview` PNG** (`layout.preview.png`, or the path you gave with `--preview`) and the Layout file, and the `--at` times you used.
+- The exact command line, and the output of `git rev-parse --short HEAD` (the version of the tool).
+
+Do not attach your Hugging Face token or `TYPESAFE_API_KEY`. A speech-on Analysis JSON contains the text of what was said, including personal conversation; read it before posting it in a public issue, or share it privately, or send the frames-only JSON.
 
 ### Common errors
 
@@ -104,6 +238,9 @@ It prints one line per difference (`missing`, `changed`, `shifted`, `reappeared`
 | `cannot read Recording FILE: it is truncated (no frame at 83 s, its header claims 85 s)` (exit 1) | A cut-short Recording is an error, not a partial result, and nothing is written. Check that it plays to the end and is not still being written. |
 | `no Hugging Face token found: set HF_TOKEN ...` (exit 1) | Speech is on but there is no token. Set `HF_TOKEN`, or pass `--no-speech`. |
 | `setup: could not find N element` (exit 1) | No Layout was written. Pass other `--at` seconds with a clear HUD or results screen, or use `--manual`. |
+| `setup: placement: no gold #N (best match 0.57)` (exit 1) | The gold `#N` beside the Victory Royale banner was not matched well enough (0.7 is needed). Seen on the orange banner of both Wins of a real 2560x1440 Recording, at every second of the results screen. Try another `--at results=` second, a Win with the other banner colour, or place `placement` with `--manual` (a rectangle that does not read back is still saved, with a warning). |
+| `victorious: hardware decode ...; using software decode` | The GPU failed and the rest of that chunk was decoded in software; the result is the same. `VICTORIOUS_HWACCEL=off` skips the GPU, see [Hardware decode](#hardware-decode). |
+| every transcript `category` is `null` | No `TYPESAFE_API_KEY`; a `note` says so on stderr. Not an error, see step 4. |
 | Counters missing or wrong at 720p | Digits are only reliable from 1920x1080 up; use `--observations` to see what was read. |
 
 ## Usage
@@ -191,9 +328,9 @@ A Recording in which no in-match HUD appears in the first 10 minutes, for any La
 
 Counter digits are read in-process through `libtesseract` (the command-line `tesseract` is the fallback when the library cannot be loaded, and gives the same readings), one engine instance per concurrent reader. Whisper and the diarization embedder are sized by physical cores, not logical CPUs, when the kernel reports hyper-threading as on, and the embedder runs the parts of each batch on threads. None of this is meant to change a reading, a transcript or a Speaker: the in-process readings were checked equal to the command line's on the real counter masks, and the parts of an embedding batch are the rows of the whole up to floating-point rounding.
 
-Frames are decoded on the GPU through VAAPI when one works, and in software otherwise; nothing needs to be set up. On first use `analyse` decodes two frames of the Recording both ways and keeps the GPU only when they are byte for byte the same, so the output (Observations, Events, cache entries) never depends on it. It needs an 8-bit 4:2:0 Recording and a `/dev/dri/renderD*` device (`VICTORIOUS_VAAPI_DEVICE` picks one), and sets `LIBVA_DRIVER_NAME` for the ffmpeg subprocess only: your own value is tried first, then `radeonsi` on AMD or `iHD` and `i965` on Intel. The GPU has few decode engines, so at most 2 chunks decode on it at once (`VICTORIOUS_HW_SLOTS` changes that, 0 means software); a chunk that finds both busy decodes in software, except the last ones, which wait. That cuts the CPU time of decoding a 2560x1440 AV1 Recording about ten-fold (the GPU decodes about 8x real time there) and leaves the cores to OCR. If the GPU fails, even part-way through a chunk, `analyse` prints one `victorious: hardware decode ...; using software decode` line on stderr, finishes that chunk in software with the same exit code and tries the GPU again on the next one; a process gives it up after three failures in a row. A run that used the GPU ends with a stderr line saying how many chunks it decoded (`victorious analyse: decode: 31 of 83 chunks on the GPU, 50 on the CPU`). `VICTORIOUS_HWACCEL=off` (or the hidden `--hwaccel off`) forces software; `vaapi` insists on the GPU and says so when it cannot be used. Troubleshooting: if the note says the device cannot be created, run `LIBVA_DRIVER_NAME=radeonsi ffmpeg -init_hw_device vaapi=va:/dev/dri/renderD128 -f lavfi -i nullsrc -frames:v 1 -f null -` (or `iHD`) to find the driver that works, and export it; a `LIBVA_DRIVER_NAME` left over from another GPU is the usual reason ffmpeg finds no device.
+Frames are decoded on the GPU through VAAPI when one works, and in software otherwise; nothing needs to be set up. On first use `analyse` decodes two frames of the Recording both ways and keeps the GPU only when they are byte for byte the same, so the output (Observations, Events, cache entries) never depends on it. It needs an 8-bit 4:2:0 Recording and a `/dev/dri/renderD*` device (`VICTORIOUS_VAAPI_DEVICE` picks one), and sets `LIBVA_DRIVER_NAME` for the ffmpeg subprocess only: your own value is tried first, then `radeonsi` on AMD or `iHD` and `i965` on Intel. The GPU has few decode engines, so at most 2 chunks decode on it at once (`VICTORIOUS_HW_SLOTS` changes that, 0 means software); a chunk that finds both busy decodes in software, except the last ones, which wait. That cuts the CPU time of decoding a 2560x1440 AV1 Recording about ten-fold (the GPU decodes about 8x real time there) and leaves the cores to OCR. If the GPU fails, even part-way through a chunk, `analyse` prints one `victorious: hardware decode ...; using software decode` line on stderr, finishes that chunk in software with the same exit code and tries the GPU again on the next one; a process gives it up after three failures in a row. A run that used the GPU ends with a stderr line saying how many chunks it decoded (`victorious analyse: decode: 34 of 61 chunks on the GPU, 27 on the CPU`, with `, N resumed on the CPU after a GPU failure` added when a chunk fell back part-way). `VICTORIOUS_HWACCEL=off` (or the hidden `--hwaccel off`) forces software; `vaapi` insists on the GPU and says so when it cannot be used. Troubleshooting: if the note says the device cannot be created, run `LIBVA_DRIVER_NAME=radeonsi ffmpeg -init_hw_device vaapi=va:/dev/dri/renderD128 -f lavfi -i nullsrc -frames:v 1 -f null -` (or `iHD`) to find the driver that works, and export it; a `LIBVA_DRIVER_NAME` left over from another GPU is the usual reason ffmpeg finds no device.
 
-The stderr line ends with where the wall time went, `(layout 6.6 s, frames 27.8 s, counters 2.2 s, speech 45.8 s)`: Layout selection, decoding and scoring the sampled frames, counter OCR, and transcription with diarization. A cached run has no `frames` or `counters` phase. Measured on 2560x1440 AV1 clips of real Recordings (24 logical CPUs, cache off, speech on, a machine that was also busy with other work): 0.62 x real time before and 0.39 x after for a 10 min clip, so a 3 h Recording takes well over the 15-20 min target (those timings used the `small` Whisper model; `large-v3-turbo`, the default since ADR 0005, moves speech-on runs further from it); the profile and what is left are in issue #30.
+The stderr line ends with where the wall time went, `(layout 6.6 s, frames 27.8 s, counters 2.2 s, speech 45.8 s)`: Layout selection, decoding and scoring the sampled frames, counter OCR, and transcription with diarization. A cached run has no `frames` or `counters` phase. Measured times are in [how long a run takes](#how-long-a-run-takes): about 0.11 x real time frames-only with hardware decode, and 38 min for a 61 min Recording with speech on `large-v3-turbo`, so speech-on runs of a 3 h Recording are far from the 15-20 min target (ADR 0005; the profile and what is left are in issue #30).
 
 The per-second Observations are cached, keyed by a fingerprint of the Recording (its size and its first, middle and last MiB, not its name or mtime) and a hash of the Layout (its content, not its YAML formatting). A rerun with the same Recording and Layout loads them, and the windows that time counter jumps, so it runs no ffmpeg at all. Changing any Layout rectangle or the aspect ratio, or replacing the Recording, misses the cache; an unreadable entry is recomputed. The cache lives in `$XDG_CACHE_HOME/victorious` (`~/.cache/victorious`) unless `--cache-dir` says otherwise, `--no-cache` neither reads nor writes it, and nothing is ever evicted: an entry is about 3-4 MB per 3 h Recording per Layout. A failed run stores no Observations, and a cache that cannot be written is skipped, not an error. A line on stderr reports the Layout chosen with its score and the number of candidates, `cache hit`, `cache miss` or `cache off`, and the wall time.
 
