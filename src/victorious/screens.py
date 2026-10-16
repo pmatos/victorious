@@ -2,6 +2,7 @@
 
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
+from itertools import pairwise
 from typing import Literal
 
 import cv2
@@ -21,7 +22,7 @@ RESULTS_THRESHOLD = 0.7
 SPECTATING_THRESHOLD = 0.7
 SPECTATING_BAND = Rect(x=0.4, y=0.0, w=0.2, h=0.09)
 ICON_NAMES = ("icon_skull", "icon_squad", "icon_person")
-ROW_ICON_NAMES = ("row_crosshair", "row_squad", "row_person")
+ROW_ICON_NAMES = ("row_person", "row_crosshair", "row_squad")
 BANNER_NAMES = ("victory_royale", "victory_royale_orange")
 SCALE_SWEEP = (0.9, 1.0, 1.1)
 BANNER_WIDE_SWEEP = (1.1, 1.2, 1.3, 1.4, 1.5, 1.6)
@@ -44,7 +45,8 @@ ROW_COUNTER_BANDS = (
     ((0, 0, 205), (180, 30, 255)),
 )
 ROW_ANCHOR_MARGIN = (0.5, 0.25)
-ROW_GLYPH_GAP = 0.6
+COUNTER_GLYPH_HEIGHT = (0.3, 0.9)
+COUNTER_GAP = 0.6
 
 
 PlacementElement = Literal["placement", "elimination_placement"]
@@ -53,13 +55,12 @@ Band = tuple[tuple[int, int, int], tuple[int, int, int]]
 
 @dataclass(frozen=True)
 class DesignSpec:
-    """What tells one HUD design from another: its icons, which counter sits beside each, and
-    the white bands that keep its digits."""
+    """What tells one HUD design from another: its icons, from first to last on screen, which
+    counter sits beside each, and the white bands that keep its digits."""
 
     icons: tuple[str, ...]
     counter_icons: Mapping[str, str]
     bands: tuple[Band, ...]
-    anchor_margin: tuple[float, float]
 
 
 DESIGNS: dict[HudDesign, DesignSpec] = {
@@ -71,7 +72,6 @@ DESIGNS: dict[HudDesign, DesignSpec] = {
             "icon_person": "players_left",
         },
         COUNTER_BANDS,
-        (ANCHOR_MARGIN, ANCHOR_MARGIN),
     ),
     "counter_row": DesignSpec(
         ROW_ICON_NAMES,
@@ -81,7 +81,6 @@ DESIGNS: dict[HudDesign, DesignSpec] = {
             "row_person": "players_left",
         },
         ROW_COUNTER_BANDS,
-        ROW_ANCHOR_MARGIN,
     ),
 }
 
@@ -169,7 +168,7 @@ def _row_hits(frame: np.ndarray, layout: Layout) -> dict[str, TemplateHit]:
     """
     height, width = frame.shape[:2]
     anchor = layout.screens.hud.hud_anchor
-    margin_x, margin_y = DESIGNS["counter_row"].anchor_margin
+    margin_x, margin_y = ROW_ANCHOR_MARGIN
     x0 = max(0, int((anchor.x - margin_x * anchor.w) * width))
     y0 = max(0, int((anchor.y - margin_y * anchor.h) * height))
     x1 = min(width, int((anchor.x + anchor.w * (1 + margin_x)) * width) + 1)
@@ -187,69 +186,81 @@ def _row_hits(frame: np.ndarray, layout: Layout) -> dict[str, TemplateHit]:
     return hits
 
 
-def _leading_run(mask: np.ndarray) -> np.ndarray:
-    """`mask` cut to the digits next to its left edge: the first run of glyphs.
+def in_row_order(hits: Sequence[TemplateHit]) -> bool:
+    """Whether `hits`, in the order the row draws its icons, are three separate icons."""
+    return all(left.x + left.w <= right.x for left, right in pairwise(hits))
 
-    What follows the run, such as the next icon or bright scenery, is not part of the counter,
-    and the cut makes the mask the same wherever the row sits.
+
+def leading_glyph_run(boxes: Sequence[tuple[int, int, int, int]]) -> tuple[int, int, int, int]:
+    """The first run of glyph boxes from the left, as (left, top, right, bottom).
+
+    A gap wider than `COUNTER_GAP` of the tallest glyph ends the run: what follows is the next
+    icon or scenery, not part of the counter.
     """
-    boxes = glyph_boxes(mask)
+    ordered = sorted(boxes)
+    tallest = max(h for _, _, _, h in ordered)
+    left, top = ordered[0][0], ordered[0][1]
+    right, bottom = left + ordered[0][2], top + ordered[0][3]
+    for x, y, w, h in ordered[1:]:
+        if x - right > COUNTER_GAP * tallest:
+            break
+        top, bottom, right = min(top, y), max(bottom, y + h), max(right, x + w)
+    return left, top, right, bottom
+
+
+def _leading_run(mask: np.ndarray, icon_height: int) -> np.ndarray:
+    """`mask` cut to the digits next to its left edge, so the cut is the same wherever the row
+    sits and nothing after the digits is read."""
+    boxes = glyph_boxes(mask, max_height=int(COUNTER_GLYPH_HEIGHT[1] * icon_height))
     if not boxes:
         return mask
-    tallest = max(h for _, _, _, h in boxes)
-    left, right = boxes[0][0], boxes[0][0] + boxes[0][2]
-    for x, _, w, _ in boxes[1:]:
-        if x - right > ROW_GLYPH_GAP * tallest:
-            break
-        right = max(right, x + w)
+    left, _, right, _ = leading_glyph_run(boxes)
     return np.asarray(mask[:, left:right])
+
+
+def counter_icons(frame: np.ndarray, layout: Layout) -> Mapping[str, TemplateHit]:
+    """The icons the counters of the Layout's design are read beside, found in this frame.
+
+    The icon column has none to find: its counters sit at the Layout's rectangles.
+    """
+    return _row_hits(frame, layout) if layout.hud_design == "counter_row" else {}
+
+
+def counter_masks(
+    frame: np.ndarray, layout: Layout, element: str, icons: Mapping[str, TemplateHit]
+) -> list[np.ndarray]:
+    """One counter's white digits as binary masks, tightest white band first.
+
+    In the counter row the counter is read between its icon and the next as found in this frame
+    (`icons`, from `counter_icons`), and over the Layout rectangle's width when it is the last.
+    """
+    rect: Rect = getattr(layout.screens.hud, element)
+    if layout.hud_design == "icon_column":
+        return counter_band_masks(_crop(frame, rect, COUNTER_MARGIN))
+    design = DESIGNS[layout.hud_design]
+    height, width = frame.shape[:2]
+    icon = next((name for name, counter in design.counter_icons.items() if counter == element), "")
+    hit = icons.get(icon)
+    region = np.empty(0)
+    icon_height = max(1, round(rect.h * height))
+    if hit is not None:
+        left = hit.x + hit.w
+        following = [other.x for other in icons.values() if other.x > hit.x]
+        right = min(following) if following else left + round(rect.w * width)
+        top, bottom = max(0, int(rect.y * height)), min(height, int((rect.y + rect.h) * height) + 1)
+        region = np.asarray(frame[top:bottom, left:right])
+        icon_height = hit.h
+    if region.size == 0:
+        region = _crop(frame, rect, COUNTER_MARGIN)
+    return [_leading_run(mask, icon_height) for mask in band_masks(region, design.bands)]
 
 
 @dataclass(frozen=True)
 class HudReading:
-    """The HUD at one frame: how surely it is on screen, and where its counters are read.
-
-    In the icon column the counters sit at the Layout's rectangles. In the counter row each
-    counter is right of its icon, so it is read between that icon and the next as found now.
-    """
+    """The HUD at one frame: how surely it is on screen, and the icons found beside the counters."""
 
     score: float
-    layout: Layout
     icons: Mapping[str, TemplateHit] = field(default_factory=dict)
-
-    def counter_masks(self, frame: np.ndarray, element: str) -> list[np.ndarray]:
-        """One counter's white digits as binary masks, tightest white band first."""
-        hud = self.layout.screens.hud
-        rect: Rect = getattr(hud, element)
-        design = DESIGNS[self.layout.hud_design]
-        if self.layout.hud_design == "icon_column":
-            return counter_band_masks(_crop(frame, rect, COUNTER_MARGIN))
-        height, width = frame.shape[:2]
-        icon = next((name for name, e in design.counter_icons.items() if e == element), None)
-        hit = self.icons.get(icon) if icon is not None else None
-        if hit is None:
-            region = _crop(frame, rect, COUNTER_MARGIN)
-        else:
-            left = hit.x + hit.w
-            following = [other.x for other in self.icons.values() if other.x > hit.x]
-            right = min(following) if following else left + round(rect.w * width)
-            top = max(0, int(rect.y * height))
-            bottom = min(height, int((rect.y + rect.h) * height) + 1)
-            region = np.asarray(frame[top:bottom, left:right])
-            if region.size == 0:
-                region = _crop(frame, rect, COUNTER_MARGIN)
-        return [_leading_run(mask) for mask in _band_masks(region, design.bands)]
-
-
-def hud_reading(frame: np.ndarray, layout: Layout) -> HudReading:
-    """Locates the HUD of the Layout's design in `frame`."""
-    if layout.hud_design == "counter_row":
-        hits = _row_hits(frame, layout)
-        found_all = len(hits) == len(ROW_ICON_NAMES)
-        return HudReading(
-            min(hit.score for hit in hits.values()) if found_all else 0.0, layout, hits
-        )
-    return HudReading(_column_score(frame, layout), layout)
 
 
 def _column_score(frame: np.ndarray, layout: Layout) -> float:
@@ -258,11 +269,18 @@ def _column_score(frame: np.ndarray, layout: Layout) -> float:
     return min(_score(region, name, True, height)[0] for name in ICON_NAMES)
 
 
+def hud_reading(frame: np.ndarray, layout: Layout) -> HudReading:
+    """How surely the Layout's HUD is on screen: its weakest icon's match, 0..1."""
+    if layout.hud_design == "icon_column":
+        return HudReading(_column_score(frame, layout))
+    hits = _row_hits(frame, layout)
+    ordered = [hits[name] for name in ROW_ICON_NAMES if name in hits]
+    shown = len(ordered) == len(ROW_ICON_NAMES) and in_row_order(ordered)
+    return HudReading(min(hit.score for hit in ordered) if shown else 0.0, hits)
+
+
 def hud_score(frame: np.ndarray, layout: Layout) -> float:
-    """How surely the in-match HUD is on screen: its weakest icon's match, 0..1."""
-    if layout.hud_design == "counter_row":
-        return hud_reading(frame, layout).score
-    return _column_score(frame, layout)
+    return hud_reading(frame, layout).score
 
 
 def spectating_score(frame: np.ndarray) -> float:
@@ -274,24 +292,18 @@ def spectating_score(frame: np.ndarray) -> float:
     return _score(region, "spectating", False, frame.shape[0])[0]
 
 
-def _band_masks(
-    region: np.ndarray, bands: Sequence[tuple[tuple[int, int, int], tuple[int, int, int]]]
-) -> list[np.ndarray]:
+def band_masks(region: np.ndarray, bands: Sequence[Band]) -> list[np.ndarray]:
+    """`region`'s white pixels in each band, as binary masks."""
     hsv = cv2.cvtColor(region, cv2.COLOR_BGR2HSV)
     return [np.asarray(cv2.inRange(hsv, low, high)) for low, high in bands]
 
 
 def gold_mask(region: np.ndarray) -> np.ndarray:
-    return _band_masks(region, [(GOLD_LOW, GOLD_HIGH)])[0]
+    return band_masks(region, [(GOLD_LOW, GOLD_HIGH)])[0]
 
 
 def white_mask(region: np.ndarray) -> np.ndarray:
-    return _band_masks(region, [(WHITE_LOW, WHITE_HIGH)])[0]
-
-
-def band_masks(region: np.ndarray, bands: Sequence[Band]) -> list[np.ndarray]:
-    """`region`'s white digits as binary masks, one per band."""
-    return _band_masks(region, bands)
+    return band_masks(region, [(WHITE_LOW, WHITE_HIGH)])[0]
 
 
 def counter_band_masks(region: np.ndarray) -> list[np.ndarray]:
@@ -299,7 +311,7 @@ def counter_band_masks(region: np.ndarray) -> list[np.ndarray]:
 
     The tight band keeps digits apart from pale sky and cloud; the loose one keeps thin strokes.
     """
-    return _band_masks(region, COUNTER_BANDS)
+    return band_masks(region, COUNTER_BANDS)
 
 
 def _digits_right_of_hash(

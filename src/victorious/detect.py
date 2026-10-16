@@ -12,12 +12,17 @@ from victorious.ocr import glyph_boxes, read_digits
 from victorious.references import load_reference, reference_scale
 from victorious.screens import (
     BANNER_NAMES,
+    COUNTER_GAP,
+    COUNTER_GLYPH_HEIGHT,
     DESIGNS,
     HUD_THRESHOLD,
     RESULTS_THRESHOLD,
+    ROW_ICON_NAMES,
     band_masks,
     counter_band_masks,
     gold_mask,
+    in_row_order,
+    leading_glyph_run,
     white_mask,
 )
 
@@ -26,8 +31,6 @@ RESULTS_REGION = (0.15, 0.0, 0.85, 0.45)
 COLUMN_SLACK = 0.5
 COUNTER_WINDOW_ICONS = 3
 COUNTER_ROW_MARGIN = 0.2
-COUNTER_GLYPH_HEIGHT = (0.3, 0.9)
-COUNTER_GAP = 0.6
 COUNTER_WIDTH_PER_HEIGHT = 4
 HASH_ROW_MARGIN = 0.75
 PLACEMENT_DIGIT_HEIGHT = (0.6, 2.0)
@@ -140,6 +143,10 @@ def _locate_icons(
             icons[name] = _Icon(name, hit, score)
         else:
             problems[name] = f"reference icon {name} not found (best match {score:.2f})"
+    if design == "counter_row" and not problems:
+        ordered = [icons[name].hit for name in ROW_ICON_NAMES]
+        if not in_row_order(ordered):
+            problems["hud_anchor"] = "the reference icons of the counter row overlap"
     return icons, problems, max(score for _, score in first.values())
 
 
@@ -198,22 +205,13 @@ def _counter(frame: np.ndarray, icon: _Icon) -> tuple[Rect | None, str]:
 def _leading_cluster(
     boxes: Sequence[tuple[int, int, int, int]], icon_height: int
 ) -> tuple[int, int, int, int] | None:
-    """The left-most run of digit-sized glyph pieces, as a box: the digits beside an icon."""
+    """The first run of digit-sized glyph pieces from the left, as a box: the digits by an icon."""
     low = COUNTER_GLYPH_HEIGHT[0]
     tallest = max((box[3] for box in boxes), default=0)
     if tallest < low * icon_height:
         return None
-    left = right = top = bottom = 0
-    started = False
-    for x, y, w, h in sorted(boxes):
-        if started and x - right > COUNTER_GAP * tallest:
-            break
-        if not started:
-            left, top, right, bottom = x, y, x + w, y + h
-            started = True
-        else:
-            top, bottom, right = min(top, y), max(bottom, y + h), max(right, x + w)
-    if not started or bottom - top < low * icon_height or bottom - top < 0.6 * tallest:
+    left, top, right, bottom = leading_glyph_run(boxes)
+    if bottom - top < low * icon_height or bottom - top < 0.6 * tallest:
         return None
     return left, top, right - left, bottom - top
 

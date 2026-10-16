@@ -27,8 +27,8 @@ from victorious.screens import (
     HUD_THRESHOLD,
     RESULTS_THRESHOLD,
     ResultsReading,
+    counter_masks,
     hud_reading,
-    hud_score,
     results_reading,
     scale_range,
 )
@@ -139,7 +139,7 @@ def _read_back(
         if element == "hud_anchor":
             outcomes[element] = hud.score, hud.score >= HUD_THRESHOLD
         elif element in COUNTER_ELEMENTS:
-            reading = best_reading(hud.counter_masks(frame, element))
+            reading = best_reading(counter_masks(frame, layout, element, hud.icons))
             outcomes[element] = (reading.confidence, True) if reading is not None else (0.0, False)
         else:
             results = results or results_reading(frame, layout, read_placement=False)
@@ -288,7 +288,11 @@ def _drawn_design(
 
     def anchor_score(design: HudDesign) -> float:
         layout = _build_layout(width, height, found, design)
-        return max((hud_score(frame, layout) for frame in frames), default=0.0) if layout else 0.0
+        return (
+            max((hud_reading(frame, layout).score for frame in frames), default=0.0)
+            if layout
+            else 0.0
+        )
 
     scores = {design: anchor_score(design) for design in DESIGNS}
     best = max(scores, key=lambda design: scores[design])
@@ -368,7 +372,7 @@ def _detect_panel(
             design = _merge(found, kind, second, frame, details, design)
             if found != before or offset == 1:
                 frames.append(frame)
-    return Panel(kind, second, tuple(frames), found, design)
+    return Panel(kind, second, tuple(frames), found, design if kind == "hud" else None)
 
 
 def _merge(
@@ -381,8 +385,9 @@ def _merge(
 ) -> HudDesign | None:
     """Keeps the better detections of `frame`; the HUD design, once a frame shows one."""
     detection = find_hud(frame, design) if kind == "hud" else find_results(frame)
+    unsettled = kind == "hud" and design is None and "hud_anchor" not in detection.found
     for name, hit in detection.found.items():
-        if _better(name, hit, found.get(name)):
+        if not unsettled and _better(name, hit, found.get(name)):
             found[name] = hit
     for name, reason in detection.missing.items():
         details.setdefault(name, f"{reason} at {kind}={second}")

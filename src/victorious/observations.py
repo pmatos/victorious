@@ -9,7 +9,7 @@ import numpy as np
 from victorious.counters import (
     COUNTER_ELEMENTS,
     CounterReading,
-    tracked_rects,
+    tracked_elements,
 )
 from victorious.layout import Layout, Rect
 from victorious.ocr import DigitReading
@@ -18,6 +18,7 @@ from victorious.screens import (
     HUD_THRESHOLD,
     SPECTATING_BAND,
     ResultsReading,
+    counter_masks,
     hud_reading,
     results_reading,
     spectating_score,
@@ -79,7 +80,7 @@ def extract_chunk(
     layout: Layout,
     should_stop: Callable[[], bool] = lambda: False,
 ) -> list[ChunkSecond]:
-    rects = tracked_rects(layout)
+    elements = tracked_elements(layout)
     seconds: list[ChunkSecond] = []
     for second, frame in frames:
         if should_stop():
@@ -90,8 +91,8 @@ def extract_chunk(
         spectating = 0.0 if hud >= HUD_THRESHOLD or results.is_results else spectating_score(frame)
         masks: dict[CounterElement, tuple[PackedMask, PackedMask]] = {}
         if not results.is_results and hud >= HUD_THRESHOLD:
-            for element, _ in rects:
-                tight, loose = reading.counter_masks(frame, element)
+            for element in elements:
+                tight, loose = counter_masks(frame, layout, element, reading.icons)
                 masks[element] = (PackedMask.pack(tight), PackedMask.pack(loose))
         observation = SecondObservation(second, hud, results, spectating=spectating)
         seconds.append(ChunkSecond(observation, masks))
