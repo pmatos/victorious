@@ -217,7 +217,7 @@ def _leading_cluster(
 
 
 def _row_counter(
-    frame: np.ndarray, icon: _Icon, right_limit: int | None, design: HudDesign
+    frame: np.ndarray, icon: _Icon, right_limit: int | None
 ) -> tuple[Rect | None, str]:
     """The window right of `icon`, up to the next icon, once it holds readable digits.
 
@@ -232,7 +232,7 @@ def _row_counter(
     top, bottom = hit.y, min(height, hit.y + hit.h)
     if right <= left:
         return None, f"no room for digits right of {icon.name}"
-    for mask in band_masks(frame[top:bottom, left:right], DESIGNS[design].bands):
+    for mask in band_masks(frame[top:bottom, left:right], DESIGNS["counter_row"].bands):
         cluster = _leading_cluster(
             glyph_boxes(mask, max_height=int(COUNTER_GLYPH_HEIGHT[1] * hit.h)), hit.h
         )
@@ -286,7 +286,7 @@ def _find_design(frame: np.ndarray, design: HudDesign) -> Detection:
             rect, detail = _counter(frame, icon)
         else:
             following = [other.hit.x for other in ordered if other.hit.x > icon.hit.x]
-            rect, detail = _row_counter(frame, icon, min(following, default=None), design)
+            rect, detail = _row_counter(frame, icon, min(following, default=None))
         if rect is None:
             missing[element] = detail
         else:

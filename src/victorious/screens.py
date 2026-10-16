@@ -101,12 +101,21 @@ class ResultsReading:
         return self.banner >= RESULTS_THRESHOLD or self.hash >= RESULTS_THRESHOLD
 
 
-def _crop(frame: np.ndarray, rect: Rect, margin: float) -> np.ndarray:
+def _box(
+    frame: np.ndarray, rect: Rect, margin: float, margin_y: float | None = None
+) -> tuple[int, int, int, int]:
+    """`rect` grown by a share of its size on each side, as pixels (x0, y0, x1, y1)."""
     height, width = frame.shape[:2]
+    margin_y = margin if margin_y is None else margin_y
     x0 = max(0, int((rect.x - margin * rect.w) * width))
-    y0 = max(0, int((rect.y - margin * rect.h) * height))
+    y0 = max(0, int((rect.y - margin_y * rect.h) * height))
     x1 = min(width, int((rect.x + rect.w * (1 + margin)) * width) + 1)
-    y1 = min(height, int((rect.y + rect.h * (1 + margin)) * height) + 1)
+    y1 = min(height, int((rect.y + rect.h * (1 + margin_y)) * height) + 1)
+    return x0, y0, x1, y1
+
+
+def _crop(frame: np.ndarray, rect: Rect, margin: float) -> np.ndarray:
+    x0, y0, x1, y1 = _box(frame, rect, margin)
     return np.asarray(frame[y0:y1, x0:x1])
 
 
@@ -166,13 +175,8 @@ def _row_hits(frame: np.ndarray, layout: Layout) -> dict[str, TemplateHit]:
 
     The icons move sideways with the width of the numbers, so the search is wide.
     """
-    height, width = frame.shape[:2]
-    anchor = layout.screens.hud.hud_anchor
-    margin_x, margin_y = ROW_ANCHOR_MARGIN
-    x0 = max(0, int((anchor.x - margin_x * anchor.w) * width))
-    y0 = max(0, int((anchor.y - margin_y * anchor.h) * height))
-    x1 = min(width, int((anchor.x + anchor.w * (1 + margin_x)) * width) + 1)
-    y1 = min(height, int((anchor.y + anchor.h * (1 + margin_y)) * height) + 1)
+    height = frame.shape[0]
+    x0, y0, x1, y1 = _box(frame, layout.screens.hud.hud_anchor, *ROW_ANCHOR_MARGIN)
     region = np.asarray(frame[y0:y1, x0:x1])
     hits: dict[str, TemplateHit] = {}
     for name in ROW_ICON_NAMES:
@@ -241,17 +245,16 @@ def counter_masks(
     height, width = frame.shape[:2]
     icon = next((name for name, counter in design.counter_icons.items() if counter == element), "")
     hit = icons.get(icon)
-    region = np.empty(0)
+    region = _crop(frame, rect, COUNTER_MARGIN)
     icon_height = max(1, round(rect.h * height))
     if hit is not None:
         left = hit.x + hit.w
         following = [other.x for other in icons.values() if other.x > hit.x]
         right = min(following) if following else left + round(rect.w * width)
         top, bottom = max(0, int(rect.y * height)), min(height, int((rect.y + rect.h) * height) + 1)
-        region = np.asarray(frame[top:bottom, left:right])
-        icon_height = hit.h
-    if region.size == 0:
-        region = _crop(frame, rect, COUNTER_MARGIN)
+        beside = np.asarray(frame[top:bottom, left:right])
+        if beside.size:
+            region, icon_height = beside, hit.h
     return [_leading_run(mask, icon_height) for mask in band_masks(region, design.bands)]
 
 
@@ -280,6 +283,7 @@ def hud_reading(frame: np.ndarray, layout: Layout) -> HudReading:
 
 
 def hud_score(frame: np.ndarray, layout: Layout) -> float:
+    """How surely the in-match HUD is on screen: its weakest icon's match, 0..1."""
     return hud_reading(frame, layout).score
 
 
