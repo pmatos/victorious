@@ -22,6 +22,7 @@ from victorious.counters import CounterReader, CounterReading, CounterTracker
 from victorious.layout import load_layout, load_layouts
 from victorious.ocr import DigitReading, read_digits
 from victorious.schema import CounterElement
+from victorious.screens import HudReading
 
 pytestmark = pytest.mark.usefixtures("require_ffmpeg", "require_tesseract")
 
@@ -514,7 +515,7 @@ def _read_players_left(
     by_mask: dict[int, DigitReading | None],
 ) -> CounterReading | None:
     masks = [np.full((4, 4), index, np.uint8) for index in range(len(by_mask))]
-    monkeypatch.setattr(counters, "counter_masks", lambda frame, rect: masks)
+    monkeypatch.setattr(HudReading, "counter_masks", lambda self, frame, element: masks)
     monkeypatch.setattr(counters, "read_digits", lambda mask: by_mask[int(mask[0, 0])])
     layout = load_layout(write_layout(tmp_path / "layout.yaml"))
     frame = np.zeros((1080, 1920, 3), np.uint8)

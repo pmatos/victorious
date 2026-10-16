@@ -46,6 +46,33 @@ ICONS = {
     "icon_person": "players_left",
 }
 
+ROW_ICONS = {
+    "row_person": "players_left",
+    "row_crosshair": "personal_eliminations",
+    "row_squad": "team_eliminations",
+}
+ROW_ICON_NATIVE_SIZE = 32
+ROW_ICON_TOP = 372
+ROW_DIGIT_HEIGHT_NATIVE = 22
+ROW_DIGIT_GAP_NATIVE = 3
+ROW_ICON_TO_DIGITS_NATIVE = 8
+ROW_COUNTER_TO_ICON_NATIVE = 8
+ROW_NOMINAL_LEFT = 2315
+ROW_WIDTH_PER_DIGIT_HEIGHT = 4
+NATIVE_ROW_RECTS: dict[str, tuple[int, int, int, int]] = {
+    "hud_anchor": (2315, ROW_ICON_TOP, 161, ROW_ICON_NATIVE_SIZE),
+    "players_left": (2347, ROW_ICON_TOP, 29, ROW_ICON_NATIVE_SIZE),
+    "personal_eliminations": (2408, ROW_ICON_TOP, 36, ROW_ICON_NATIVE_SIZE),
+    "team_eliminations": (2476, ROW_ICON_TOP, 84, ROW_ICON_NATIVE_SIZE),
+}
+ROW_ELEMENT_RECTS: dict[str, tuple[float, float, float, float]] = {
+    **ELEMENT_RECTS,
+    **{
+        name: (x / NATIVE_WIDTH, y / NATIVE_HEIGHT, w / NATIVE_WIDTH, h / NATIVE_HEIGHT)
+        for name, (x, y, w, h) in NATIVE_ROW_RECTS.items()
+    },
+}
+
 
 @cache
 def load_crop(name: str, color: bool = False) -> np.ndarray:
@@ -156,7 +183,73 @@ def render_scene(scene: Scene, width: int, height: int) -> np.ndarray:
     return frame
 
 
+def _row_digit_widths(value: int | None) -> int:
+    if value is None:
+        return 0
+    glyphs = _digits(value)
+    ratio = ROW_DIGIT_HEIGHT_NATIVE / glyphs[0].shape[0]
+    widths = [max(1, round(g.shape[1] * ratio)) for g in glyphs]
+    return int(sum(widths) + ROW_DIGIT_GAP_NATIVE * (len(widths) - 1))
+
+
+def _row_extent(hud: Hud) -> list[tuple[str, int]]:
+    """Each icon of the counter row with the native width of its icon, gap and digits."""
+    return [
+        (
+            icon,
+            ROW_ICON_NATIVE_SIZE
+            + ROW_ICON_TO_DIGITS_NATIVE
+            + _row_digit_widths(getattr(hud, counter)),
+        )
+        for icon, counter in ROW_ICONS.items()
+    ]
+
+
+def _row_icon_lefts(hud: Hud) -> dict[str, int]:
+    """Native left edge of each icon: the row is centred on its nominal centre, so it moves with
+    the width of the numbers as the real one does."""
+    nominal = Hud(personal_eliminations=9, team_eliminations=24, players_left=7)
+    spans = [width for _, width in _row_extent(hud)]
+    nominal_spans = [width for _, width in _row_extent(nominal)]
+    gaps = ROW_COUNTER_TO_ICON_NATIVE * (len(spans) - 1)
+    centre = ROW_NOMINAL_LEFT + (sum(nominal_spans) + gaps) / 2
+    left = round(centre - (sum(spans) + gaps) / 2)
+    lefts: dict[str, int] = {}
+    for (icon, _), span in zip(_row_extent(hud), spans, strict=True):
+        lefts[icon] = left
+        left += span + ROW_COUNTER_TO_ICON_NATIVE
+    return lefts
+
+
+def _draw_row_hud(frame: np.ndarray, hud: Hud) -> None:
+    height = frame.shape[0]
+    to_px = height / NATIVE_HEIGHT
+    icon_px = max(1, round(ROW_ICON_NATIVE_SIZE * to_px))
+    top = round(ROW_ICON_TOP * to_px)
+    digit_px = max(1, round(ROW_DIGIT_HEIGHT_NATIVE * to_px))
+    digits_top = top + (icon_px - digit_px) // 2
+    for icon, left in _row_icon_lefts(hud).items():
+        tile = cv2.resize(load_crop(icon, True), (icon_px, icon_px), interpolation=cv2.INTER_AREA)
+        x = round(left * to_px)
+        _paste(frame, tile, x, top)
+        counter = ROW_ICONS[icon]
+        value = getattr(hud, counter)
+        start = x + icon_px + round(ROW_ICON_TO_DIGITS_NATIVE * to_px)
+        box = (start, digits_top, round(ROW_WIDTH_PER_DIGIT_HEIGHT * digit_px), digit_px)
+        if hud.corrupt:
+            noise_width = max(1, round(_row_digit_widths(value) * to_px))
+            noise = np.random.default_rng(box[0]).integers(
+                0, 256, (box[3], noise_width, 3), dtype=np.uint8
+            )
+            frame[box[1] : box[1] + box[3], box[0] : box[0] + noise_width] = noise
+        elif value is not None:
+            _draw_text(frame, _digits(value), box, height=digit_px, align="left", color=WHITE)
+
+
 def _draw_hud(frame: np.ndarray, hud: Hud) -> None:
+    if hud.design == "counter_row":
+        _draw_row_hud(frame, hud)
+        return
     height, width = frame.shape[:2]
     icon_px = max(1, round(ICON_NATIVE_SIZE * height / NATIVE_HEIGHT))
     centre_x = round(ICON_CENTRE_X / NATIVE_WIDTH * width)

@@ -12,6 +12,7 @@ import yaml
 from tests.analyse_helpers import FPS, STEADY, FfmpegShim, analyse_text, small
 from tests.synthetic import RecordingSpec, build_recording, layout_document, match_shots
 from tests.synthetic import write_layout as write_layout_document
+from tests.synthetic.spec import HudDesign
 from victorious import selection, video
 from victorious.cache import ObservationCache
 from victorious.cli import main
@@ -69,6 +70,96 @@ def test_directory_picks_the_layout_matching_the_hud(tmp_path: Path, real: str, 
     assert output["layout"]["path"] == str(directory / real)
     assert output["layout"]["score"] >= 0.7
     assert real in result.stderr
+
+
+def row_matches() -> RecordingSpec:
+    shots = (
+        *match_shots(2, STEADY, results_at=20, placement=1, hud_design="counter_row"),
+        *match_shots(30, STEADY, results_at=45, placement=6, hud_design="counter_row"),
+    )
+    return small(55, shots)
+
+
+@pytest.mark.parametrize(
+    "order", [("a_column.yaml", "b_row.yaml"), ("a_row.yaml", "b_column.yaml")]
+)
+@pytest.mark.parametrize("hud", ["icon_column", "counter_row"])
+def test_directory_with_both_hud_designs_picks_the_one_the_recording_uses(
+    tmp_path: Path, order: tuple[str, str], hud: HudDesign
+) -> None:
+    spec = row_matches() if hud == "counter_row" else two_matches()
+    recording = build_recording(spec, tmp_path / "recording.mkv")
+    names = {
+        "icon_column": next(name for name in order if "column" in name),
+        "counter_row": next(name for name in order if "row" in name),
+    }
+    directory = layouts_directory(
+        tmp_path,
+        **{
+            names["icon_column"]: layout_document(),
+            names["counter_row"]: layout_document("counter_row"),
+        },
+    )
+
+    result = analyse_text(recording, directory)
+
+    assert result.returncode == 0, result.stderr
+    output = json.loads(result.stdout)
+    assert summary(output) == EXPECTED
+    assert output["layout"]["path"] == str(directory / names[hud])
+    assert output["layout"]["score"] >= 0.7
+
+
+@pytest.mark.parametrize(
+    ("recording_design", "layout_design"),
+    [("counter_row", "icon_column"), ("icon_column", "counter_row")],
+)
+def test_a_layout_of_the_other_hud_design_is_not_mistaken_for_not_fortnite(
+    tmp_path: Path, recording_design: HudDesign, layout_design: HudDesign
+) -> None:
+    spec = row_matches() if recording_design == "counter_row" else two_matches()
+    recording = build_recording(spec, tmp_path / "recording.mkv")
+    layout = write_layout_document(tmp_path / "layout.yaml", layout_document(layout_design))
+
+    result = analyse_text(recording, layout)
+
+    assert result.returncode == 1
+    assert "no Layout matches this Recording's HUD" in result.stderr
+    assert "victorious setup" in result.stderr
+    assert result.stdout == ""
+
+
+def test_a_counter_row_recording_with_a_layout_of_another_aspect_ratio_is_a_no_fit_error(
+    tmp_path: Path,
+) -> None:
+    recording = build_recording(row_matches(), tmp_path / "recording.mkv")
+    wide = layout_document("counter_row")
+    wide["aspect_ratio"] = "21:9"
+    layout = write_layout_document(tmp_path / "layout.yaml", wide)
+
+    result = analyse_text(recording, layout)
+
+    assert result.returncode == 1
+    assert "no Layout fits" in result.stderr
+    assert "21:9" in result.stderr
+
+
+def test_a_recording_without_any_hud_is_not_fortnite_whatever_the_designs(tmp_path: Path) -> None:
+    recording = build_recording(small(5, ()), tmp_path / "recording.mkv")
+    directory = layouts_directory(
+        tmp_path,
+        **{
+            "column.yaml": layout_document(),
+            "row.yaml": layout_document("counter_row"),
+        },
+    )
+
+    result = analyse_text(recording, directory)
+
+    assert result.returncode == 0, result.stderr
+    output = json.loads(result.stdout)
+    assert output["matches"] == []
+    assert [warning["code"] for warning in output["warnings"]] == ["not_fortnite"]
 
 
 def test_directory_ignores_layouts_of_another_aspect_ratio(tmp_path: Path) -> None:

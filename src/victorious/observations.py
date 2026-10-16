@@ -18,8 +18,7 @@ from victorious.screens import (
     HUD_THRESHOLD,
     SPECTATING_BAND,
     ResultsReading,
-    counter_masks,
-    hud_score,
+    hud_reading,
     results_reading,
     spectating_score,
 )
@@ -86,12 +85,13 @@ def extract_chunk(
         if should_stop():
             raise Aborted
         results = results_reading(frame, layout, read_placement=True)
-        hud = hud_score(frame, layout)
+        reading = hud_reading(frame, layout)
+        hud = reading.score
         spectating = 0.0 if hud >= HUD_THRESHOLD or results.is_results else spectating_score(frame)
         masks: dict[CounterElement, tuple[PackedMask, PackedMask]] = {}
         if not results.is_results and hud >= HUD_THRESHOLD:
-            for element, rect in rects:
-                tight, loose = counter_masks(frame, rect)
+            for element, _ in rects:
+                tight, loose = reading.counter_masks(frame, element)
                 masks[element] = (PackedMask.pack(tight), PackedMask.pack(loose))
         observation = SecondObservation(second, hud, results, spectating=spectating)
         seconds.append(ChunkSecond(observation, masks))

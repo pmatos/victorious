@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from victorious.counters import CounterReading
-from victorious.layout import Layout
+from victorious.layout import DEFAULT_HUD_DESIGN, Layout
 from victorious.observations import (
     SecondObservation,
     from_json,
@@ -48,7 +48,11 @@ def fingerprint(path: Path) -> str:
 
 
 def layout_hash(layout: Layout) -> str:
-    document = json.dumps(layout.model_dump(), sort_keys=True)
+    """The Layout's identity; the default HUD design is left out so older Layouts keep their key."""
+    fields = layout.model_dump()
+    if layout.hud_design == DEFAULT_HUD_DESIGN:
+        del fields["hud_design"]
+    document = json.dumps(fields, sort_keys=True)
     return hashlib.sha256(document.encode()).hexdigest()
 
 

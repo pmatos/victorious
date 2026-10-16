@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Literal
 
 ResultsStyle = Literal["classic", "orange", "orange_large", "placed", "placed_shrunk"]
+HudDesign = Literal["icon_column", "counter_row"]
 
 
 @dataclass(frozen=True)
@@ -18,17 +19,20 @@ class Lobby:
 class Hud:
     """The in-match HUD; a counter set to None is not drawn while the HUD anchors stay.
 
-    `corrupt` replaces the three counter regions with noise, the anchors stay.
+    `corrupt` replaces the three counter regions with noise, the anchors stay. `design` is the
+    icon column at the top right or the counter row under the minimap, whose icons move with
+    the width of the numbers.
     """
 
     personal_eliminations: int | None = 0
     team_eliminations: int | None = 0
     players_left: int | None = 100
     corrupt: bool = False
+    design: HudDesign = "icon_column"
 
     def __post_init__(self) -> None:
         for counter in fields(self):
-            if counter.name == "corrupt":
+            if counter.name in ("corrupt", "design"):
                 continue
             value = getattr(self, counter.name)
             if value is not None and not 0 <= value <= 999:
@@ -136,6 +140,7 @@ def match_shots(
     results_duration: float = 5.0,
     placement: int = 1,
     results_style: ResultsStyle = "classic",
+    hud_design: HudDesign = "icon_column",
 ) -> tuple[Shot, ...]:
     """Expand counter steps into consecutive HUD shots followed by one results shot.
 
@@ -146,7 +151,7 @@ def match_shots(
         raise ValueError("a Match needs at least one HUD step")
     boundaries = [start + step[0] for step in hud_steps] + [results_at]
     shots = [
-        Shot(Hud(personal, team, left), boundaries[i], boundaries[i + 1])
+        Shot(Hud(personal, team, left, design=hud_design), boundaries[i], boundaries[i + 1])
         for i, (_, personal, team, left) in enumerate(hud_steps)
     ]
     shots.append(Shot(Results(placement, results_style), results_at, results_at + results_duration))

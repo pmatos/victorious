@@ -1,0 +1,21 @@
+{
+  "labels_version": "1.0",
+  "recording": {
+    "path": "test-video-last-minute.mkv",
+    "duration": 60.0
+  },
+  "analysis": {
+    "schema_version": "1.7",
+    "layout": "acceptance/layouts/hud_counter_row_16x9.yaml"
+  },
+  "matches": [
+    {
+      "start": 0.0,
+      "end": 34.0,
+      "verdict": "confirmed",
+      "win": true,
+      "placement": 1,
+      "personal_eliminations": 10
+    }
+  ]
+}

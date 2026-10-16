@@ -6,26 +6,22 @@ from dataclasses import dataclass, field
 import numpy as np
 
 from victorious.counters import best_reading
-from victorious.layout import EPSILON, Rect
+from victorious.layout import EPSILON, HudDesign, Rect
 from victorious.matcher import TemplateHit, locate_template_multiscale
 from victorious.ocr import glyph_boxes, read_digits
 from victorious.references import load_reference, reference_scale
 from victorious.screens import (
     BANNER_NAMES,
+    DESIGNS,
     HUD_THRESHOLD,
-    ICON_NAMES,
     RESULTS_THRESHOLD,
+    band_masks,
     counter_band_masks,
     gold_mask,
     white_mask,
 )
 
 SCALE_FACTORS = (0.7, 0.8, 0.9, 1.0, 1.1, 1.25, 1.4)
-COUNTER_FOR_ICON = {
-    "icon_skull": "personal_eliminations",
-    "icon_squad": "team_eliminations",
-    "icon_person": "players_left",
-}
 RESULTS_REGION = (0.15, 0.0, 0.85, 0.45)
 COLUMN_SLACK = 0.5
 COUNTER_WINDOW_ICONS = 3
@@ -53,8 +49,18 @@ class Found:
 
 @dataclass(frozen=True)
 class Detection:
+    """What was found in one frame; `design` and `reach` (the best icon match, found or not)
+    only mean something for an in-match HUD."""
+
     found: dict[str, Found] = field(default_factory=dict)
     missing: dict[str, str] = field(default_factory=dict)
+    design: HudDesign = "icon_column"
+    reach: float = 0.0
+
+    @property
+    def anchor_score(self) -> float:
+        anchor = self.found.get("hud_anchor")
+        return anchor.score if anchor is not None else 0.0
 
 
 def _normalised(x0: float, y0: float, x1: float, y1: float, frame: np.ndarray) -> Rect | None:
@@ -98,28 +104,43 @@ class _Icon:
     score: float
 
 
-def _locate_icons(frame: np.ndarray) -> tuple[dict[str, _Icon], dict[str, str]]:
+def _locate_icons(
+    frame: np.ndarray, design: HudDesign
+) -> tuple[dict[str, _Icon], dict[str, str], float]:
+    """The icons of `design` in the frame, why the others are missing, and the best match.
+
+    Once the strongest icon is found the others are searched only beside it: in its column for
+    the icon column, in its row for the counter row.
+    """
     height, width = frame.shape[:2]
+    names = DESIGNS[design].icons
     first: dict[str, tuple[TemplateHit | None, float]] = {
-        name: _locate(frame, name, True, height) for name in ICON_NAMES
+        name: _locate(frame, name, True, height) for name in names
     }
     anchor = max(first, key=lambda name: first[name][1])
     anchor_hit = first[anchor][0]
     icons: dict[str, _Icon] = {}
     problems: dict[str, str] = {}
-    for name in ICON_NAMES:
+    for name in names:
         hit, score = first[name]
         if name != anchor and anchor_hit is not None and first[anchor][1] >= HUD_THRESHOLD:
-            left = max(0, int(anchor_hit.x - COLUMN_SLACK * anchor_hit.w))
-            right = min(width, int(anchor_hit.x + (1 + COLUMN_SLACK) * anchor_hit.w) + 1)
-            hit, score = _locate(frame[:, left:right], name, True, height)
-            if hit is not None:
-                hit = TemplateHit(hit.x + left, hit.y, hit.w, hit.h, hit.score, hit.scale)
+            if design == "icon_column":
+                left = max(0, int(anchor_hit.x - COLUMN_SLACK * anchor_hit.w))
+                right = min(width, int(anchor_hit.x + (1 + COLUMN_SLACK) * anchor_hit.w) + 1)
+                hit, score = _locate(frame[:, left:right], name, True, height)
+                if hit is not None:
+                    hit = TemplateHit(hit.x + left, hit.y, hit.w, hit.h, hit.score, hit.scale)
+            else:
+                top = max(0, int(anchor_hit.y - COLUMN_SLACK * anchor_hit.h))
+                bottom = min(height, int(anchor_hit.y + (1 + COLUMN_SLACK) * anchor_hit.h) + 1)
+                hit, score = _locate(frame[top:bottom], name, True, height)
+                if hit is not None:
+                    hit = TemplateHit(hit.x, hit.y + top, hit.w, hit.h, hit.score, hit.scale)
         if hit is not None and score >= HUD_THRESHOLD:
             icons[name] = _Icon(name, hit, score)
         else:
             problems[name] = f"reference icon {name} not found (best match {score:.2f})"
-    return icons, problems
+    return icons, problems, max(score for _, score in first.values())
 
 
 def _rightmost_cluster(
@@ -174,15 +195,69 @@ def _counter(frame: np.ndarray, icon: _Icon) -> tuple[Rect | None, str]:
     return None, f"no readable digits left of {icon.name}"
 
 
+def _leading_cluster(
+    boxes: Sequence[tuple[int, int, int, int]], icon_height: int
+) -> tuple[int, int, int, int] | None:
+    """The left-most run of digit-sized glyph pieces, as a box: the digits beside an icon."""
+    low = COUNTER_GLYPH_HEIGHT[0]
+    tallest = max((box[3] for box in boxes), default=0)
+    if tallest < low * icon_height:
+        return None
+    left = right = top = bottom = 0
+    started = False
+    for x, y, w, h in sorted(boxes):
+        if started and x - right > COUNTER_GAP * tallest:
+            break
+        if not started:
+            left, top, right, bottom = x, y, x + w, y + h
+            started = True
+        else:
+            top, bottom, right = min(top, y), max(bottom, y + h), max(right, x + w)
+    if not started or bottom - top < low * icon_height or bottom - top < 0.6 * tallest:
+        return None
+    return left, top, right - left, bottom - top
+
+
+def _row_counter(
+    frame: np.ndarray, icon: _Icon, right_limit: int | None, design: HudDesign
+) -> tuple[Rect | None, str]:
+    """The window right of `icon`, up to the next icon, once it holds readable digits.
+
+    `analyse` finds each icon again at every second and reads the window beside it, so the rect
+    is that window as it is now, as tall as the icon.
+    """
+    hit = icon.hit
+    height, width = frame.shape[:2]
+    left = hit.x + hit.w
+    limit = right_limit if right_limit is not None else left + COUNTER_WINDOW_ICONS * hit.w
+    right = min(width, limit)
+    top, bottom = hit.y, min(height, hit.y + hit.h)
+    if right <= left:
+        return None, f"no room for digits right of {icon.name}"
+    for mask in band_masks(frame[top:bottom, left:right], DESIGNS[design].bands):
+        cluster = _leading_cluster(
+            glyph_boxes(mask, max_height=int(COUNTER_GLYPH_HEIGHT[1] * hit.h)), hit.h
+        )
+        if cluster is None:
+            continue
+        x, y, w, h = cluster
+        if best_reading([mask[y : y + h, x : x + w]]) is None:
+            continue
+        rect = _normalised(left, top, right, bottom, frame)
+        if rect is not None:
+            return rect, ""
+    return None, f"no readable digits right of {icon.name}"
+
+
 def shows_hud(frame: np.ndarray) -> bool:
-    """Whether all the reference HUD icons are on screen, without reading the counters."""
-    return not _locate_icons(frame)[1]
+    """Whether all the reference HUD icons of any design are on screen, without reading counters."""
+    return any(not _locate_icons(frame, design)[1] for design in DESIGNS)
 
 
-def find_hud(frame: np.ndarray) -> Detection:
-    """The HUD anchor and the three counters in one in-match frame."""
+def _find_design(frame: np.ndarray, design: HudDesign) -> Detection:
     height = frame.shape[0]
-    icons, problems = _locate_icons(frame)
+    spec = DESIGNS[design]
+    icons, problems, reach = _locate_icons(frame, design)
     found: dict[str, Found] = {}
     missing: dict[str, str] = {}
     if problems:
@@ -202,18 +277,35 @@ def find_hud(frame: np.ndarray) -> Detection:
             missing["hud_anchor"] = "the reference icons sit outside the frame"
         else:
             found["hud_anchor"] = Found(rect, score, factor)
-    for name in ICON_NAMES:
-        element = COUNTER_FOR_ICON[name]
+    ordered = sorted(icons.values(), key=lambda icon: icon.hit.x)
+    for name in spec.icons:
+        element = spec.counter_icons[name]
         icon = icons.get(name)
         if icon is None:
             missing[element] = problems[name]
             continue
-        rect, detail = _counter(frame, icon)
+        if design == "icon_column":
+            rect, detail = _counter(frame, icon)
+        else:
+            following = [other.hit.x for other in ordered if other.hit.x > icon.hit.x]
+            rect, detail = _row_counter(frame, icon, min(following, default=None), design)
         if rect is None:
             missing[element] = detail
         else:
             found[element] = Found(rect, icon.score, _factor(icon.hit, name, height))
-    return Detection(found, missing)
+    return Detection(found, missing, design, reach)
+
+
+def find_hud(frame: np.ndarray, design: HudDesign | None = None) -> Detection:
+    """The HUD anchor and the three counters in one in-match frame.
+
+    Without a `design`, every design is tried and the one whose icons match best is reported.
+    """
+    detections = [_find_design(frame, wanted) for wanted in ([design] if design else DESIGNS)]
+    return max(
+        detections,
+        key=lambda d: (1.0, d.anchor_score) if "hud_anchor" in d.found else (0.0, d.reach),
+    )
 
 
 def _placement_digits(

@@ -31,6 +31,8 @@ uv run victorious setup recording.mkv --at hud=12:34 --at results=1:05:20 --at r
 - With only a Win frame, the Layout is still written and stderr warns that `elimination_placement` was not found. Add a `--at results=` second showing "YOU PLACED #N" and rerun.
 - `could not find N element`: try another `--at hud=` second where the digits are crisp, or add `--manual` to drag the rectangles into place on a page served on `127.0.0.1` (pre-filled with what was found; add `--no-browser` to only print its address; `Save Layout` writes the same files).
 
+`setup` knows two HUD designs and records the one it found as `hud_design` in the Layout: the counters in an icon column at the top right (`icon_column`), or in a horizontal row of icons under the minimap (`counter_row`: players left, personal eliminations, team eliminations). Both are found without telling it which.
+
 Keep the Layouts in one folder (for example `layouts/`): `analyse` picks the one that fits each Recording, which [many Recordings](#6-analyse-many-recordings) rely on. Set up again only for a new HUD design or aspect ratio.
 
 ### 2. Analyse
@@ -318,7 +320,7 @@ Counter digits are about 17 px tall at 2560x1440 and Tesseract reads them reliab
 
 #### Layout selection
 
-`--layout` takes one Layout file or a directory of them (`*.yaml` and `*.yml` directly inside it, no recursion; an invalid file is an error naming it). Layouts whose `aspect_ratio` differs from the Recording's by more than 2% are dropped; if none is left and the Recording shows the in-match HUD, `analyse` exits 1 with an error that names the Layouts' ratios, the Recording's `WxH` and `victorious setup` (a Recording with no HUD at all is reported as `not_fortnite` instead). Each remaining Layout's `hud_anchor` is then scored on in-match frames: one frame every `ceil(duration / 240)` s (at least 1 s; at most every 10 s in the first 10 minutes, so about 240 candidates plus at most 60) from the start is read in time order until 20 of them show an in-match HUD (some candidate Layout scores at least 0.7), and a Layout's score is its mean over those 20. The best score wins, ties go to the first file by name, and the choice does not depend on `--jobs`.
+`--layout` takes one Layout file or a directory of them (`*.yaml` and `*.yml` directly inside it, no recursion; an invalid file is an error naming it). Layouts whose `aspect_ratio` differs from the Recording's by more than 2% are dropped; if none is left and the Recording shows the in-match HUD, `analyse` exits 1 with an error that names the Layouts' ratios, the Recording's `WxH` and `victorious setup` (a Recording with no HUD at all is reported as `not_fortnite` instead). Each remaining Layout's `hud_anchor` is then scored (with the icons of that Layout's `hud_design`, so a folder with an icon-column Layout and a counter-row Layout picks the one the Recording uses) on in-match frames: one frame every `ceil(duration / 240)` s (at least 1 s; at most every 10 s in the first 10 minutes, so about 240 candidates plus at most 60) from the start is read in time order until 20 of them show an in-match HUD (some candidate Layout scores at least 0.7), and a Layout's score is its mean over those 20. The best score wins, ties go to the first file by name, and the choice does not depend on `--jobs`.
 
 The output records `layout: {path, score}`, with `path` as given on the command line. When no Layout reaches the minimum score of 0.7, or no sampled frame scores at the anchor of any Layout although the HUD icons are on screen (a HUD no Layout describes), `analyse` exits 1, writes no output and says `no Layout matches`, naming `victorious setup`.
 
@@ -408,6 +410,7 @@ It prints `no differences (N matches)` and exits 0 when clean, and exits 1 when 
 
 ```yaml
 aspect_ratio: "16:9"
+hud_design: icon_column  # or counter_row; optional, icon_column when left out
 screens:
   hud:
     hud_anchor: {x: 0.852, y: 0.030, w: 0.014, h: 0.088}
@@ -420,7 +423,7 @@ screens:
     elimination_placement: {x: 0.504, y: 0.104, w: 0.125, h: 0.111}
 ```
 
-`hud_anchor` must cover the three icons (skull, squad, person) stacked in the HUD column; `results_banner` and `placement` locate the Victory Royale banner (blue or orange) and the gold `#N` that goes with it. `elimination_placement`, which is optional, locates the white `YOU PLACED #N` shown when the player is eliminated; it is centred on the frame, so it spans the whole width the `#` can land in. Without it, a "YOU PLACED" screen is not recognised, so only Wins end a Match by a results screen. The three counters are optional and read by later tickets.
+`hud_anchor` must cover the three icons (skull, squad, person) stacked in the HUD column, or in the `counter_row` design the three icons (crosshair, squad, person) of the row under the minimap, where each counter rect is the window right of its icon, as tall as the icon, and the icons are found again at every second because they move with the width of the numbers (see `acceptance/layouts/hud_counter_row_16x9.yaml`); `results_banner` and `placement` locate the Victory Royale banner (blue or orange) and the gold `#N` that goes with it. `elimination_placement`, which is optional, locates the white `YOU PLACED #N` shown when the player is eliminated; it is centred on the frame, so it spans the whole width the `#` can land in. Without it, a "YOU PLACED" screen is not recognised, so only Wins end a Match by a results screen. The three counters are optional and read by later tickets.
 
 See [GLOSSARY.md](GLOSSARY.md) for the terms used above and [docs/adr](docs/adr) for design decisions.
 
