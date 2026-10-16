@@ -172,6 +172,7 @@ def test_overlapping_margins_make_one_mask_decision(tmp_path: Path) -> None:
     heard = sorted((event for found in spoken for event in found), key=lambda event: event["time"])
     for earlier, later in pairwise(heard):
         assert earlier["end"] <= later["time"]
+    assert len({event["text"].lower() for event in heard}) == len(heard)
     for first, second in pairwise(masks):
         assert first.end < second.start
     for match in matches:
