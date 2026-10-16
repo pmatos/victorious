@@ -38,7 +38,6 @@ TAG_SECONDS = 300
 LANGUAGES: tuple[SpeechLanguage, ...] = ("en", "pt")
 MAX_CHUNK = 30.0
 MAX_GAP = 5.0
-BATCH_SIZE = 16
 MAX_NO_SPEECH_PROB = 0.9
 MIN_AVG_LOGPROB = -1.5
 MAX_COMPRESSION_RATIO = 2.4
@@ -195,7 +194,6 @@ def group_speech(
 def _transcribe_window(
     model: Any, audio: np.ndarray, offset: float, masked: Sequence[MaskedWindow] = ()
 ) -> list[Segment]:
-    from faster_whisper import BatchedInferencePipeline
     from faster_whisper.vad import VadOptions, get_speech_timestamps
 
     vad = VadOptions(max_speech_duration_s=MAX_CHUNK)
@@ -208,7 +206,6 @@ def _transcribe_window(
         candidate_languages(dict(model.detect_language(audio[start:end])[2]))
         for start, end in groups
     ]
-    pipeline = BatchedInferencePipeline(model)
     readings: list[dict[SpeechLanguage, list[Segment]]] = [
         {language: [] for language in languages} for languages in candidates
     ]
@@ -217,16 +214,17 @@ def _transcribe_window(
         if not indices:
             continue
         starts = [groups[i][0] / AUDIO_RATE for i in indices]
-        spoken, _ = pipeline.transcribe(
+        spoken, _ = model.transcribe(
             audio,
             language=language,
             clip_timestamps=[
-                {"start": groups[i][0] / AUDIO_RATE, "end": groups[i][1] / AUDIO_RATE}
+                second
                 for i in indices
+                for second in (groups[i][0] / AUDIO_RATE, groups[i][1] / AUDIO_RATE)
             ],
-            condition_on_previous_text=False,
+            condition_on_previous_text=True,
             without_timestamps=False,
-            batch_size=BATCH_SIZE,
+            vad_filter=False,
         )
         for part in spoken:
             if not is_speech(
