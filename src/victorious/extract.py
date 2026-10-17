@@ -13,6 +13,7 @@ from victorious.video import tool
 DEFAULT_TAIL = 8.0
 VIDEO_ARGS = ("-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-pix_fmt", "yuv420p")
 AUDIO_ARGS = ("-c:a", "aac", "-b:a", "192k")
+COPY_ARGS = ("-c", "copy", "-avoid_negative_ts", "make_zero")
 
 
 class ExtractError(Exception):
@@ -63,9 +64,14 @@ def extract_clips(
     clips: list[Clip],
     output: Path,
     progress: Callable[[int, Clip], None] = lambda position, clip: None,
+    *,
+    exact: bool = False,
 ) -> None:
-    """Cuts every Clip of `recording`, re-encoded so each starts on its exact second, and joins
-    them into `output`, which is written whole or not at all.
+    """Cuts every Clip of `recording` and joins them into `output`, written whole or not at all.
+
+    The streams are copied, so a cut starts at the keyframe at or before its start second.
+    `exact` re-encodes them instead, so each starts on its exact second, at the cost of the time
+    to encode the footage.
     """
     if not clips:
         raise ExtractError("there is no Clip to extract")
@@ -82,7 +88,7 @@ def extract_clips(
                     ffmpeg, "-v", "error", "-nostdin", "-y",
                     "-ss", f"{clip.start:g}", "-t", f"{clip.end - clip.start:g}",
                     "-i", str(recording), "-map", "0:v:0", "-map", "0:a?",
-                    *VIDEO_ARGS, *AUDIO_ARGS, str(part),
+                    *(VIDEO_ARGS + AUDIO_ARGS if exact else COPY_ARGS), str(part),
                 ],
                 f"cut Match {clip.index} out of {recording}",
             )  # fmt: skip
