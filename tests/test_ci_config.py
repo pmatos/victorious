@@ -102,3 +102,15 @@ def test_pull_requests_that_only_change_docs_skip_ci() -> None:
     triggers = workflow.get("on", workflow.get(True))
     assert set(triggers["pull_request"]["paths-ignore"]) == {"**.md", "docs/**"}
     assert "paths-ignore" not in (triggers["push"] or {})
+
+
+def test_every_e2e_module_exists_and_its_tests_are_marked() -> None:
+    from tests.conftest import E2E_MODULES
+
+    assert [name for name in E2E_MODULES if not (ROOT / "tests" / f"{name}.py").exists()] == []
+    marked = collected("-m", "e2e", "tests/test_bisect.py", "tests/test_screens.py")
+    unmarked = collected("-m", "not e2e", "tests/test_bisect.py", "tests/test_screens.py")
+    assert marked
+    assert all(item.startswith("tests/test_bisect.py::") for item in marked)
+    assert any(item.startswith("tests/test_screens.py::") for item in unmarked)
+    assert not any(item.startswith("tests/test_bisect.py::") for item in unmarked)
