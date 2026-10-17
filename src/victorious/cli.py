@@ -16,6 +16,7 @@ from victorious.analysis import analyse_with_observations
 from victorious.cache import ObservationCache, default_cache_root
 from victorious.categorize import KEY_VARIABLE, jev_from_env
 from victorious.errors import SpeechError
+from victorious.extract import DEFAULT_TAIL, Clip, ExtractError, extract_clips, win_clips
 from victorious.labels import (
     DEFAULT_TOLERANCE,
     Labels,
@@ -35,12 +36,13 @@ from victorious.schema import MaskedAudioRecord, json_schema
 from victorious.setup import AT_KINDS, SetupResult, TimeError, parse_at, run_setup
 from victorious.speakers import DIARIZATION_REPO
 from victorious.speech import DEFAULT_MODEL, SpeechOptions, require_ready
-from victorious.video import RecordingError, RouteKind
+from victorious.video import RecordingError, RouteKind, probe
 
 SUBCOMMANDS: tuple[tuple[str, str], ...] = (
     ("setup", "produce a Layout from a Recording"),
     ("analyse", "turn a Recording and a Layout into a list of Events"),
     ("review", "confirm or reject the detected Matches into a labels file"),
+    ("extract", "cut the Wins of an analysis out of its Recording into one video"),
     ("schema", "print the JSON schema of the Analysis output"),
 )
 
@@ -240,6 +242,30 @@ def build_parser() -> argparse.ArgumentParser:
                 metavar="SECONDS",
                 help=f"with --against, how far a Match boundary may move "
                 f"(default: {DEFAULT_TOLERANCE:g})",
+            )
+        if name == "extract":
+            sub.add_argument("analysis", type=Path, help="the JSON `analyse` wrote")
+            sub.add_argument("--wins", action="store_true", required=True, help="extract the Wins")
+            sub.add_argument(
+                "-o",
+                "--output",
+                type=Path,
+                required=True,
+                help="write the video here (the extension picks the container, e.g. wins.mkv); "
+                "an existing file is replaced",
+            )
+            sub.add_argument(
+                "--recording",
+                type=Path,
+                help="the Recording the analysis is of (default: the path written in the JSON)",
+            )
+            sub.add_argument(
+                "--tail",
+                type=_non_negative_seconds,
+                default=DEFAULT_TAIL,
+                metavar="SECONDS",
+                help="keep this long after each results screen appears, so the Victory Royale "
+                f"screen shows (default: {DEFAULT_TAIL:g})",
             )
         if name in {"analyse", "schema"}:
             sub.add_argument("-o", "--output", type=Path, help="write JSON here, not to stdout")
@@ -534,6 +560,38 @@ def _run_compare(args: argparse.Namespace) -> int:
     return 1 if differences else 0
 
 
+def _run_extract(args: argparse.Namespace) -> int:
+    output = load_analysis(args.analysis)
+    recording: Path = args.recording or Path(output.recording.path)
+    _require_writable_directory(args.output)
+    if not recording.is_file():
+        raise RecordingError(
+            f"Recording not found: {recording} (pass --recording PATH to say where it is)"
+        )
+    if args.output.resolve() in (args.analysis.resolve(), recording.resolve()):
+        raise OSError(f"--output must not name the analysis or the Recording: {args.output}")
+    clips = win_clips(output, args.tail, probe(recording).duration)
+    if not clips:
+        raise ExtractError(f"no Win in {args.analysis}, so there is nothing to extract")
+
+    def announce(position: int, clip: Clip) -> None:
+        print(
+            f"victorious extract: cutting Match {clip.index} ({clip.start:g} s to "
+            f"{clip.end:g} s), {position + 1} of {len(clips)}",
+            file=sys.stderr,
+            flush=True,
+        )
+
+    extract_clips(recording, clips, args.output, announce)
+    total = sum(clip.end - clip.start for clip in clips)
+    print(
+        f"victorious extract: wrote {args.output} ({len(clips)} Win"
+        f"{'s' if len(clips) != 1 else ''}, {total:.0f} s)",
+        file=sys.stderr,
+    )
+    return 0
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
@@ -549,6 +607,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 print(f"victorious review: error: {problem}", file=sys.stderr)
                 return 2
             return _run_compare(args) if args.against is not None else _run_review(args)
+        if args.command == "extract":
+            return _run_extract(args)
         _require_writable_directory(args.output)
         sidecar: str | None = None
         if args.command == "schema":
@@ -561,6 +621,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             _emit(sidecar, args.observations)
         _emit(text, args.output)
     except (
+        ExtractError,
         LabelsError,
         LayoutError,
         ReviewError,
