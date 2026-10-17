@@ -47,7 +47,8 @@ jobs:
       - name: Choose the tests to run
         env:
           EVENT: ${{ github.event_name }}
-        # Pull requests and pushes run the fast tier in parallel: no `e2e` tests (the whole pipeline
+        # Pull requests and pushes run the fast tier on 2 workers (each test already fans out over
+        # every CPU, so more workers only oversubscribe the runner): no `e2e` tests (the whole pipeline
         # on built Recordings), no coverage, and no `slow_models` tests unless a pull request touches
         # a path in slow-models-paths.txt (HEAD^1 is the merge commit's base). The nightly run and
         # workflow_dispatch run everything, serially, with coverage.
@@ -59,14 +60,13 @@ jobs:
               ;;
             *)
               markers='not e2e and not slow_models'
-              workers=auto
+              workers=2
               if [ "$EVENT" = pull_request ]; then
                 changed=$(git diff --no-renames --name-only HEAD^1 HEAD)
                 needed=0
                 printf '%s\n' "$changed" | .github/scripts/slow-models-needed.sh || needed=$?
                 if [ "$needed" != 1 ]; then
                   markers='not e2e'
-                  workers=2
                 fi
               fi
               echo "tests: $markers, $workers workers"
