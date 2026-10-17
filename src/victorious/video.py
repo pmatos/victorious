@@ -46,7 +46,7 @@ class VideoInfo:
     pix_fmt: str = ""
 
 
-def _tool(name: str) -> str:
+def tool(name: str) -> str:
     path = shutil.which(name)
     if path is None:
         raise RecordingError(f"{name} not found on PATH; install ffmpeg")
@@ -58,7 +58,7 @@ def probe(path: Path) -> VideoInfo:
         raise RecordingError(f"Recording not found: {path}")
     result = subprocess.run(
         [
-            _tool("ffprobe"), "-v", "error", "-show_streams", "-show_format",
+            tool("ffprobe"), "-v", "error", "-show_streams", "-show_format",
             "-of", "json", str(path),
         ],
         capture_output=True,
@@ -143,7 +143,7 @@ def _command(
 ) -> list[str]:
     """ffmpeg's frames of [start, start + length) at `rate` per second, as raw BGR."""
     seek = ["-ss", _seconds(start)] + (["-t", _seconds(length)] if length is not None else [])
-    base = [_tool("ffmpeg"), "-v", "error", "-nostdin"]
+    base = [tool("ffmpeg"), "-v", "error", "-nostdin"]
     if hardware is None:
         pool = ["-threads", str(threads)] if threads > 0 else []
         return [
@@ -274,7 +274,7 @@ def sample_window(
 def sample_audio(path: Path, start: float, end: float, stream: int) -> np.ndarray:
     """Mono 16 kHz samples of [start, end) of audio stream `stream`, as float32 in [-1, 1]."""
     command = [
-        _tool("ffmpeg"), "-v", "error", "-nostdin", "-ss", f"{start:g}", "-t", f"{end - start:g}",
+        tool("ffmpeg"), "-v", "error", "-nostdin", "-ss", f"{start:g}", "-t", f"{end - start:g}",
         "-i", str(path), "-map", f"0:a:{stream}", "-vn", "-sn", "-ac", "1",
         "-ar", str(AUDIO_RATE), "-f", "f32le", "-",
     ]  # fmt: skip

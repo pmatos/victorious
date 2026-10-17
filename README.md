@@ -2,7 +2,7 @@
 
 Turns long Fortnite gameplay Recordings into a timestamped record of what happened in each Match: Wins, final placement, eliminations and speech.
 
-All four subcommands work. The remaining work is tracked in [epic #13](https://github.com/pmatos/victorious/issues/13).
+All five subcommands work. The remaining work is tracked in [epic #13](https://github.com/pmatos/victorious/issues/13).
 
 ## Installation
 
@@ -157,6 +157,14 @@ done
 
 and the reason for each failure is the last line of its log: `tail -n 1 results/NAME.log`.
 
+### 7. Cut the Wins into one video
+
+```bash
+uv run victorious extract analysis.json --wins -o wins.mkv
+```
+
+`extract` reads the JSON `analyse` wrote, cuts every Win out of the Recording and joins them, in order, into `wins.mkv`. Each cut runs from the start of the Match to a few seconds after its results screen appears, so the Victory Royale screen is in the video. It is re-encoded (H.264, AAC), not copied, so each cut starts on its exact second; that is slow: two Wins of 19 minutes each from a 2560x1440 Recording took about 35 minutes (on a busy machine) and made a 7.5 GB file. Reading the output is covered under [Extract](#extract).
+
 ### How long a run takes
 
 Times below were measured on three real 2560x1440 AV1 Recordings of 61 to 83 minutes, on a machine with 24 logical CPUs and VAAPI hardware decode. Treat them as indicative: the machine was also busy with other work, and times on an overloaded one stretch a lot (frames-only runs of 10 minute cuts took 197 s and 233 s while its load average was about 40; an 8 minute cut took 80 s once the load fell).
@@ -258,6 +266,7 @@ uv run victorious --help
 | `setup` | Produce a Layout from a Recording | working (auto-detect, or `--manual` in a local browser page) |
 | `analyse` | Turn a Recording and a Layout into Matches with Events | working (Matches, Win, final placement, HUD counters, speech with Speakers) |
 | `review` | Confirm or reject the detected Matches into a labels file, or compare a run against one | working |
+| `extract` | Cut the Wins of an analysis out of its Recording and join them into one video | working (`--wins`) |
 | `schema` | Print the JSON schema of the Analysis output | working |
 
 ### Setup
@@ -403,6 +412,23 @@ The labels file is JSON with its own `labels_version` (`1.0`), separate from the
 | `unlabelled` | a Match with no label, for example a new detection |
 
 It prints `no differences (N matches)` and exits 0 when clean, and exits 1 when there are differences. Labels for another Recording (a different file name, or a duration more than 1 s apart), a corrupt labels file or an analysis of another schema version exit 1 with a message on stderr. `--against` with `-o`, `--recording`, `--no-browser` or `--port` is a usage error (exit 2). Known limits: only detected Matches can be labelled (a Match the analysis missed cannot be added), and a Match split in two by a HUD dropout shows as `missing` plus `unlabelled`.
+
+### Extract
+
+```bash
+uv run victorious extract analysis.json --wins -o wins.mkv
+```
+
+`extract` reads the JSON `analyse` wrote (an analysis of another schema version exits 1, run `analyse` again), takes every Match with `win: true` and cuts it out of the Recording from `start` to `end + --tail`, where `end` is the first second of the results screen. The tail stops at the start of the next Match and at the end of the Recording. The cuts are re-encoded with libx264 (`-preset veryfast -crf 18`, `yuv420p`) and AAC, and then joined without re-encoding. The first video stream and every audio stream of the Recording are kept; subtitles and data streams are not. It prints one line per Win on stderr and a summary line at the end. Expect about one second of encoding per second of footage at 2560x1440, and a file of about 12 GB per hour of Wins.
+
+| Option | Meaning |
+|--------|---------|
+| `--wins` | required: extract the Wins |
+| `-o`, `--output PATH` | required: the video to write; its extension picks the container (`wins.mkv`, `wins.mp4`), an existing file is replaced and it is written whole or not at all |
+| `--recording PATH` | the Recording, when it is not at the path written in the JSON (relative to the working directory) |
+| `--tail SECONDS` | how long to keep after each results screen appears (default 8) |
+
+It exits 1 with `victorious extract: <reason>` and writes nothing when the analysis has no Win, the Recording is missing, `--output` has no extension, names the Recording or the analysis, or sits in a folder that does not exist, or ffmpeg fails. A missing `--wins` or `-o` is a usage error (exit 2). The scratch files live in a hidden folder beside the output (the cuts take about as much disk as the finished video) and are removed afterwards.
 
 ### Layout file
 

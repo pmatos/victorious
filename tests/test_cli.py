@@ -9,10 +9,10 @@ from tests.cli_runner import run_cli
 from victorious.cli import build_parser
 from victorious.speech import DEFAULT_MODEL, SpeechOptions
 
-SUBCOMMANDS = ["setup", "analyse", "review", "schema"]
+SUBCOMMANDS = ["setup", "analyse", "review", "extract", "schema"]
 
 
-def test_help_lists_the_four_subcommands() -> None:
+def test_help_lists_the_subcommands() -> None:
     result = run_cli("--help")
 
     assert result.returncode == 0
