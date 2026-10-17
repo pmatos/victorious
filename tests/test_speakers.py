@@ -44,6 +44,7 @@ pytestmark = pytest.mark.usefixtures("require_ffmpeg", "require_tesseract")
 def speech_on(speech_is_off_and_models_are_kept: None, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("VICTORIOUS_NO_SPEECH")
     monkeypatch.setenv("HF_TOKEN", "test-token")
+    monkeypatch.setenv("VICTORIOUS_NO_CATEGORIES", "1")
 
 
 def enrol(tmp_path: Path, **clips: Path) -> Path:
