@@ -96,6 +96,7 @@ def build_recording(spec: RecordingSpec, out_path: Path) -> Path:
             "-c:v", "libx264", "-preset", "ultrafast", "-crf", str(spec.crf),
             "-g", keyframes, "-keyint_min", keyframes, "-sc_threshold", "0",
             "-c:a", "aac", "-ar", str(SAMPLE_RATE), "-ac", "2",
+            "-max_interleave_delta", "0",
             "-t", f"{spec.duration!r}", str(out_path),
         ]  # fmt: skip
         result = subprocess.run(command, capture_output=True, text=True, check=False)

@@ -1,6 +1,5 @@
 """Behaviour of `victorious extract --wins`."""
 
-import subprocess
 from pathlib import Path
 
 import pytest
@@ -9,7 +8,7 @@ from tests.cli_runner import run_cli
 from tests.synthetic import RecordingSpec, build_recording, match_shots
 from victorious.extract import win_clips
 from victorious.schema import AnalysisOutput, Match, RecordingInfo
-from victorious.video import probe, tool
+from victorious.video import probe
 
 DURATION = 85.0
 KEYFRAME_INTERVAL = 2
@@ -59,15 +58,7 @@ def recording(tmp_path_factory: pytest.TempPathFactory, require_ffmpeg: None) ->
         height=360,
         keyframe_interval=KEYFRAME_INTERVAL,
     )
-    folder = tmp_path_factory.mktemp("recording")
-    built = build_recording(spec, folder / "built.mkv")
-    # the encoder leaves the audio about 40 s behind the video in the file, unlike a real OBS
-    # Recording; a remux interleaves them by time
-    path = folder / "recording.mkv"
-    subprocess.run(
-        [tool("ffmpeg"), "-v", "error", "-i", str(built), "-c", "copy", str(path)], check=True
-    )
-    return path
+    return build_recording(spec, tmp_path_factory.mktemp("recording") / "recording.mkv")
 
 
 def test_the_wins_are_cut_and_joined_with_a_tail_after_each(
