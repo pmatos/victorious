@@ -1,5 +1,6 @@
 """Behaviour of `victorious extract --wins`."""
 
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -8,9 +9,10 @@ from tests.cli_runner import run_cli
 from tests.synthetic import RecordingSpec, build_recording, match_shots
 from victorious.extract import win_clips
 from victorious.schema import AnalysisOutput, Match, RecordingInfo
-from victorious.video import probe
+from victorious.video import probe, tool
 
 DURATION = 85.0
+KEYFRAME_INTERVAL = 2
 SPANS = [(2.0, 20.0, True), (30.0, 45.0, False), (60.0, 75.0, True)]
 
 
@@ -50,9 +52,22 @@ def recording(tmp_path_factory: pytest.TempPathFactory, require_ffmpeg: None) ->
         *match_shots(60, ((0, 0, 0, 99),), 75, placement=1),
     )
     spec = RecordingSpec(
-        duration=DURATION, shots=shots, fps=5.0, width=640, height=360, keyframe_interval=2
+        duration=DURATION,
+        shots=shots,
+        fps=5.0,
+        width=640,
+        height=360,
+        keyframe_interval=KEYFRAME_INTERVAL,
     )
-    return build_recording(spec, tmp_path_factory.mktemp("recording") / "recording.mkv")
+    folder = tmp_path_factory.mktemp("recording")
+    built = build_recording(spec, folder / "built.mkv")
+    # the encoder leaves the audio about 40 s behind the video in the file, unlike a real OBS
+    # Recording; a remux interleaves them by time
+    path = folder / "recording.mkv"
+    subprocess.run(
+        [tool("ffmpeg"), "-v", "error", "-i", str(built), "-c", "copy", str(path)], check=True
+    )
+    return path
 
 
 def test_the_wins_are_cut_and_joined_with_a_tail_after_each(
@@ -67,11 +82,39 @@ def test_the_wins_are_cut_and_joined_with_a_tail_after_each(
     assert "cutting Match 0" in result.stderr
     assert "cutting Match 2" in result.stderr
     assert "wrote" in result.stderr
-    assert probe(output).duration == pytest.approx((23 - 2) + (78 - 60), abs=1.0)
+    wanted = (23 - 2) + (78 - 60)
+    assert wanted - 1.0 <= probe(output).duration <= wanted + 2 * KEYFRAME_INTERVAL + 1.0
     assert sorted(path.name for path in tmp_path.iterdir()) == [
         "analysis.json",
         "wins.mkv",
     ]
+
+
+def test_exact_cuts_are_re_encoded_to_start_on_their_second(
+    recording: Path, tmp_path: Path
+) -> None:
+    analysis = _write(tmp_path / "analysis.json", _analysis(recording, [(3.0, 20.0, True)]))
+    output = tmp_path / "wins.mkv"
+
+    result = run_cli(
+        "extract", str(analysis), "--wins", "--exact", "-o", str(output), "--tail", "3"
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert probe(output).duration == pytest.approx(23 - 3, abs=1.0)
+    assert probe(output).codec == "h264"
+
+
+def test_copied_cuts_keep_the_codec_of_the_recording(recording: Path, tmp_path: Path) -> None:
+    analysis = _write(tmp_path / "analysis.json", _analysis(recording, [(3.0, 20.0, True)]))
+    output = tmp_path / "wins.mkv"
+
+    result = run_cli("extract", str(analysis), "--wins", "-o", str(output), "--tail", "3")
+
+    assert result.returncode == 0, result.stderr
+    early = probe(output).duration - (23 - 3)
+    assert -1.0 <= early <= KEYFRAME_INTERVAL + 1.0
+    assert probe(output).codec == probe(recording).codec
 
 
 def test_the_recording_can_be_given_when_the_analysis_path_is_stale(

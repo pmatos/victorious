@@ -163,7 +163,7 @@ and the reason for each failure is the last line of its log: `tail -n 1 results/
 uv run victorious extract analysis.json --wins -o wins.mkv
 ```
 
-`extract` reads the JSON `analyse` wrote, cuts every Win out of the Recording and joins them, in order, into `wins.mkv`. Each cut runs from the start of the Match to a few seconds after its results screen appears, so the Victory Royale screen is in the video. It is re-encoded (H.264, AAC), not copied, so each cut starts on its exact second; that is slow: two Wins of 19 minutes each from a 2560x1440 Recording took about 35 minutes (on a busy machine) and made a 7.5 GB file. Reading the output is covered under [Extract](#extract).
+`extract` reads the JSON `analyse` wrote, cuts every Win out of the Recording and joins them, in order, into `wins.mkv`. Each cut runs from the start of the Match to a few seconds after its results screen appears, so the Victory Royale screen is in the video. The streams are copied, not re-encoded, so it takes seconds (two Wins of 19 minutes each from a 2560x1440 Recording took 20 s) and the video keeps the Recording's quality, but each cut starts at the keyframe at or before its Match start: a few seconds of lobby or bus before the Match. Add `--exact` to re-encode so each cut starts on its exact second; that took about 35 minutes for the same two Wins. Reading the output is covered under [Extract](#extract).
 
 ### How long a run takes
 
@@ -419,13 +419,14 @@ It prints `no differences (N matches)` and exits 0 when clean, and exits 1 when 
 uv run victorious extract analysis.json --wins -o wins.mkv
 ```
 
-`extract` reads the JSON `analyse` wrote (an analysis of another schema version exits 1, run `analyse` again), takes every Match with `win: true` and cuts it out of the Recording from `start` to `end + --tail`, where `end` is the first second of the results screen. The tail stops at the start of the next Match and at the end of the Recording. The cuts are re-encoded with libx264 (`-preset veryfast -crf 18`, `yuv420p`) and AAC, and then joined without re-encoding. The first video stream and every audio stream of the Recording are kept; subtitles and data streams are not. It prints one line per Win on stderr and a summary line at the end. Expect about one second of encoding per second of footage at 2560x1440, and a file of about 12 GB per hour of Wins.
+`extract` reads the JSON `analyse` wrote (an analysis of another schema version exits 1, run `analyse` again), takes every Match with `win: true` and cuts it out of the Recording from `start` to `end + --tail`, where `end` is the first second of the results screen. The tail stops at the start of the next Match and at the end of the Recording. The streams are copied (the codecs of the Recording are kept), so a cut starts at the keyframe at or before `start`, up to one keyframe interval early (about 4 s in a real OBS Recording) and the cuts are then joined, also without re-encoding. With `--exact` each cut is instead re-encoded with libx264 (`-preset veryfast -crf 18`, `yuv420p`) and AAC so it starts on its exact second; that takes about one second per second of footage at 2560x1440 and makes a file of about 12 GB per hour of Wins. The first video stream and every audio stream of the Recording are kept; subtitles and data streams are not. It prints one line per Win on stderr and a summary line at the end. A copied file is about the size of the footage it holds, which is large for a high bitrate Recording (about 16 GB per hour for the one tried).
 
 | Option | Meaning |
 |--------|---------|
 | `--wins` | required: extract the Wins |
 | `-o`, `--output PATH` | required: the video to write; its extension picks the container (`wins.mkv`, `wins.mp4`), an existing file is replaced and it is written whole or not at all |
 | `--recording PATH` | the Recording, when it is not at the path written in the JSON (relative to the working directory) |
+| `--exact` | re-encode each cut so it starts on its exact second, instead of copying the streams (much slower) |
 | `--tail SECONDS` | how long to keep after each results screen appears (default 8) |
 
 It exits 1 with `victorious extract: <reason>` and writes nothing when the analysis has no Win, the Recording is missing, `--output` has no extension, names the Recording or the analysis, or sits in a folder that does not exist, or ffmpeg fails. A missing `--wins` or `-o` is a usage error (exit 2). The scratch files live in a hidden folder beside the output (the cuts take about as much disk as the finished video) and are removed afterwards.

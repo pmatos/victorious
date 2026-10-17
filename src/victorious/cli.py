@@ -260,6 +260,13 @@ def build_parser() -> argparse.ArgumentParser:
                 help="the Recording the analysis is of (default: the path written in the JSON)",
             )
             sub.add_argument(
+                "--exact",
+                action="store_true",
+                help="re-encode each cut so it starts on its exact second; by default the "
+                "streams are copied, which is far faster but starts at the keyframe at or "
+                "before the Match start",
+            )
+            sub.add_argument(
                 "--tail",
                 type=_non_negative_seconds,
                 default=DEFAULT_TAIL,
@@ -582,7 +589,7 @@ def _run_extract(args: argparse.Namespace) -> int:
             flush=True,
         )
 
-    extract_clips(recording, clips, args.output, announce)
+    extract_clips(recording, clips, args.output, announce, exact=args.exact)
     total = sum(clip.end - clip.start for clip in clips)
     print(
         f"victorious extract: wrote {args.output} ({len(clips)} Win"
