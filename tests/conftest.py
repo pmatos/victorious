@@ -15,11 +15,31 @@ REAL_HF_HOME = os.environ.get("HF_HOME") or str(
 os.environ["VICTORIOUS_NO_SPEECH"] = "1"
 
 
+E2E_MODULES = frozenset(
+    {
+        "test_bisect",
+        "test_counter_row",
+        "test_eliminated",
+        "test_input_robustness",
+        "test_layout_selection",
+        "test_observation_cache",
+        "test_observations_sidecar",
+        "test_parallel_decode",
+        "test_setup",
+        "test_setup_manual",
+    }
+)
+
+
 def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
-    """Marks every test that turns speech on (so loads the real models) as `slow_models`."""
+    """Marks every test that turns speech on (so loads the real models) as `slow_models`, and
+    every test of a module in `E2E_MODULES` (each runs the whole pipeline on built Recordings) as
+    `e2e`."""
     for item in items:
         if "speech_on" in getattr(item, "fixturenames", ()):
             item.add_marker(pytest.mark.slow_models)
+        if item.path.stem in E2E_MODULES:
+            item.add_marker(pytest.mark.e2e)
 
 
 @pytest.fixture(scope="session")

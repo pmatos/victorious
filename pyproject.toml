@@ -34,6 +34,7 @@ dev = [
     "mypy>=2.3.0",
     "pytest>=9.1.1",
     "pytest-cov>=7.1.0",
+    "pytest-xdist>=3.8.0",
     "ruff>=0.15.21",
     "types-jsonschema>=4.26.0.20261006",
     "types-pyyaml>=6.0.12.20260906",
@@ -60,6 +61,7 @@ ignore_missing_imports = true
 testpaths = ["tests"]
 addopts = "-q"
 markers = [
+    "e2e: runs the whole pipeline on built Recordings; CI runs it nightly and on demand, not on pull requests or pushes",
     "slow_models: loads the real Whisper, YAMNet or pyannote models; CI skips it on pull requests that leave the speech code alone",
 ]
 
