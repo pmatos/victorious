@@ -146,6 +146,14 @@ def build_parser() -> argparse.ArgumentParser:
                 "needed (default when VICTORIOUS_NO_SPEECH is set)",
             )
             sub.add_argument(
+                "--no-categories",
+                action="store_true",
+                default=os.environ.get("VICTORIOUS_NO_CATEGORIES", "").lower()
+                in {"1", "true", "yes"},
+                help=f"run speech without {KEY_VARIABLE}: every transcript category is null "
+                "(default when VICTORIOUS_NO_CATEGORIES is set)",
+            )
+            sub.add_argument(
                 "--voices",
                 type=Path,
                 metavar="DIR",
@@ -286,6 +294,12 @@ def _run_analyse(args: argparse.Namespace) -> tuple[str, str | None]:
     speech = None
     categorizer = None
     if not args.no_speech:
+        categorizer = jev_from_env(os.environ)
+        if categorizer is None and not args.no_categories:
+            raise SpeechError(
+                f"no {KEY_VARIABLE} set: transcript categories need it; set it, "
+                "or pass --no-categories to leave every category null"
+            )
         if args.voices is not None and not args.voices.is_dir():
             if args.voices.exists():
                 raise SpeechError(
@@ -304,7 +318,6 @@ def _run_analyse(args: argparse.Namespace) -> tuple[str, str | None]:
             diarization_model=args.diarization_model,
         )
         require_ready(speech)
-        categorizer = jev_from_env(os.environ)
     layouts = load_layouts(args.layout)
     cache = None if args.no_cache else ObservationCache(args.cache_dir or default_cache_root())
     started = time.monotonic()
@@ -348,13 +361,7 @@ def _run_analyse(args: argparse.Namespace) -> tuple[str, str | None]:
             print(decoded, file=sys.stderr)
         if count:
             segments = f"{count} segment{'s' if count != 1 else ''}"
-            if categorizer is None:
-                print(
-                    f"victorious analyse: note: no {KEY_VARIABLE} set, so the categories of the "
-                    f"{segments} are null",
-                    file=sys.stderr,
-                )
-            elif analysis.categorized < count:
+            if categorizer is not None and analysis.categorized < count:
                 print(
                     f"victorious analyse: warning: Jev did not categorize "
                     f"{count - analysis.categorized} of {segments}: {analysis.category_failure}",

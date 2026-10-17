@@ -132,10 +132,27 @@ def test_only_the_transcript_text_is_sent(judged: Run) -> None:
 
 
 @end_to_end
-def test_without_the_key_categories_are_null_and_the_run_succeeds(tmp_path: Path) -> None:
+def test_without_the_key_the_run_stops_before_any_work(tmp_path: Path) -> None:
     with JevStub(verdict) as stub:
         code, document, stderr = analyse_with(
             tmp_path, env={**configured(stub), "TYPESAFE_API_KEY": "  "}
+        )
+
+    assert code == 1
+    assert document is None
+    assert stub.requests == []
+    assert "TYPESAFE_API_KEY" in stderr
+    assert "--no-categories" in stderr
+    assert "Traceback" not in stderr
+
+
+@end_to_end
+def test_no_categories_runs_without_the_key_and_leaves_categories_null(tmp_path: Path) -> None:
+    with JevStub(verdict) as stub:
+        code, document, stderr = analyse_with(
+            tmp_path,
+            "--no-categories",
+            env={**configured(stub), "TYPESAFE_API_KEY": "  "},
         )
 
     assert code == 0
@@ -144,8 +161,7 @@ def test_without_the_key_categories_are_null_and_the_run_succeeds(tmp_path: Path
     assert len(spoken) == 2
     assert [(e["category"], e["category_confidence"]) for e in spoken] == [(None, None)] * 2
     assert stub.requests == []
-    assert "TYPESAFE_API_KEY" in stderr
-    assert "Traceback" not in stderr
+    assert "TYPESAFE_API_KEY" not in stderr
 
 
 @end_to_end
