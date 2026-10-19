@@ -9,6 +9,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from victorious.errors import SpeechError
+
 MODES = ("auto", "cpu", "cuda")
 MODE_VARIABLE = "VICTORIOUS_DEVICE"
 
@@ -19,10 +21,6 @@ class Device:
 
     name: str
     compute_type: str
-
-    @property
-    def is_cuda(self) -> bool:
-        return self.name == "cuda"
 
 
 CPU = Device("cpu", "int8")
@@ -61,35 +59,35 @@ def expose_cuda_libraries() -> None:
 def _cuda_devices() -> int:
     try:
         import ctranslate2
-    except ImportError:
-        return 0
-    try:
+
         return int(ctranslate2.get_cuda_device_count())
     except Exception:
         return 0
 
 
-def whisper_device(
-    env: Mapping[str, str] | None = None, cuda_devices: Callable[[], int] = _cuda_devices
-) -> Device:
-    """CUDA when the mode allows it and CTranslate2 sees an NVIDIA GPU, else the CPU.
-
-    `cuda` is returned even without a GPU, so that loading the model fails with the reason.
-    """
-    mode = mode_from(os.environ if env is None else env)
-    if mode == "cpu":
-        return CPU
-    if mode == "cuda":
-        return CUDA
-    return CUDA if cuda_devices() > 0 else CPU
+def wants_cuda(mode: str, gpu_seen: Callable[[], bool]) -> bool:
+    """`cuda` insists on the GPU even when none is seen, so that loading fails with the reason;
+    `auto` uses it when one is seen; `cpu` never looks."""
+    return mode == "cuda" or (mode == "auto" and gpu_seen())
 
 
-def torch_device(torch: Any, env: Mapping[str, str] | None = None) -> Any:
+def whisper_device(mode: str, cuda_devices: Callable[[], int] = _cuda_devices) -> Device:
+    """CUDA when the mode allows it and CTranslate2 sees an NVIDIA GPU, else the CPU."""
+    return CUDA if wants_cuda(mode, lambda: cuda_devices() > 0) else CPU
+
+
+def torch_device(torch: Any, mode: str) -> Any:
     """The torch device for the diarization pipeline, by the same rule as Whisper's."""
-    mode = mode_from(os.environ if env is None else env)
-    if mode == "cuda" or (mode == "auto" and torch.cuda.is_available()):
-        return torch.device("cuda")
-    return torch.device("cpu")
+    return torch.device("cuda" if wants_cuda(mode, torch.cuda.is_available) else "cpu")
+
+
+def fall_back(mode: str, model: str, error: Exception, message: str) -> None:
+    """A GPU that failed `model`: an error in `cuda` mode, else `message` noted for the CPU run."""
+    if mode == "cuda":
+        raise SpeechError(
+            f"cannot run {model} on CUDA: {error}; unset {MODE_VARIABLE} to fall back to the CPU"
+        ) from error
+    note(message)
 
 
 def note(message: str) -> None:

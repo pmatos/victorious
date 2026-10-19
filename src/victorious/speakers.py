@@ -243,7 +243,8 @@ def _on_gpu(pipeline: Any, embedder: Any, torch: Any) -> bool:
     on a GPU torch has no kernels for. In `auto` mode a GPU that cannot take them is noted
     and both stay on the CPU.
     """
-    device = gpu.torch_device(torch)
+    mode = gpu.mode_from(os.environ)
+    device = gpu.torch_device(torch, mode)
     if device.type != "cuda":
         return False
     try:
@@ -251,14 +252,14 @@ def _on_gpu(pipeline: Any, embedder: Any, torch: Any) -> bool:
         embedder.to(device)
         embedder({"waveform": torch.zeros(1, AUDIO_RATE), "sample_rate": AUDIO_RATE})
     except Exception as error:
-        if gpu.mode_from(os.environ) == "cuda":
-            raise SpeechError(
-                f"cannot run the diarization model on CUDA: {error}; "
-                f"unset {gpu.MODE_VARIABLE} to fall back to the CPU"
-            ) from error
+        gpu.fall_back(
+            mode,
+            "the diarization model",
+            error,
+            f"diarization cannot use the GPU ({error}); running on the CPU",
+        )
         pipeline.to(torch.device("cpu"))
         embedder.to(torch.device("cpu"))
-        gpu.note(f"diarization cannot use the GPU ({error}); running on the CPU")
         return False
     gpu.note("speech: diarization on the GPU (CUDA)")
     return True

@@ -120,13 +120,13 @@ def _load_library(name: str) -> ctypes.CDLL | None:
     return library
 
 
-def _beside_command() -> str | None:
+@functools.cache
+def _beside_command() -> Path | None:
     """On Windows, the DLL installed next to `tesseract.exe` (the UB Mannheim build)."""
     command = shutil.which("tesseract")
     if command is None:
         return None
-    found = sorted(Path(command).parent.glob("libtesseract*.dll"))
-    return str(found[0]) if found else None
+    return min(Path(command).parent.glob("libtesseract*.dll"), default=None)
 
 
 @functools.cache
@@ -136,15 +136,16 @@ def _datapath() -> bytes | None:
     if sys.platform != "win32" or "TESSDATA_PREFIX" in os.environ:
         return None
     dll = _beside_command()
-    folder = None if dll is None else Path(dll).parent / "tessdata"
-    return str(folder).encode() if folder is not None and folder.is_dir() else None
+    if dll is None or not (folder := dll.parent / "tessdata").is_dir():
+        return None
+    return str(folder).encode()
 
 
 @functools.cache
 def _load_tesseract() -> ctypes.CDLL | None:
     names = ["libtesseract.so.5", ctypes.util.find_library("tesseract")]
-    if sys.platform == "win32":
-        names.insert(0, _beside_command())
+    if sys.platform == "win32" and (dll := _beside_command()) is not None:
+        names.insert(0, str(dll))
     for name in names:
         if name is not None and (library := _load_library(name)) is not None:
             return library

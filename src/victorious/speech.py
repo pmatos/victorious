@@ -129,20 +129,21 @@ def _load_model(name: str) -> Any:
 
     In `auto` mode a GPU that fails to load or run the model is noted once and the CPU is used.
     """
-    device = gpu.whisper_device()
-    if not device.is_cuda:
-        return _load_on(name, gpu.CPU)
+    mode = gpu.mode_from(os.environ)
+    device = gpu.whisper_device(mode)
+    if device == gpu.CPU:
+        return _load_on(name, device)
     gpu.expose_cuda_libraries()
     try:
         model = _load_on(name, device)
         model.detect_language(np.zeros(AUDIO_RATE, dtype="float32"))
     except (SpeechError, RuntimeError, ValueError) as error:
-        if gpu.mode_from(os.environ) == "cuda":
-            raise SpeechError(
-                f"cannot run the Whisper model {name!r} on CUDA: {error}; "
-                f"unset {gpu.MODE_VARIABLE} to fall back to the CPU"
-            ) from error
-        gpu.note(f"Whisper cannot use the GPU ({error}); transcribing on the CPU")
+        gpu.fall_back(
+            mode,
+            f"the Whisper model {name!r}",
+            error,
+            f"Whisper cannot use the GPU ({error}); transcribing on the CPU",
+        )
         return _load_on(name, gpu.CPU)
     gpu.note("speech: Whisper on the GPU (CUDA)")
     return model
