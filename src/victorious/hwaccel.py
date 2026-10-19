@@ -9,6 +9,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
 
+from victorious.gpu import wants_cuda
+
 DRI = Path("/dev/dri")
 DRM = Path("/sys/class/drm")
 MODES = ("auto", "off", "vaapi", "cuda")
@@ -32,7 +34,7 @@ class HwDecoder:
     (None: let libva choose), or with `api` "cuda" the index of an NVIDIA GPU (no driver)."""
 
     device: str
-    driver: str | None
+    driver: str | None = None
     api: Literal["vaapi", "cuda"] = "vaapi"
 
 
@@ -87,11 +89,7 @@ def nvidia_present(directory: Path | None = None, drm: Path | None = None) -> bo
     return any(_vendor(device, drm) == NVIDIA for device in render_devices(directory))
 
 
-def decoders(
-    mode: str,
-    env: Mapping[str, str] | None = None,
-    nvidia: Callable[[], bool] | None = None,
-) -> list[HwDecoder]:
+def decoders(mode: str, env: Mapping[str, str] | None = None) -> list[HwDecoder]:
     """What `mode` probes, in order: in `auto` the NVIDIA GPU first (when there is one or
     VICTORIOUS_CUDA_DEVICE names it), then the VAAPI candidates.
 
@@ -99,14 +97,9 @@ def decoders(
     """
     env = os.environ if env is None else env
     explicit = env.get(CUDA_DEVICE_VARIABLE)
-    cuda = [HwDecoder(explicit or "0", None, "cuda")]
-    if mode == "cuda":
-        return cuda
-    vaapi = candidates(env)
-    if mode == "vaapi":
-        return vaapi
-    present = bool(explicit) or (nvidia or nvidia_present)()
-    return [*(cuda if present else []), *vaapi]
+    seen = wants_cuda(mode, lambda: bool(explicit) or nvidia_present())
+    cuda = [HwDecoder(explicit or "0", api="cuda")] if seen else []
+    return [*cuda, *([] if mode == "cuda" else candidates(env))]
 
 
 def environment(decoder: HwDecoder, base: Mapping[str, str] | None = None) -> dict[str, str]:
@@ -139,7 +132,6 @@ _lock = threading.Lock()
 _resolved: dict[tuple[str, ...], HwDecoder | None] = {}
 _mode: str | None = None
 _noted: Any = threading.Event()
-_failed = False
 _failures = 0
 _dropped: set[HwDecoder] = set()
 FAILURE_LIMIT = 3
@@ -165,11 +157,10 @@ def current_mode() -> str:
 
 
 def reset() -> None:
-    global _mode, _noted, _failed, _failures
+    global _mode, _noted, _failures
     with _lock:
         _resolved.clear()
         _mode = None
-        _failed = False
         _failures = 0
         _dropped.clear()
         _noted = threading.Event()
@@ -198,7 +189,8 @@ def record_success() -> None:
 
 
 def is_disabled() -> bool:
-    return _failed
+    """A decoder was dropped and nothing has replaced it: this process decodes in software."""
+    return bool(_dropped) and not any(_resolved.values())
 
 
 def share(noted: Any) -> Shared:
@@ -229,9 +221,8 @@ def resolve(key: tuple[str, ...], check: Callable[[HwDecoder], str | None]) -> H
     Decided once per process for a given `key`; `off` never probes, and `auto` is silent on a
     machine without a render device or an NVIDIA GPU.
     """
-    global _failed
     mode = current_mode()
-    if mode == "off" or _failed:
+    if mode == "off":
         return None
     key = (mode, *key)
     with _lock:
@@ -247,8 +238,6 @@ def resolve(key: tuple[str, ...], check: Callable[[HwDecoder], str | None]) -> H
                 break
             problems.setdefault(candidate.api, problem)
         _resolved[key] = chosen
-        if chosen is None and _dropped:
-            _failed = True
     if chosen is None and (tried or mode != "auto"):
         # The first problem of each kind of GPU, so a VAAPI fix is not hidden behind CUDA's.
         reasons = "; ".join(problems.values()) or "no render device"

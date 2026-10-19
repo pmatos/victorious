@@ -24,6 +24,7 @@ MODES = [
     ("vaapi", hwaccel.DEVICE_VARIABLE, BOGUS),
     ("cuda", hwaccel.CUDA_DEVICE_VARIABLE, BOGUS_GPU),
 ]
+HARDWARE = [mode for mode, _, _ in MODES]
 
 
 def a_spec() -> RecordingSpec:
@@ -135,7 +136,7 @@ def test_the_probe_runs_once_per_process(
     assert shim.decodes(matching="vaapi") == probes
 
 
-@pytest.mark.parametrize("mode", ["vaapi", "cuda"])
+@pytest.mark.parametrize("mode", HARDWARE)
 def test_hardware_frames_equal_software_frames(recording: Path, mode: str) -> None:
     requires_hardware(recording, mode)
     hwaccel.configure("off")
@@ -327,16 +328,16 @@ def test_analyse_output_is_identical_whatever_the_hardware_mode(tmp_path: Path) 
             recording, layout, "--no-cache", "--hwaccel", mode, env={variable: missing}
         )
 
-        assert bogus.returncode == 0, bogus.stderr
-        assert bogus.stdout == off.stdout
-        assert sum("hardware decode" in line for line in bogus.stderr.splitlines()) == 1
+        assert bogus.returncode == 0, (mode, bogus.stderr)
+        assert bogus.stdout == off.stdout, mode
+        assert sum("hardware decode" in line for line in bogus.stderr.splitlines()) == 1, mode
 
 
 def chunk_lines(shim: FfmpegShim) -> list[str]:
     return [line for line in shim.lines() if "-vf fps=1:" in line and not is_selection_seek(line)]
 
 
-@pytest.mark.parametrize("mode", ["vaapi", "cuda"])
+@pytest.mark.parametrize("mode", HARDWARE)
 @pytest.mark.parametrize("slots", [0, 1])
 def test_early_chunks_use_a_free_gpu_slot_else_the_cpu_and_the_last_ones_wait_for_the_gpu(
     recording: Path, tmp_path: Path, slots: int, mode: str

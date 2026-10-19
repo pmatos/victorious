@@ -107,7 +107,7 @@ def test_the_mode_comes_from_the_environment_and_defaults_to_auto() -> None:
     assert hwaccel.mode_from({"VICTORIOUS_HWACCEL": "nonsense"}) == "auto"
 
 
-GPU = HwDecoder("0", None, "cuda")
+GPU = HwDecoder("0", api="cuda")
 VAAPI = HwDecoder("/dev/dri/renderD128", None)
 
 
@@ -124,7 +124,6 @@ def resolve_on(monkeypatch: pytest.MonkeyPatch, tried: list[HwDecoder]) -> HwDec
 
 
 def test_one_failure_does_not_switch_hardware_decode_off() -> None:
-    hwaccel.reset()
 
     hwaccel.record_failure(VAAPI)
 
@@ -134,7 +133,6 @@ def test_one_failure_does_not_switch_hardware_decode_off() -> None:
 def test_consecutive_failures_switch_it_off_and_a_success_resets_the_count(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    hwaccel.reset()
     monkeypatch.setattr(hwaccel, "decoders", lambda *_: [VAAPI])
     hwaccel.configure("vaapi")
     assert hwaccel.resolve(("kind",), lambda _: None) == VAAPI
@@ -149,13 +147,11 @@ def test_consecutive_failures_switch_it_off_and_a_success_resets_the_count(
 
     assert hwaccel.resolve(("kind",), lambda _: None) is None
     assert hwaccel.is_disabled()
-    hwaccel.reset()
 
 
 def test_a_gpu_that_keeps_failing_gives_way_to_the_next_candidate(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    hwaccel.reset()
     tried: list[HwDecoder] = []
     assert resolve_on(monkeypatch, tried) == GPU
 
@@ -165,13 +161,11 @@ def test_a_gpu_that_keeps_failing_gives_way_to_the_next_candidate(
     assert resolve_on(monkeypatch, tried) == VAAPI
     assert tried == [GPU, VAAPI]
     assert not hwaccel.is_disabled()
-    hwaccel.reset()
 
 
 def test_the_note_names_the_first_problem_of_each_kind_of_gpu(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    hwaccel.reset()
     second = HwDecoder("/dev/dri/renderD129", None)
     monkeypatch.setattr(hwaccel, "decoders", lambda *_: [GPU, VAAPI, second])
     hwaccel.configure("auto")
@@ -180,7 +174,6 @@ def test_the_note_names_the_first_problem_of_each_kind_of_gpu(
     assert hwaccel.resolve(("kind",), problems.get) is None
 
     assert "hardware decode unavailable (no cuda; no va device)" in capsys.readouterr().err
-    hwaccel.reset()
 
 
 def test_auto_tries_the_nvidia_gpu_first_then_the_vaapi_devices(
@@ -189,26 +182,31 @@ def test_auto_tries_the_nvidia_gpu_first_then_the_vaapi_devices(
     vaapi = [HwDecoder("/dev/dri/renderD128", None)]
     monkeypatch.setattr(hwaccel, "candidates", lambda *_: vaapi)
 
-    assert hwaccel.decoders("auto", {}, lambda: True) == [HwDecoder("0", None, "cuda"), *vaapi]
-    assert hwaccel.decoders("auto", {}, lambda: False) == vaapi
+    monkeypatch.setattr(hwaccel, "nvidia_present", lambda: True)
+    assert hwaccel.decoders("auto", {}) == [GPU, *vaapi]
+    monkeypatch.setattr(hwaccel, "nvidia_present", lambda: False)
+    assert hwaccel.decoders("auto", {}) == vaapi
 
 
 def test_the_cuda_device_variable_picks_the_gpu_and_asks_for_it_in_auto(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(hwaccel, "candidates", lambda *_: [])
+    monkeypatch.setattr(hwaccel, "nvidia_present", lambda: False)
     env = {"VICTORIOUS_CUDA_DEVICE": "1"}
 
-    assert hwaccel.decoders("auto", env, lambda: False) == [HwDecoder("1", None, "cuda")]
-    assert hwaccel.decoders("auto", {"VICTORIOUS_CUDA_DEVICE": ""}, lambda: False) == []
+    assert hwaccel.decoders("auto", env) == [HwDecoder("1", api="cuda")]
+    assert hwaccel.decoders("auto", {"VICTORIOUS_CUDA_DEVICE": ""}) == []
 
 
 def test_a_forced_mode_probes_only_its_own_kind(monkeypatch: pytest.MonkeyPatch) -> None:
     vaapi = [HwDecoder("/dev/dri/renderD128", None)]
     monkeypatch.setattr(hwaccel, "candidates", lambda *_: vaapi)
 
-    assert hwaccel.decoders("vaapi", {}, lambda: True) == vaapi
-    assert hwaccel.decoders("cuda", {}, lambda: False) == [HwDecoder("0", None, "cuda")]
+    monkeypatch.setattr(hwaccel, "nvidia_present", lambda: True)
+    assert hwaccel.decoders("vaapi", {}) == vaapi
+    monkeypatch.setattr(hwaccel, "nvidia_present", lambda: False)
+    assert hwaccel.decoders("cuda", {}) == [GPU]
 
 
 def test_an_nvidia_render_device_counts_as_an_nvidia_gpu(
@@ -224,14 +222,14 @@ def test_an_nvidia_render_device_counts_as_an_nvidia_gpu(
 
 
 def test_cuda_decodes_on_the_chosen_gpu_and_keeps_its_frames_there_until_the_download() -> None:
-    options = hwaccel.input_options(HwDecoder("1", None, "cuda"))
+    options = hwaccel.input_options(HwDecoder("1", api="cuda"))
 
     assert options == [
         "-hwaccel", "cuda", "-hwaccel_device", "1", "-hwaccel_output_format", "cuda",
     ]  # fmt: skip
-    assert hwaccel.environment(HwDecoder("1", None, "cuda"), {"A": "1"}) == {
+    assert hwaccel.environment(HwDecoder("1", api="cuda"), {"A": "1"}) == {
         "A": "1",
         "CUDA_DEVICE_ORDER": "PCI_BUS_ID",
     }
     mine = {"CUDA_DEVICE_ORDER": "FASTEST_FIRST"}
-    assert hwaccel.environment(HwDecoder("1", None, "cuda"), mine) == mine
+    assert hwaccel.environment(HwDecoder("1", api="cuda"), mine) == mine
