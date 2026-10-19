@@ -49,7 +49,9 @@ def win_clips(output: AnalysisOutput, tail: float, duration: float) -> list[Clip
 
 
 def _run(command: list[str], what: str) -> None:
-    result = subprocess.run(command, capture_output=True, text=True, check=False)
+    result = subprocess.run(
+        command, capture_output=True, encoding="utf-8", errors="replace", check=False
+    )
     if result.returncode != 0:
         detail = result.stderr.strip() or f"ffmpeg exited with status {result.returncode}"
         raise ExtractError(f"cannot {what}: {detail}")

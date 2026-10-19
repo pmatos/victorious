@@ -20,3 +20,4 @@ uv.lock
 tests/analyse_helpers.py
 tests/cli_runner.py
 src/victorious/errors.py
+src/victorious/gpu.py
