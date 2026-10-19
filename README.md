@@ -454,6 +454,15 @@ screens:
 
 See [GLOSSARY.md](GLOSSARY.md) for the terms used above and [docs/adr](docs/adr) for design decisions.
 
+### Speech on an NVIDIA GPU
+
+Whisper and the diarization pipeline run on an NVIDIA GPU through CUDA when one is usable, and on the CPU otherwise; nothing needs to be set up beyond the NVIDIA driver. On Windows `uv sync` installs the CUDA 12.6 build of torch, whose cuBLAS and cuDNN DLLs Whisper (CTranslate2) also loads; on Linux torch stays the CPU build, so there the GPU is used only when a CUDA torch and CUDA 12 libraries are installed by hand.
+
+- A run that uses the GPU prints `victorious: speech: Whisper on the GPU (CUDA)` and `victorious: speech: diarization on the GPU (CUDA)` on stderr. No such line means the CPU.
+- On the GPU Whisper decodes in `float16` instead of the CPU's `int8`, and the transcripts are not the same as a CPU run's: on two real 20-30 min Recordings 72-80% of the words matched and the number of segments and Speakers differed, while the Matches and every HUD Event were identical. Two GPU runs of the same Recording also differ a little. Use `VICTORIOUS_DEVICE=cpu` when transcripts must be compared across runs.
+- If the GPU cannot load or run a model, one `victorious: ... cannot use the GPU (...); ... on the CPU` line says why and the run goes on on the CPU.
+- `VICTORIOUS_DEVICE=cpu` keeps speech on the CPU (use it when comparing runs); `VICTORIOUS_DEVICE=cuda` insists on the GPU and exits 1 naming the reason when it cannot be used.
+
 ## Development
 
 ```bash
@@ -468,8 +477,8 @@ uv run pytest
 
 - Python >= 3.13
 - OpenCV (opencv-python), NumPy, pydantic, PyYAML
-- The speech stack, installed by `uv sync` and not optional ([ADR 0001](docs/adr/0001-mandatory-speech-stack.md)): faster-whisper (Whisper `large-v3-turbo`), pyannote.audio (speaker diarization), torch and torchaudio (CPU builds on Linux), onnxruntime (YAMNet, which finds music) and huggingface-hub. The install is several GB; `--no-speech` skips the work at run time and never imports these libraries.
+- The speech stack, installed by `uv sync` and not optional ([ADR 0001](docs/adr/0001-mandatory-speech-stack.md)): faster-whisper (Whisper `large-v3-turbo`), pyannote.audio (speaker diarization), torch and torchaudio (CPU builds on Linux, CUDA 12.6 builds on Windows), onnxruntime (YAMNet, which finds music) and huggingface-hub. The install is several GB; `--no-speech` skips the work at run time and never imports these libraries.
 - For speech, a Hugging Face token (`HF_TOKEN` or `hf auth login`; every model is public, the token only has to exist) and network on the first speech run, which downloads the models into the Hugging Face cache: Whisper about 1.6 GB, the diarization pipeline about 35 MB and YAMNet about 16 MB. See [step 4](#4-add-speech-transcripts-speakers-categories).
 - `ffmpeg` and `ffprobe` on `PATH` (decoding)
-- Tesseract, which reads every digit (the three HUD counters and the placements), e.g. `apt install tesseract-ocr`. It provides `libtesseract`, used in the same process, and the `tesseract` command, the fallback and what the tutorial and the tests assume on `PATH`.
-- Optional: a VAAPI device for GPU decoding (see [Hardware decode](#hardware-decode)) and `TYPESAFE_API_KEY` for transcript categories (or `--no-categories`).
+- Tesseract, which reads every digit (the three HUD counters and the placements), e.g. `apt install tesseract-ocr`, or on Windows the [UB Mannheim build](https://github.com/UB-Mannheim/tesseract/wiki) with its folder on `PATH`. It provides `libtesseract`, used in the same process, and the `tesseract` command, the fallback and what the tutorial and the tests assume on `PATH`.
+- Optional: an NVIDIA GPU for speech (see [Speech on an NVIDIA GPU](#speech-on-an-nvidia-gpu)), a VAAPI device for GPU decoding (see [Hardware decode](#hardware-decode)) and `TYPESAFE_API_KEY` for transcript categories (or `--no-categories`).

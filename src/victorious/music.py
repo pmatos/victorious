@@ -210,7 +210,7 @@ class MusicTagger:
 
         try:
             model = download(MODEL_FILE)
-            with download(CLASS_MAP_FILE).open(newline="") as handle:
+            with download(CLASS_MAP_FILE).open(newline="", encoding="utf-8") as handle:
                 names = [row["display_name"] for row in csv.DictReader(handle)]
             options = onnxruntime.SessionOptions()
             options.intra_op_num_threads = os.cpu_count() or 1

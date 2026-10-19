@@ -100,7 +100,7 @@ class LoadedLayout:
 
 def load_layout(path: Path) -> Layout:
     try:
-        document = yaml.safe_load(path.read_text())
+        document = yaml.safe_load(path.read_text(encoding="utf-8"))
     except OSError as error:
         raise LayoutError(f"cannot read Layout {path}: {error.strerror or error}") from error
     except (yaml.YAMLError, UnicodeDecodeError) as error:
