@@ -192,7 +192,7 @@ def _hardware_agrees(path: Path, info: VideoInfo, hardware: HwDecoder) -> str | 
 
 
 def resolve_hardware(path: Path, info: VideoInfo) -> HwDecoder | None:
-    """The VAAPI device that decodes this kind of Recording exactly like software, if any.
+    """The CUDA or VAAPI decoder that reads this kind of Recording exactly like software, if any.
 
     Probed on the first call of a process (two real frames of the Recording against software)
     and remembered by codec and size; a worker process gets the parent's answer instead.

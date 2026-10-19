@@ -1,6 +1,7 @@
-"""Optional VAAPI hardware decode: which device and libva driver to try, and the ffmpeg flags."""
+"""Optional hardware decode, NVIDIA's (CUDA) or VAAPI: which device to try, and the ffmpeg flags."""
 
 import os
+import shutil
 import sys
 import threading
 from collections.abc import Callable, Mapping
@@ -10,24 +11,29 @@ from typing import Any
 
 DRI = Path("/dev/dri")
 DRM = Path("/sys/class/drm")
-MODES = ("auto", "off", "vaapi")
+MODES = ("auto", "off", "vaapi", "cuda")
 MODE_VARIABLE = "VICTORIOUS_HWACCEL"
 DEVICE_VARIABLE = "VICTORIOUS_VAAPI_DEVICE"
+CUDA_DEVICE_VARIABLE = "VICTORIOUS_CUDA_DEVICE"
 DRIVER_VARIABLE = "LIBVA_DRIVER_NAME"
+NVIDIA = "0x10de"
 
 _DRIVERS = {"0x1002": ["radeonsi"], "0x8086": ["iHD", "i965"]}
 
 # Software decodes 8-bit 4:2:0 into yuv420p before the BGR conversion; converting the nv12 that
-# hwdownload yields straight to BGR takes another swscale path and shifts pixels by up to 60.
+# hwdownload yields (from VAAPI and CUDA alike) straight to BGR takes another swscale path and
+# shifts pixels by up to 60.
 DOWNLOAD_FILTER = "hwdownload,format=nv12,format=yuv420p"
 
 
 @dataclass(frozen=True)
 class HwDecoder:
-    """A render device and the libva driver to load for it (None: let libva choose)."""
+    """A device and how to drive it: a VAAPI render device and the libva driver to load for it
+    (None: let libva choose), or with `api` "cuda" the index of an NVIDIA GPU (no driver)."""
 
     device: str
     driver: str | None
+    api: str = "vaapi"
 
 
 def mode_from(env: Mapping[str, str]) -> str:
@@ -74,6 +80,34 @@ def candidates(
     return found
 
 
+def nvidia_present(directory: Path | None = None, drm: Path | None = None) -> bool:
+    """An NVIDIA driver is installed: `nvidia-smi` is on PATH, or a render device is NVIDIA's."""
+    if shutil.which("nvidia-smi") is not None:
+        return True
+    return any(_vendor(device, drm) == NVIDIA for device in render_devices(directory))
+
+
+def decoders(
+    mode: str,
+    env: Mapping[str, str] | None = None,
+    nvidia: Callable[[], bool] | None = None,
+) -> list[HwDecoder]:
+    """What `mode` probes, in order: in `auto` the NVIDIA GPU first (when there is one or
+    VICTORIOUS_CUDA_DEVICE names it), then the VAAPI candidates.
+
+    `cuda` always probes the GPU, so a machine without one gets the note that says why.
+    """
+    env = os.environ if env is None else env
+    cuda = [HwDecoder(env.get(CUDA_DEVICE_VARIABLE, "0"), None, "cuda")]
+    if mode == "cuda":
+        return cuda
+    vaapi = candidates(env)
+    if mode == "vaapi":
+        return vaapi
+    present = CUDA_DEVICE_VARIABLE in env or (nvidia or nvidia_present)()
+    return [*(cuda if present else []), *vaapi]
+
+
 def environment(decoder: HwDecoder, base: Mapping[str, str] | None = None) -> dict[str, str]:
     """The environment of the ffmpeg subprocess; the process's own is never touched."""
     env = dict(os.environ if base is None else base)
@@ -83,6 +117,11 @@ def environment(decoder: HwDecoder, base: Mapping[str, str] | None = None) -> di
 
 
 def input_options(decoder: HwDecoder) -> list[str]:
+    if decoder.api == "cuda":
+        return [
+            "-hwaccel", "cuda", "-hwaccel_device", decoder.device,
+            "-hwaccel_output_format", "cuda",
+        ]  # fmt: skip
     return [
         "-init_hw_device", f"vaapi=va:{decoder.device}", "-hwaccel", "vaapi",
         "-hwaccel_device", "va", "-hwaccel_output_format", "vaapi",
@@ -172,7 +211,7 @@ def resolve(key: tuple[str, ...], check: Callable[[HwDecoder], str | None]) -> H
     """The first candidate whose `check` passes (it returns None) or None for software decode.
 
     Decided once per process for a given `key`; `off` never probes, and `auto` is silent on a
-    machine without a render device.
+    machine without a render device or an NVIDIA GPU.
     """
     mode = current_mode()
     if mode == "off" or _failed:
@@ -181,7 +220,7 @@ def resolve(key: tuple[str, ...], check: Callable[[HwDecoder], str | None]) -> H
     with _lock:
         if key in _resolved:
             return _resolved[key]
-        tried = candidates()
+        tried = decoders(mode)
         problems: list[str] = []
         chosen = None
         for candidate in tried:
@@ -191,6 +230,6 @@ def resolve(key: tuple[str, ...], check: Callable[[HwDecoder], str | None]) -> H
                 break
             problems.append(problem)
         _resolved[key] = chosen
-    if chosen is None and (tried or mode == "vaapi"):
+    if chosen is None and (tried or mode != "auto"):
         note(f"hardware decode unavailable ({problems[0] if problems else 'no render device'})")
     return chosen

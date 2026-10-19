@@ -1,6 +1,8 @@
-"""Optional VAAPI hardware decode: which device and driver, and software as the fallback."""
+"""Optional hardware decode: which device and driver, and software as the fallback."""
 
 from pathlib import Path
+
+import pytest
 
 from victorious import hwaccel
 from victorious.hwaccel import HwDecoder
@@ -101,6 +103,7 @@ def test_the_mode_comes_from_the_environment_and_defaults_to_auto() -> None:
     assert hwaccel.mode_from({}) == "auto"
     assert hwaccel.mode_from({"VICTORIOUS_HWACCEL": "off"}) == "off"
     assert hwaccel.mode_from({"VICTORIOUS_HWACCEL": "vaapi"}) == "vaapi"
+    assert hwaccel.mode_from({"VICTORIOUS_HWACCEL": "cuda"}) == "cuda"
     assert hwaccel.mode_from({"VICTORIOUS_HWACCEL": "nonsense"}) == "auto"
 
 
@@ -125,3 +128,51 @@ def test_consecutive_failures_switch_it_off_and_a_success_resets_the_count() -> 
 
     assert hwaccel.is_disabled()
     hwaccel.reset()
+
+
+def test_auto_tries_the_nvidia_gpu_first_then_the_vaapi_devices(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    vaapi = [HwDecoder("/dev/dri/renderD128", None)]
+    monkeypatch.setattr(hwaccel, "candidates", lambda *_: vaapi)
+
+    assert hwaccel.decoders("auto", {}, lambda: True) == [HwDecoder("0", None, "cuda"), *vaapi]
+    assert hwaccel.decoders("auto", {}, lambda: False) == vaapi
+
+
+def test_the_cuda_device_variable_picks_the_gpu_and_asks_for_it_in_auto(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(hwaccel, "candidates", lambda *_: [])
+    env = {"VICTORIOUS_CUDA_DEVICE": "1"}
+
+    assert hwaccel.decoders("auto", env, lambda: False) == [HwDecoder("1", None, "cuda")]
+
+
+def test_a_forced_mode_probes_only_its_own_kind(monkeypatch: pytest.MonkeyPatch) -> None:
+    vaapi = [HwDecoder("/dev/dri/renderD128", None)]
+    monkeypatch.setattr(hwaccel, "candidates", lambda *_: vaapi)
+
+    assert hwaccel.decoders("vaapi", {}, lambda: True) == vaapi
+    assert hwaccel.decoders("cuda", {}, lambda: False) == [HwDecoder("0", None, "cuda")]
+
+
+def test_an_nvidia_render_device_counts_as_an_nvidia_gpu(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("shutil.which", lambda _: None)
+    dri = tmp_path / "dri"
+    dri.mkdir()
+    (dri / "renderD128").touch()
+
+    assert hwaccel.nvidia_present(dri, fake_drm(tmp_path / "drm", {"renderD128": NVIDIA}))
+    assert not hwaccel.nvidia_present(dri, fake_drm(tmp_path / "amd", {"renderD128": AMD}))
+
+
+def test_cuda_decodes_on_the_chosen_gpu_and_keeps_its_frames_there_until_the_download() -> None:
+    options = hwaccel.input_options(HwDecoder("1", None, "cuda"))
+
+    assert options == [
+        "-hwaccel", "cuda", "-hwaccel_device", "1", "-hwaccel_output_format", "cuda",
+    ]  # fmt: skip
+    assert hwaccel.environment(HwDecoder("1", None, "cuda"), {"A": "1"}) == {"A": "1"}

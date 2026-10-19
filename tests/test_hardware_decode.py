@@ -1,4 +1,4 @@
-"""Frame sampling with and without VAAPI: the same frames, and software as the fallback."""
+"""Frame sampling with and without hardware decode: the same frames, software as the fallback."""
 
 import json
 import sys
@@ -18,6 +18,12 @@ from victorious.video import VideoInfo, frame_at, probe, sample_chunk, sample_wi
 pytestmark = pytest.mark.usefixtures("require_ffmpeg")
 
 BOGUS = "/dev/dri/renderD999"
+BOGUS_GPU = "99"
+# Each hardware mode, the variable that points it at a device, and a device that does not exist.
+MODES = [
+    ("vaapi", hwaccel.DEVICE_VARIABLE, BOGUS),
+    ("cuda", hwaccel.CUDA_DEVICE_VARIABLE, BOGUS_GPU),
+]
 
 
 def a_spec() -> RecordingSpec:
@@ -37,8 +43,8 @@ def fresh_state() -> Iterator[None]:
     hwaccel.reset()
 
 
-def working_decoder(path: Path) -> HwDecoder | None:
-    hwaccel.configure("vaapi")
+def working_decoder(path: Path, mode: str) -> HwDecoder | None:
+    hwaccel.configure(mode)
     return video.resolve_hardware(path, probe(path))
 
 
@@ -46,10 +52,10 @@ def frames_of(path: Path, info: VideoInfo, start: int = 0, length: int | None = 
     return [frame.tobytes() for _, frame in sample_chunk(path, info, start, length, threads=1)]
 
 
-def requires_vaapi(path: Path) -> HwDecoder:
-    decoder = working_decoder(path)
+def requires_hardware(path: Path, mode: str = "vaapi") -> HwDecoder:
+    decoder = working_decoder(path, mode)
     if decoder is None:
-        pytest.skip("no VAAPI device decodes this codec here")
+        pytest.skip(f"no {mode} device decodes this codec here")
     hwaccel.reset()
     return decoder
 
@@ -67,15 +73,21 @@ def test_off_never_asks_ffmpeg_for_vaapi(
     assert not [line for line in shim.lines() if "vaapi" in line]
 
 
-def test_a_missing_render_device_falls_back_to_the_same_frames_with_one_note(
-    recording: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+@pytest.mark.parametrize(("mode", "variable", "missing"), MODES)
+def test_a_missing_device_falls_back_to_the_same_frames_with_one_note(
+    recording: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    mode: str,
+    variable: str,
+    missing: str,
 ) -> None:
     hwaccel.configure("off")
     software = frames_of(recording, probe(recording))
     capsys.readouterr()
     hwaccel.reset()
-    monkeypatch.setenv(hwaccel.DEVICE_VARIABLE, BOGUS)
-    hwaccel.configure("vaapi")
+    monkeypatch.setenv(variable, missing)
+    hwaccel.configure(mode)
     info = probe(recording)
 
     first = frames_of(recording, info)
@@ -97,6 +109,7 @@ def test_auto_without_any_render_device_is_silent(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     monkeypatch.setattr(hwaccel, "DRI", tmp_path / "no-dri")
+    monkeypatch.setattr(hwaccel, "nvidia_present", lambda *_: False)
     hwaccel.configure("auto")
 
     assert len(frames_of(recording, probe(recording))) == 10
@@ -121,15 +134,16 @@ def test_the_probe_runs_once_per_process(
     assert shim.decodes(matching="vaapi") == probes
 
 
-def test_hardware_frames_equal_software_frames(recording: Path) -> None:
-    requires_vaapi(recording)
+@pytest.mark.parametrize("mode", ["vaapi", "cuda"])
+def test_hardware_frames_equal_software_frames(recording: Path, mode: str) -> None:
+    requires_hardware(recording, mode)
     hwaccel.configure("off")
     info = probe(recording)
     software = frames_of(recording, info, 0, None)
     soft_window = [f.tobytes() for _, f in sample_window(recording, info, 3.5, 8.5, 4)]
     soft_one = frame_at(recording, info, 9)
     hwaccel.reset()
-    hwaccel.configure("vaapi")
+    hwaccel.configure(mode)
 
     assert video.resolve_hardware(recording, info) is not None
     assert frames_of(recording, info, 0, None) == software
@@ -300,8 +314,9 @@ def test_a_decoder_that_dies_silently_is_reported_with_its_exit_status(
         frames_of(recording, info, 2, 8)
 
 
+@pytest.mark.parametrize(("mode", "variable", "missing"), MODES)
 def test_analyse_output_is_identical_whatever_the_hardware_mode(
-    tmp_path: Path,
+    tmp_path: Path, mode: str, variable: str, missing: str
 ) -> None:
     recording, layout = prepare(tmp_path, a_spec())
     off = analyse_text(recording, layout, "--no-cache", "--hwaccel", "off")
@@ -311,8 +326,8 @@ def test_analyse_output_is_identical_whatever_the_hardware_mode(
         layout,
         "--no-cache",
         "--hwaccel",
-        "vaapi",
-        env={hwaccel.DEVICE_VARIABLE: BOGUS},
+        mode,
+        env={variable: missing},
     )
 
     assert bogus.returncode == 0, bogus.stderr
@@ -326,11 +341,12 @@ def chunk_lines(shim: FfmpegShim) -> list[str]:
     return [line for line in shim.lines() if "-vf fps=1:" in line and not is_selection_seek(line)]
 
 
+@pytest.mark.parametrize("mode", ["vaapi", "cuda"])
 @pytest.mark.parametrize("slots", [0, 1])
 def test_early_chunks_use_a_free_gpu_slot_else_the_cpu_and_the_last_ones_wait_for_the_gpu(
-    recording: Path, tmp_path: Path, slots: int
+    recording: Path, tmp_path: Path, slots: int, mode: str
 ) -> None:
-    requires_vaapi(recording)
+    requires_hardware(recording, mode)
     layout = write_layout(tmp_path / "layout.yaml")
     shim = FfmpegShim(tmp_path / "shim")
     off = analyse_text(recording, layout, "--no-cache", "--hwaccel", "off")
@@ -339,7 +355,7 @@ def test_early_chunks_use_a_free_gpu_slot_else_the_cpu_and_the_last_ones_wait_fo
         layout,
         "--no-cache",
         "--hwaccel",
-        "vaapi",
+        mode,
         "--jobs",
         "3",
         "--chunk-seconds",
@@ -353,7 +369,7 @@ def test_early_chunks_use_a_free_gpu_slot_else_the_cpu_and_the_last_ones_wait_fo
     assert "hardware decode" not in hardware.stderr
     chunks = chunk_lines(shim)
     assert len(chunks) == 5
-    on_gpu = [line for line in chunks if "vaapi" in line]
+    on_gpu = [line for line in chunks if f"-hwaccel {mode}" in line]
     if slots == 0:
         assert on_gpu == []
         assert "decode:" not in hardware.stderr
