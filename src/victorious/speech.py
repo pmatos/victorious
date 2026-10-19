@@ -3,6 +3,7 @@
 import bisect
 import heapq
 import math
+import os
 import re
 from collections.abc import Sequence
 from dataclasses import dataclass, replace
@@ -11,6 +12,7 @@ from typing import Any
 
 import numpy as np
 
+from victorious import gpu
 from victorious.cpus import physical_cores
 from victorious.errors import SpeechError
 from victorious.music import (
@@ -123,14 +125,38 @@ def drop_repeated(segments: list[Segment]) -> list[Segment]:
 
 
 def _load_model(name: str) -> Any:
+    """Whisper on an NVIDIA GPU when one works (see `gpu.whisper_device`), else on the CPU.
+
+    In `auto` mode a GPU that fails to load or run the model is noted once and the CPU is used.
+    """
+    device = gpu.whisper_device()
+    if not device.is_cuda:
+        return _load_on(name, gpu.CPU)
+    gpu.expose_cuda_libraries()
+    try:
+        model = _load_on(name, device)
+        model.detect_language(np.zeros(AUDIO_RATE, dtype="float32"))
+    except (SpeechError, RuntimeError, ValueError) as error:
+        if gpu.mode_from(os.environ) == "cuda":
+            raise SpeechError(
+                f"cannot run the Whisper model {name!r} on CUDA: {error}; "
+                f"unset {gpu.MODE_VARIABLE} to fall back to the CPU"
+            ) from error
+        gpu.note(f"Whisper cannot use the GPU ({error}); transcribing on the CPU")
+        return _load_on(name, gpu.CPU)
+    gpu.note("speech: Whisper on the GPU (CUDA)")
+    return model
+
+
+def _load_on(name: str, device: gpu.Device) -> Any:
     from faster_whisper import WhisperModel
     from huggingface_hub.errors import LocalEntryNotFoundError
 
     def load(local_only: bool) -> Any:
         return WhisperModel(
             name,
-            device="cpu",
-            compute_type="int8",
+            device=device.name,
+            compute_type=device.compute_type,
             cpu_threads=physical_cores(),
             use_auth_token=False,
             local_files_only=local_only,

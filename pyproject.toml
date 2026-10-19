@@ -41,12 +41,25 @@ dev = [
 ]
 
 [tool.uv.sources]
-torch = { index = "pytorch-cpu", marker = "sys_platform == 'linux'" }
-torchaudio = { index = "pytorch-cpu", marker = "sys_platform == 'linux'" }
+torch = [
+    { index = "pytorch-cpu", marker = "sys_platform == 'linux'" },
+    { index = "pytorch-cu126", marker = "sys_platform == 'win32'" },
+]
+torchaudio = [
+    { index = "pytorch-cpu", marker = "sys_platform == 'linux'" },
+    { index = "pytorch-cu126", marker = "sys_platform == 'win32'" },
+]
 
 [[tool.uv.index]]
 name = "pytorch-cpu"
 url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+# CUDA 12 wheels on Windows: they also ship the cuBLAS and cuDNN 9 DLLs that faster-whisper's
+# CTranslate2 loads, so an NVIDIA GPU needs only its driver.
+[[tool.uv.index]]
+name = "pytorch-cu126"
+url = "https://download.pytorch.org/whl/cu126"
 explicit = true
 
 [tool.mypy]
@@ -54,7 +67,7 @@ files = ["."]
 strict = true
 
 [[tool.mypy.overrides]]
-module = ["cv2.*", "faster_whisper.*", "onnxruntime.*", "pyannote.*", "torch.*"]
+module = ["cv2.*", "ctranslate2.*", "faster_whisper.*", "onnxruntime.*", "pyannote.*", "torch.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

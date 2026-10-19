@@ -16,10 +16,12 @@ import functools
 import os
 import shutil
 import subprocess
+import sys
 import threading
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
+from pathlib import Path
 
 import cv2
 import numpy as np
@@ -54,7 +56,7 @@ class _Engine:
     def __init__(self, library: ctypes.CDLL, settings: _Pass) -> None:
         self._library = library
         self._handle = library.TessBaseAPICreate()
-        if library.TessBaseAPIInit3(self._handle, None, b"eng") != 0:
+        if library.TessBaseAPIInit3(self._handle, _datapath(), b"eng") != 0:
             library.TessBaseAPIDelete(self._handle)
             raise OcrError("tesseract failed to load its English model")
         library.TessBaseAPISetPageSegMode(self._handle, settings.page_segmentation_mode)
@@ -118,9 +120,32 @@ def _load_library(name: str) -> ctypes.CDLL | None:
     return library
 
 
+def _beside_command() -> str | None:
+    """On Windows, the DLL installed next to `tesseract.exe` (the UB Mannheim build)."""
+    command = shutil.which("tesseract")
+    if command is None:
+        return None
+    found = sorted(Path(command).parent.glob("libtesseract*.dll"))
+    return str(found[0]) if found else None
+
+
+@functools.cache
+def _datapath() -> bytes | None:
+    """The model folder for the library: its default, except beside the Windows DLL, which has
+    no compiled-in path and finds `tessdata/` only through TESSDATA_PREFIX."""
+    if sys.platform != "win32" or "TESSDATA_PREFIX" in os.environ:
+        return None
+    dll = _beside_command()
+    folder = None if dll is None else Path(dll).parent / "tessdata"
+    return str(folder).encode() if folder is not None and folder.is_dir() else None
+
+
 @functools.cache
 def _load_tesseract() -> ctypes.CDLL | None:
-    for name in ("libtesseract.so.5", ctypes.util.find_library("tesseract")):
+    names = ["libtesseract.so.5", ctypes.util.find_library("tesseract")]
+    if sys.platform == "win32":
+        names.insert(0, _beside_command())
+    for name in names:
         if name is not None and (library := _load_library(name)) is not None:
             return library
     return None

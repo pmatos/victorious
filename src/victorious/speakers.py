@@ -2,6 +2,7 @@
 
 import functools
 import math
+import os
 import warnings
 from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor
@@ -11,6 +12,7 @@ from typing import Any
 
 import numpy as np
 
+from victorious import gpu
 from victorious.cpus import physical_cores
 from victorious.errors import SpeechError
 from victorious.video import AUDIO_RATE, RecordingError, sample_audio
@@ -234,8 +236,33 @@ class ParallelEmbedding:
         return np.vstack(list(rows))
 
 
+def _on_gpu(pipeline: Any, embedder: Any, torch: Any) -> bool:
+    """Moves the pipeline and the embedder to CUDA when `gpu.torch_device` picks it.
+
+    In `auto` mode a GPU that cannot take them is noted and both stay on the CPU.
+    """
+    device = gpu.torch_device(torch)
+    if device.type != "cuda":
+        return False
+    try:
+        pipeline.to(device)
+        embedder.to(device)
+    except Exception as error:
+        if gpu.mode_from(os.environ) == "cuda":
+            raise SpeechError(
+                f"cannot run the diarization model on CUDA: {error}; "
+                f"unset {gpu.MODE_VARIABLE} to fall back to the CPU"
+            ) from error
+        pipeline.to(torch.device("cpu"))
+        embedder.to(torch.device("cpu"))
+        gpu.note(f"diarization cannot use the GPU ({error}); running on the CPU")
+        return False
+    gpu.note("speech: diarization on the GPU (CUDA)")
+    return True
+
+
 class Diarizer:
-    """The pyannote community-1 pipeline and its embedder, run on CPU."""
+    """The pyannote community-1 pipeline and its embedder, on an NVIDIA GPU when one works."""
 
     def __init__(self, pipeline: Any, embedder: Any, torch: Any) -> None:
         self._pipeline = pipeline
@@ -269,6 +296,8 @@ class Diarizer:
                 "pass --no-speech to skip speech"
             )
         torch.set_num_threads(1)
+        if _on_gpu(pipeline, embedder, torch):
+            return cls(pipeline, embedder, torch)
         pipeline._embedding = ParallelEmbedding(pipeline._embedding, physical_cores())
         return cls(pipeline, embedder, torch)
 
