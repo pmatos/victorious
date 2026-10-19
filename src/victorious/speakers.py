@@ -239,7 +239,9 @@ class ParallelEmbedding:
 def _on_gpu(pipeline: Any, embedder: Any, torch: Any) -> bool:
     """Moves the pipeline and the embedder to CUDA when `gpu.torch_device` picks it.
 
-    In `auto` mode a GPU that cannot take them is noted and both stay on the CPU.
+    One embedding of a second of silence runs there, since moving the weights succeeds even
+    on a GPU torch has no kernels for. In `auto` mode a GPU that cannot take them is noted
+    and both stay on the CPU.
     """
     device = gpu.torch_device(torch)
     if device.type != "cuda":
@@ -247,6 +249,7 @@ def _on_gpu(pipeline: Any, embedder: Any, torch: Any) -> bool:
     try:
         pipeline.to(device)
         embedder.to(device)
+        embedder({"waveform": torch.zeros(1, AUDIO_RATE), "sample_rate": AUDIO_RATE})
     except Exception as error:
         if gpu.mode_from(os.environ) == "cuda":
             raise SpeechError(
@@ -296,9 +299,8 @@ class Diarizer:
                 "pass --no-speech to skip speech"
             )
         torch.set_num_threads(1)
-        if _on_gpu(pipeline, embedder, torch):
-            return cls(pipeline, embedder, torch)
-        pipeline._embedding = ParallelEmbedding(pipeline._embedding, physical_cores())
+        if not _on_gpu(pipeline, embedder, torch):
+            pipeline._embedding = ParallelEmbedding(pipeline._embedding, physical_cores())
         return cls(pipeline, embedder, torch)
 
     def _input(self, audio: np.ndarray) -> dict[str, Any]:

@@ -62,7 +62,8 @@ def probe(path: Path) -> VideoInfo:
             "-of", "json", str(path),
         ],
         capture_output=True,
-        text=True,
+        encoding="utf-8",
+        errors="replace",
         check=False,
     )  # fmt: skip
     if result.returncode != 0:
