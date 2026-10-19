@@ -7,7 +7,7 @@ import threading
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 DRI = Path("/dev/dri")
 DRM = Path("/sys/class/drm")
@@ -33,7 +33,7 @@ class HwDecoder:
 
     device: str
     driver: str | None
-    api: str = "vaapi"
+    api: Literal["vaapi", "cuda"] = "vaapi"
 
 
 def mode_from(env: Mapping[str, str]) -> str:
@@ -98,19 +98,26 @@ def decoders(
     `cuda` always probes the GPU, so a machine without one gets the note that says why.
     """
     env = os.environ if env is None else env
-    cuda = [HwDecoder(env.get(CUDA_DEVICE_VARIABLE, "0"), None, "cuda")]
+    explicit = env.get(CUDA_DEVICE_VARIABLE)
+    cuda = [HwDecoder(explicit or "0", None, "cuda")]
     if mode == "cuda":
         return cuda
     vaapi = candidates(env)
     if mode == "vaapi":
         return vaapi
-    present = CUDA_DEVICE_VARIABLE in env or (nvidia or nvidia_present)()
+    present = bool(explicit) or (nvidia or nvidia_present)()
     return [*(cuda if present else []), *vaapi]
 
 
 def environment(decoder: HwDecoder, base: Mapping[str, str] | None = None) -> dict[str, str]:
-    """The environment of the ffmpeg subprocess; the process's own is never touched."""
+    """The environment of the ffmpeg subprocess; the process's own is never touched.
+
+    CUDA numbers GPUs fastest first unless told otherwise; PCI bus order makes the index the one
+    `nvidia-smi` shows.
+    """
     env = dict(os.environ if base is None else base)
+    if decoder.api == "cuda":
+        env.setdefault("CUDA_DEVICE_ORDER", "PCI_BUS_ID")
     if decoder.driver is not None:
         env[DRIVER_VARIABLE] = decoder.driver
     return env
@@ -134,6 +141,7 @@ _mode: str | None = None
 _noted: Any = threading.Event()
 _failed = False
 _failures = 0
+_dropped: set[HwDecoder] = set()
 FAILURE_LIMIT = 3
 
 
@@ -163,16 +171,24 @@ def reset() -> None:
         _mode = None
         _failed = False
         _failures = 0
+        _dropped.clear()
         _noted = threading.Event()
 
 
-def record_failure() -> None:
-    """A hardware decode failed mid-stream; `FAILURE_LIMIT` in a row make this process stop."""
-    global _failed, _failures
+def record_failure(decoder: HwDecoder) -> None:
+    """`decoder` failed mid-stream; `FAILURE_LIMIT` in a row drop it for this process.
+
+    The next `resolve` probes the candidates after it (VAAPI after CUDA in `auto`) and switches
+    hardware decode off when none is left.
+    """
+    global _failures
     with _lock:
         _failures += 1
         if _failures >= FAILURE_LIMIT:
-            _failed = True
+            _failures = 0
+            _dropped.add(decoder)
+            for key in [key for key, chosen in _resolved.items() if chosen == decoder]:
+                del _resolved[key]
 
 
 def record_success() -> None:
@@ -213,6 +229,7 @@ def resolve(key: tuple[str, ...], check: Callable[[HwDecoder], str | None]) -> H
     Decided once per process for a given `key`; `off` never probes, and `auto` is silent on a
     machine without a render device or an NVIDIA GPU.
     """
+    global _failed
     mode = current_mode()
     if mode == "off" or _failed:
         return None
@@ -220,16 +237,20 @@ def resolve(key: tuple[str, ...], check: Callable[[HwDecoder], str | None]) -> H
     with _lock:
         if key in _resolved:
             return _resolved[key]
-        tried = decoders(mode)
-        problems: list[str] = []
+        tried = [candidate for candidate in decoders(mode) if candidate not in _dropped]
+        problems: dict[str, str] = {}
         chosen = None
         for candidate in tried:
             problem = check(candidate)
             if problem is None:
                 chosen = candidate
                 break
-            problems.append(problem)
+            problems.setdefault(candidate.api, problem)
         _resolved[key] = chosen
+        if chosen is None and _dropped:
+            _failed = True
     if chosen is None and (tried or mode != "auto"):
-        note(f"hardware decode unavailable ({problems[0] if problems else 'no render device'})")
+        # The first problem of each kind of GPU, so a VAAPI fix is not hidden behind CUDA's.
+        reasons = "; ".join(problems.values()) or "no render device"
+        note(f"hardware decode unavailable ({reasons})")
     return chosen

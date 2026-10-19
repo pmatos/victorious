@@ -60,7 +60,7 @@ def requires_hardware(path: Path, mode: str = "vaapi") -> HwDecoder:
     return decoder
 
 
-def test_off_never_asks_ffmpeg_for_vaapi(
+def test_off_never_asks_ffmpeg_for_a_gpu(
     recording: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     shim = FfmpegShim(tmp_path / "shim")
@@ -70,7 +70,7 @@ def test_off_never_asks_ffmpeg_for_vaapi(
     frames_of(recording, probe(recording))
 
     assert shim.lines()
-    assert not [line for line in shim.lines() if "vaapi" in line]
+    assert not [line for line in shim.lines() if "vaapi" in line or "cuda" in line]
 
 
 @pytest.mark.parametrize(("mode", "variable", "missing"), MODES)
@@ -110,6 +110,7 @@ def test_auto_without_any_render_device_is_silent(
 ) -> None:
     monkeypatch.setattr(hwaccel, "DRI", tmp_path / "no-dri")
     monkeypatch.setattr(hwaccel, "nvidia_present", lambda *_: False)
+    monkeypatch.delenv(hwaccel.CUDA_DEVICE_VARIABLE, raising=False)
     hwaccel.configure("auto")
 
     assert len(frames_of(recording, probe(recording))) == 10
@@ -314,27 +315,21 @@ def test_a_decoder_that_dies_silently_is_reported_with_its_exit_status(
         frames_of(recording, info, 2, 8)
 
 
-@pytest.mark.parametrize(("mode", "variable", "missing"), MODES)
-def test_analyse_output_is_identical_whatever_the_hardware_mode(
-    tmp_path: Path, mode: str, variable: str, missing: str
-) -> None:
+def test_analyse_output_is_identical_whatever_the_hardware_mode(tmp_path: Path) -> None:
     recording, layout = prepare(tmp_path, a_spec())
     off = analyse_text(recording, layout, "--no-cache", "--hwaccel", "off")
     assert off.returncode == 0, off.stderr
-    bogus = analyse_text(
-        recording,
-        layout,
-        "--no-cache",
-        "--hwaccel",
-        mode,
-        env={variable: missing},
-    )
-
-    assert bogus.returncode == 0, bogus.stderr
-    assert bogus.stdout == off.stdout
     assert json.loads(off.stdout)["matches"]
-    assert sum("hardware decode" in line for line in bogus.stderr.splitlines()) == 1
     assert "hardware decode" not in off.stderr
+
+    for mode, variable, missing in MODES:
+        bogus = analyse_text(
+            recording, layout, "--no-cache", "--hwaccel", mode, env={variable: missing}
+        )
+
+        assert bogus.returncode == 0, bogus.stderr
+        assert bogus.stdout == off.stdout
+        assert sum("hardware decode" in line for line in bogus.stderr.splitlines()) == 1
 
 
 def chunk_lines(shim: FfmpegShim) -> list[str]:

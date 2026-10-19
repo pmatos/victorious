@@ -227,7 +227,7 @@ def _frames(
                 done += 1
                 yield frame
         except RecordingError as error:
-            hwaccel.record_failure()
+            hwaccel.record_failure(hardware)
             hwaccel.note(
                 f"hardware decode failed ({_last_line(error)})", "finishing the chunk in software"
             )
