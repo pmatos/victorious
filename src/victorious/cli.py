@@ -280,14 +280,24 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _emit(text: str | bytes, output: Path | None) -> None:
+    # Text is written as UTF-8 whatever the console's or the system's code page (cp1252 on
+    # Windows), so a transcript reads back the same everywhere.
+    data = text.encode() if isinstance(text, str) else text
     if output is None:
-        sys.stdout.write(text if isinstance(text, str) else text.decode())
+        stream = getattr(sys.stdout, "buffer", None)
+        if stream is None:
+            sys.stdout.write(data.decode())
+            return
+        sys.stdout.flush()
+        stream.write(data)
+        stream.flush()
         return
     temporary = output.parent / f".{output.name}.{secrets.token_hex(4)}"
-    descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o666)
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0)
+    descriptor = os.open(temporary, flags, 0o666)
     try:
-        with os.fdopen(descriptor, "w" if isinstance(text, str) else "wb") as handle:
-            handle.write(text)
+        with os.fdopen(descriptor, "wb") as handle:
+            handle.write(data)
         temporary.replace(output)
     except BaseException:
         temporary.unlink(missing_ok=True)

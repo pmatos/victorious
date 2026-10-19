@@ -18,7 +18,7 @@ def load_versioned[Model: BaseModel](
 ) -> Model:
     """The document at `path` as `model`; every failure is raised as `error` naming `noun`."""
     try:
-        document = json.loads(path.read_text())
+        document = json.loads(path.read_text(encoding="utf-8"))
     except OSError as cause:
         raise error(f"cannot read {noun} {path}: {cause.strerror or cause}") from cause
     except (ValueError, RecursionError) as cause:

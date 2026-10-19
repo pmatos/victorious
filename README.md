@@ -459,7 +459,7 @@ See [GLOSSARY.md](GLOSSARY.md) for the terms used above and [docs/adr](docs/adr)
 Whisper and the diarization pipeline run on an NVIDIA GPU through CUDA when one is usable, and on the CPU otherwise; nothing needs to be set up beyond the NVIDIA driver. On Windows `uv sync` installs the CUDA 12.6 build of torch, whose cuBLAS and cuDNN DLLs Whisper (CTranslate2) also loads; on Linux torch stays the CPU build, so there the GPU is used only when a CUDA torch and CUDA 12 libraries are installed by hand.
 
 - A run that uses the GPU prints `victorious: speech: Whisper on the GPU (CUDA)` and `victorious: speech: diarization on the GPU (CUDA)` on stderr. No such line means the CPU.
-- On the GPU Whisper decodes in `float16` instead of the CPU's `int8`, so a transcript can differ from a CPU run in a word or a timestamp; the Matches and HUD Events never depend on it.
+- On the GPU Whisper decodes in `float16` instead of the CPU's `int8`, and the transcripts are not the same as a CPU run's: on two real 20-30 min Recordings 72-80% of the words matched and the number of segments and Speakers differed, while the Matches and every HUD Event were identical. Two GPU runs of the same Recording also differ a little. Use `VICTORIOUS_DEVICE=cpu` when transcripts must be compared across runs.
 - If the GPU cannot load or run a model, one `victorious: ... cannot use the GPU (...); ... on the CPU` line says why and the run goes on on the CPU.
 - `VICTORIOUS_DEVICE=cpu` keeps speech on the CPU (use it when comparing runs); `VICTORIOUS_DEVICE=cuda` insists on the GPU and exits 1 naming the reason when it cannot be used.
 

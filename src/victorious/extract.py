@@ -94,7 +94,7 @@ def extract_clips(
             )  # fmt: skip
             cut.append(part)
         listing = Path(scratch) / "clips.txt"
-        listing.write_text("".join(_listing_line(part) for part in cut))
+        listing.write_text("".join(_listing_line(part) for part in cut), encoding="utf-8")
         joined = Path(scratch) / f"{secrets.token_hex(4)}{output.suffix}"
         _run(
             [

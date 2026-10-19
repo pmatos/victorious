@@ -61,7 +61,7 @@ def _write_atomically(path: Path, text: str) -> None:
     temporary = path.parent / f".{path.name}.{secrets.token_hex(4)}"
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        temporary.write_text(text)
+        temporary.write_text(text, encoding="utf-8")
         temporary.replace(path)
     except OSError:
         temporary.unlink(missing_ok=True)
@@ -69,7 +69,7 @@ def _write_atomically(path: Path, text: str) -> None:
 
 def _read_json(path: Path) -> Any:
     try:
-        return json.loads(path.read_text())
+        return json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return None
 
