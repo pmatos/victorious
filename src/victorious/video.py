@@ -173,15 +173,22 @@ def _last_line(error: Exception) -> str:
     return lines[-1] if lines else "decode failed"
 
 
-def _hardware_agrees(path: Path, info: VideoInfo, hardware: HwDecoder) -> str | None:
-    """None when `hardware` decodes frames of the Recording byte for byte like software."""
+def _hardware_agrees(
+    path: Path, info: VideoInfo, hardware: HwDecoder, software: dict[int, np.ndarray | None]
+) -> str | None:
+    """None when `hardware` decodes frames of the Recording byte for byte like software.
+
+    `software` keeps the reference frames, so each candidate after the first decodes only its own.
+    """
     if info.pix_fmt != "yuv420p":
         return f"pixel format {info.pix_fmt or 'unknown'} is not 8-bit 4:2:0"
     try:
         for fraction in PROBE_AT:
             at = math.floor(info.duration * fraction)
             hard = _first_frame(path, info, at, hardware)
-            soft = _first_frame(path, info, at, None) if hard is not None else None
+            if hard is not None and at not in software:
+                software[at] = _first_frame(path, info, at, None)
+            soft = software.get(at)
             if soft is None or hard is None:
                 return f"no frame at {at} s"
             if not np.array_equal(soft, hard):
@@ -192,13 +199,14 @@ def _hardware_agrees(path: Path, info: VideoInfo, hardware: HwDecoder) -> str | 
 
 
 def resolve_hardware(path: Path, info: VideoInfo) -> HwDecoder | None:
-    """The VAAPI device that decodes this kind of Recording exactly like software, if any.
+    """The CUDA or VAAPI decoder that reads this kind of Recording exactly like software, if any.
 
     Probed on the first call of a process (two real frames of the Recording against software)
     and remembered by codec and size; a worker process gets the parent's answer instead.
     """
     key = (info.codec, info.pix_fmt, str(info.width), str(info.height))
-    return hwaccel.resolve(key, lambda decoder: _hardware_agrees(path, info, decoder))
+    software: dict[int, np.ndarray | None] = {}
+    return hwaccel.resolve(key, lambda decoder: _hardware_agrees(path, info, decoder, software))
 
 
 def _frames(
@@ -227,7 +235,7 @@ def _frames(
                 done += 1
                 yield frame
         except RecordingError as error:
-            hwaccel.record_failure()
+            hwaccel.record_failure(hardware)
             hwaccel.note(
                 f"hardware decode failed ({_last_line(error)})", "finishing the chunk in software"
             )
