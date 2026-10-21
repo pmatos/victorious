@@ -22,6 +22,7 @@ import numpy as np
 
 from victorious import hwaccel
 from victorious.counters import CounterReading, best_reading
+from victorious.hwaccel import HwDecoder
 from victorious.layout import Layout
 from victorious.observations import Aborted, ChunkSecond, extract_chunk
 from victorious.ocr import concurrent_readers
@@ -36,6 +37,9 @@ from victorious.video import (
 )
 
 HW_SLOTS = 2
+# NVDEC on an RTX 4090 kept gaining up to 8 (frames of a 3 h Recording: 462 s at 4, 434 s at 8,
+# 893 s with every chunk on the GPU), so an NVIDIA GPU gets more slots than VAAPI.
+CUDA_SLOTS = 8
 SLOTS_VARIABLE = "VICTORIOUS_HW_SLOTS"
 
 _ABORT: Event | None = None
@@ -92,12 +96,14 @@ def _extract(chunk: _Chunk) -> tuple[list[ChunkSecond], RouteKind]:
             gate.release()
 
 
-def gpu_slots(env: Mapping[str, str]) -> int:
-    """How many chunks decode on the GPU at once: its decode engines saturate at about two."""
+def gpu_slots(env: Mapping[str, str], decoder: HwDecoder | None = None) -> int:
+    """How many chunks decode on the GPU at once: a VAAPI device saturates at about two, NVDEC
+    at about eight; the CPU decodes the chunks that find no free slot."""
+    default = CUDA_SLOTS if decoder is not None and decoder.api == "cuda" else HW_SLOTS
     try:
-        return max(0, int(env.get(SLOTS_VARIABLE, HW_SLOTS)))
+        return max(0, int(env.get(SLOTS_VARIABLE, default)))
     except ValueError:
-        return HW_SLOTS
+        return default
 
 
 def plan_chunks(duration: float, chunk_seconds: int) -> list[tuple[int, int | None]]:
@@ -152,8 +158,9 @@ def extract_seconds(
     Also how many chunks were decoded on the `gpu`, on the `cpu`, and `resumed` on the CPU after
     the GPU failed part-way.
     """
-    slots = gpu_slots(os.environ)
-    hardware = slots > 0 and resolve_hardware(path, info) is not None
+    decoder = resolve_hardware(path, info) if gpu_slots(os.environ) > 0 else None
+    slots = gpu_slots(os.environ, decoder)
+    hardware = decoder is not None
     plan = plan_chunks(info.duration, chunk_seconds)
     workers = max(1, min(jobs, len(plan)))
     threads = max(1, (os.cpu_count() or 1) // workers)

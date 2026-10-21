@@ -391,3 +391,14 @@ def test_no_gpu_slots_means_software_for_every_decode(recording: Path, tmp_path:
     assert shim.lines()
     assert not [line for line in shim.lines() if "vaapi" in line]
     assert "hardware decode" not in result.stderr
+
+
+def test_an_nvidia_gpu_gets_more_decode_slots_than_vaapi_unless_the_variable_says() -> None:
+    cuda = HwDecoder("0", None, "cuda")
+    vaapi = HwDecoder("/dev/dri/renderD128", None)
+
+    assert parallel.gpu_slots({}, cuda) == parallel.CUDA_SLOTS
+    assert parallel.gpu_slots({}, vaapi) == parallel.HW_SLOTS
+    assert parallel.gpu_slots({}) == parallel.HW_SLOTS
+    assert parallel.gpu_slots({parallel.SLOTS_VARIABLE: "3"}, cuda) == 3
+    assert parallel.gpu_slots({parallel.SLOTS_VARIABLE: "x"}, cuda) == parallel.CUDA_SLOTS
