@@ -39,6 +39,7 @@ HUD_ELEMENTS = ("hud_anchor", *COUNTER_ELEMENTS)
 RESULTS_ELEMENTS = ("results_banner", "placement", "elimination_placement")
 ELEMENTS_OF = {"hud": HUD_ELEMENTS, "results": RESULTS_ELEMENTS}
 REQUIRED = (*HUD_ELEMENTS, "results_banner", "placement")
+NO_TEAM_ROW_DESIGNS: tuple[HudDesign, ...] = ("icon_pair",)
 OPTIONAL_HINT = (
     "pass a second --at results= on a screen that shows YOU PLACED #N to find it, or use --manual"
 )
@@ -46,6 +47,12 @@ ROUNDING = 1e-4
 SCALE_SLACK = 1e-3
 NEIGHBOUR_REACH = 8
 _CLOCK = re.compile(r"\d+(:[0-5]?\d){1,2}(\.\d+)?|\d+(\.\d+)?")
+
+
+def required(design: HudDesign) -> tuple[str, ...]:
+    """The elements a Layout of `design` cannot do without; the icon pair has no team row."""
+    skipped = "team_eliminations" if design in NO_TEAM_ROW_DESIGNS else ""
+    return tuple(name for name in REQUIRED if name != skipped)
 
 
 class TimeError(ValueError):
@@ -171,13 +178,14 @@ def _self_check(layout: Layout, panels: Sequence[Panel]) -> dict[str, str]:
 def _build_layout(
     width: int, height: int, found: dict[str, Found], design: HudDesign = DEFAULT_HUD_DESIGN
 ) -> Layout | None:
-    if any(name not in found for name in REQUIRED):
+    if any(name not in found for name in required(design)):
         return None
     elimination_placement = found.get("elimination_placement")
+    team_eliminations = found.get("team_eliminations")
     hud = HudScreen(
         hud_anchor=found["hud_anchor"].rect,
         personal_eliminations=found["personal_eliminations"].rect,
-        team_eliminations=found["team_eliminations"].rect,
+        team_eliminations=team_eliminations.rect if team_eliminations else None,
         players_left=found["players_left"].rect,
     )
     results = ResultsScreen(
@@ -211,7 +219,9 @@ def _assemble(
         for k, panel in enumerate(candidates)
     ]
     found = {name: pair[0] for name, pair in best.items()}
-    missing = {name: details.get(name, "not found") for name in REQUIRED if name not in found}
+    missing = {
+        name: details.get(name, "not found") for name in required(design) if name not in found
+    }
     warnings: list[str] = []
     layout = _build_layout(width, height, found, design)
     if layout is not None:
@@ -310,9 +320,15 @@ def manual_result(panels: Sequence[Panel], submitted: object) -> SetupResult | l
         return ["elements: expected an object of element name to rectangle"]
     placed, problems = _submitted_rects(panels, elements)
     found = {name: hit for names in placed for name, hit in names.items()}
-    problems.extend(f"{name}: required, not placed" for name in REQUIRED if name not in found)
+    # Team eliminations may be left out only for a design that has no such row, which is known
+    # once the icons under the drawn anchor are.
+    problems.extend(
+        f"{name}: required, not placed" for name in required("icon_pair") if name not in found
+    )
     height, width = panels[0].frame.shape[:2]
     design = _drawn_design(width, height, found, panels) if not problems else DEFAULT_HUD_DESIGN
+    if not problems and "team_eliminations" not in found and design not in NO_TEAM_ROW_DESIGNS:
+        problems.append("team_eliminations: required, not placed")
     layout = None if problems else _build_layout(width, height, found, design)
     if layout is None:
         return problems

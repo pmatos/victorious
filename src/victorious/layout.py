@@ -12,8 +12,11 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_valida
 EPSILON = 1e-9
 ASPECT_RATIO_TOLERANCE = 0.02
 LAYOUT_SUFFIXES = (".yaml", ".yml")
-HudDesign = Literal["icon_column", "counter_row"]
+HudDesign = Literal["icon_column", "icon_pair", "counter_row"]
 DEFAULT_HUD_DESIGN: HudDesign = "icon_column"
+# Designs whose counters are one column of icons at fixed rectangles: the icon column has three
+# rows, the icon pair two (no team eliminations row).
+COLUMN_DESIGNS: tuple[HudDesign, ...] = ("icon_column", "icon_pair")
 COMMON_ASPECT_RATIOS = ((16, 9), (16, 10), (21, 9), (32, 9), (4, 3), (5, 4), (3, 2))
 
 
