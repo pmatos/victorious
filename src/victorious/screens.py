@@ -8,7 +8,7 @@ from typing import Literal
 import cv2
 import numpy as np
 
-from victorious.layout import HudDesign, Layout, Rect
+from victorious.layout import COLUMN_DESIGNS, HudDesign, Layout, Rect
 from victorious.matcher import (
     TemplateHit,
     locate_template_multiscale,
@@ -22,6 +22,7 @@ RESULTS_THRESHOLD = 0.7
 SPECTATING_THRESHOLD = 0.7
 SPECTATING_BAND = Rect(x=0.4, y=0.0, w=0.2, h=0.09)
 ICON_NAMES = ("icon_skull", "icon_squad", "icon_person")
+PAIR_ICON_NAMES = ("icon_skull", "icon_person")
 ROW_ICON_NAMES = ("row_person", "row_crosshair", "row_squad")
 BANNER_NAMES = ("victory_royale", "victory_royale_orange")
 SCALE_SWEEP = (0.9, 1.0, 1.1)
@@ -71,6 +72,11 @@ DESIGNS: dict[HudDesign, DesignSpec] = {
             "icon_squad": "team_eliminations",
             "icon_person": "players_left",
         },
+        COUNTER_BANDS,
+    ),
+    "icon_pair": DesignSpec(
+        PAIR_ICON_NAMES,
+        {"icon_skull": "personal_eliminations", "icon_person": "players_left"},
         COUNTER_BANDS,
     ),
     "counter_row": DesignSpec(
@@ -239,7 +245,7 @@ def counter_masks(
     (`icons`, from `counter_icons`), and over the Layout rectangle's width when it is the last.
     """
     rect: Rect = getattr(layout.screens.hud, element)
-    if layout.hud_design == "icon_column":
+    if layout.hud_design in COLUMN_DESIGNS:
         return counter_band_masks(_crop(frame, rect, COUNTER_MARGIN))
     design = DESIGNS[layout.hud_design]
     height, width = frame.shape[:2]
@@ -266,7 +272,30 @@ class HudReading:
     icons: Mapping[str, TemplateHit] = field(default_factory=dict)
 
 
+def _pair_score(frame: np.ndarray, anchor: Rect) -> float:
+    """The weakest of the skull and the players-left icon, 0 when the latter is not in the anchor.
+
+    The full icon column shows both icons too, with the players-left icon one row lower than the
+    pair draws it. It is searched down the whole column, so that icon is found where it is and
+    the anchor, which ends at the pair's second row, does not hold it.
+    """
+    height = frame.shape[0]
+    left, _, right, bottom = _box(frame, anchor, ANCHOR_MARGIN)
+    skull, _ = _score(_crop(frame, anchor, ANCHOR_MARGIN), "icon_skull", True, height)
+    base = reference_scale("icon_person", height)
+    person = locate_template_multiscale(
+        np.asarray(frame[:, left:right]),
+        load_reference("icon_person", True),
+        [base * factor for factor in SCALE_SWEEP],
+    )
+    if person is None or person.y + person.h / 2 > bottom:
+        return 0.0
+    return min(skull, float(np.nan_to_num(person.score)))
+
+
 def _column_score(frame: np.ndarray, layout: Layout) -> float:
+    if layout.hud_design == "icon_pair":
+        return _pair_score(frame, layout.screens.hud.hud_anchor)
     region = _crop(frame, layout.screens.hud.hud_anchor, ANCHOR_MARGIN)
     height = frame.shape[0]
     return min(_score(region, name, True, height)[0] for name in ICON_NAMES)
@@ -274,7 +303,7 @@ def _column_score(frame: np.ndarray, layout: Layout) -> float:
 
 def hud_reading(frame: np.ndarray, layout: Layout) -> HudReading:
     """How surely the Layout's HUD is on screen: its weakest icon's match, 0..1."""
-    if layout.hud_design == "icon_column":
+    if layout.hud_design in COLUMN_DESIGNS:
         return HudReading(_column_score(frame, layout))
     hits = _row_hits(frame, layout)
     ordered = [hits[name] for name in ROW_ICON_NAMES if name in hits]
