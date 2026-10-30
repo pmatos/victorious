@@ -46,6 +46,20 @@ ICONS = {
     "icon_person": "players_left",
 }
 
+PAIR_ICONS = {"icon_skull": "personal_eliminations", "icon_person": "players_left"}
+# The icon pair has no team eliminations row, so the players left counter sits one row up.
+NATIVE_PAIR_RECTS: dict[str, tuple[int, int, int, int]] = {
+    "hud_anchor": (2181, 43, 36, 85),
+    "players_left": (2104, 94, 68, DIGIT_HEIGHT_NATIVE),
+}
+PAIR_ELEMENT_RECTS: dict[str, tuple[float, float, float, float]] = {
+    **ELEMENT_RECTS,
+    **{
+        name: (x / NATIVE_WIDTH, y / NATIVE_HEIGHT, w / NATIVE_WIDTH, h / NATIVE_HEIGHT)
+        for name, (x, y, w, h) in NATIVE_PAIR_RECTS.items()
+    },
+}
+
 ROW_ICONS = {
     "row_person": "players_left",
     "row_crosshair": "personal_eliminations",
@@ -125,8 +139,13 @@ def _paste(frame: np.ndarray, tile: np.ndarray, x: int, y: int) -> None:
         frame[dst] = tile[src]
 
 
-def _pixel_rect(name: str, width: int, height: int) -> tuple[int, int, int, int]:
-    x, y, w, h = ELEMENT_RECTS[name]
+def _pixel_rect(
+    name: str,
+    width: int,
+    height: int,
+    rects: dict[str, tuple[float, float, float, float]] = ELEMENT_RECTS,
+) -> tuple[int, int, int, int]:
+    x, y, w, h = rects[name]
     return round(x * width), round(y * height), round(w * width), round(h * height)
 
 
@@ -253,8 +272,10 @@ def _draw_hud(frame: np.ndarray, hud: Hud) -> None:
     height, width = frame.shape[:2]
     icon_px = max(1, round(ICON_NATIVE_SIZE * height / NATIVE_HEIGHT))
     centre_x = round(ICON_CENTRE_X / NATIVE_WIDTH * width)
-    for icon, counter in ICONS.items():
-        rect = _pixel_rect(counter, width, height)
+    pair = hud.design == "icon_pair"
+    rects = PAIR_ELEMENT_RECTS if pair else ELEMENT_RECTS
+    for icon, counter in (PAIR_ICONS if pair else ICONS).items():
+        rect = _pixel_rect(counter, width, height, rects)
         cy = rect[1] + rect[3] // 2
         tile = cv2.resize(load_crop(icon, True), (icon_px, icon_px), interpolation=cv2.INTER_AREA)
         _paste(frame, tile, centre_x - icon_px // 2, cy - icon_px // 2)

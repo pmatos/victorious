@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Literal
 
 ResultsStyle = Literal["classic", "orange", "orange_large", "placed", "placed_shrunk"]
-HudDesign = Literal["icon_column", "counter_row"]
+HudDesign = Literal["icon_column", "icon_pair", "counter_row"]
 
 
 @dataclass(frozen=True)
@@ -20,8 +20,9 @@ class Hud:
     """The in-match HUD; a counter set to None is not drawn while the HUD anchors stay.
 
     `corrupt` replaces the three counter regions with noise, the anchors stay. `design` is the
-    icon column at the top right or the counter row under the minimap, whose icons move with
-    the width of the numbers.
+    icon column at the top right, the icon pair (the same column without its team eliminations
+    row, so `team_eliminations` is not drawn) or the counter row under the minimap, whose icons
+    move with the width of the numbers.
     """
 
     personal_eliminations: int | None = 0

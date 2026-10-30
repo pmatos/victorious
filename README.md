@@ -31,7 +31,7 @@ uv run victorious setup recording.mkv --at hud=12:34 --at results=1:05:20 --at r
 - With only a Win frame, the Layout is still written and stderr warns that `elimination_placement` was not found. Add a `--at results=` second showing "YOU PLACED #N" and rerun.
 - `could not find N element`: try another `--at hud=` second where the digits are crisp, or add `--manual` to drag the rectangles into place on a page served on `127.0.0.1` (pre-filled with what was found; add `--no-browser` to only print its address; `Save Layout` writes the same files).
 
-`setup` knows two HUD designs and records the one it found as `hud_design` in the Layout: the counters in an icon column at the top right (`icon_column`), or in a horizontal row of icons under the minimap (`counter_row`: players left, personal eliminations, team eliminations). Both are found without telling it which.
+`setup` knows three HUD designs and records the one it found as `hud_design` in the Layout: the counters in an icon column at the top right (`icon_column`), the same column with only two rows, personal eliminations and players left, as some game modes draw it (`icon_pair`: no team eliminations, so the Layout has no `team_eliminations` rectangle), or a horizontal row of icons under the minimap (`counter_row`: players left, personal eliminations, team eliminations). All are found without telling it which. Give `setup` seconds from the match itself: the countdown before the bus launches shows more rows than the match does.
 
 Keep the Layouts in one folder (for example `layouts/`): `analyse` picks the one that fits each Recording, which [many Recordings](#6-analyse-many-recordings) rely on. Set up again only for a new HUD design or aspect ratio.
 
@@ -438,7 +438,7 @@ It exits 1 with `victorious extract: <reason>` and writes nothing when the analy
 
 ```yaml
 aspect_ratio: "16:9"
-hud_design: icon_column  # or counter_row; optional, icon_column when left out
+hud_design: icon_column  # or icon_pair or counter_row; optional, icon_column when left out
 screens:
   hud:
     hud_anchor: {x: 0.852, y: 0.030, w: 0.014, h: 0.088}
@@ -451,7 +451,7 @@ screens:
     elimination_placement: {x: 0.504, y: 0.104, w: 0.125, h: 0.111}
 ```
 
-`hud_anchor` must cover the three icons (skull, squad, person) stacked in the HUD column, or in the `counter_row` design the three icons (crosshair, squad, person) of the row under the minimap, where each counter rect is the window right of its icon, as tall as the icon, and the icons are found again at every second because they move with the width of the numbers (see `acceptance/layouts/hud_counter_row_16x9.yaml`); `results_banner` and `placement` locate the Victory Royale banner (blue or orange) and the gold `#N` that goes with it. `elimination_placement`, which is optional, locates the white `YOU PLACED #N` shown when the player is eliminated; it is centred on the frame, so it spans the whole width the `#` can land in. Without it, a "YOU PLACED" screen is not recognised, so only Wins end a Match by a results screen. The three counters are optional and read by later tickets.
+`hud_anchor` must cover the three icons (skull, squad, person) stacked in the HUD column, or the two icons (skull, person) of the `icon_pair` design, which leaves out `team_eliminations` and puts `players_left` on the second row, or in the `counter_row` design the three icons (crosshair, squad, person) of the row under the minimap, where each counter rect is the window right of its icon, as tall as the icon, and the icons are found again at every second because they move with the width of the numbers (see `acceptance/layouts/hud_counter_row_16x9.yaml`); `results_banner` and `placement` locate the Victory Royale banner (blue or orange) and the gold `#N` that goes with it. `elimination_placement`, which is optional, locates the white `YOU PLACED #N` shown when the player is eliminated; it is centred on the frame, so it spans the whole width the `#` can land in. Without it, a "YOU PLACED" screen is not recognised, so only Wins end a Match by a results screen. The three counters are optional and read by later tickets.
 
 See [GLOSSARY.md](GLOSSARY.md) for the terms used above and [docs/adr](docs/adr) for design decisions.
 

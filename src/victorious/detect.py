@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 import numpy as np
 
 from victorious.counters import best_reading
-from victorious.layout import EPSILON, HudDesign, Rect
+from victorious.layout import COLUMN_DESIGNS, EPSILON, HudDesign, Rect
 from victorious.matcher import TemplateHit, locate_template_multiscale
 from victorious.ocr import glyph_boxes, read_digits
 from victorious.references import load_reference, reference_scale
@@ -29,6 +29,7 @@ from victorious.screens import (
 SCALE_FACTORS = (0.7, 0.8, 0.9, 1.0, 1.1, 1.25, 1.4)
 RESULTS_REGION = (0.15, 0.0, 0.85, 0.45)
 COLUMN_SLACK = 0.5
+PAIR_MAX_ROWS_APART = 2.0
 COUNTER_WINDOW_ICONS = 3
 COUNTER_ROW_MARGIN = 0.2
 COUNTER_WIDTH_PER_HEIGHT = 4
@@ -100,6 +101,13 @@ def _factor(hit: TemplateHit, name: str, frame_height: int) -> float:
     return hit.scale / reference_scale(name, frame_height)
 
 
+def _column_band(anchor: TemplateHit, width: int) -> tuple[int, int]:
+    """The pixel columns, left and right, that hold the icon column whose icon is `anchor`."""
+    left = max(0, int(anchor.x - COLUMN_SLACK * anchor.w))
+    right = min(width, int(anchor.x + (1 + COLUMN_SLACK) * anchor.w) + 1)
+    return left, right
+
+
 @dataclass(frozen=True)
 class _Icon:
     name: str
@@ -127,9 +135,8 @@ def _locate_icons(
     for name in names:
         hit, score = first[name]
         if name != anchor and anchor_hit is not None and first[anchor][1] >= HUD_THRESHOLD:
-            if design == "icon_column":
-                left = max(0, int(anchor_hit.x - COLUMN_SLACK * anchor_hit.w))
-                right = min(width, int(anchor_hit.x + (1 + COLUMN_SLACK) * anchor_hit.w) + 1)
+            if design in COLUMN_DESIGNS:
+                left, right = _column_band(anchor_hit, width)
                 hit, score = _locate(frame[:, left:right], name, True, height)
                 if hit is not None:
                     hit = TemplateHit(hit.x + left, hit.y, hit.w, hit.h, hit.score, hit.scale)
@@ -143,6 +150,12 @@ def _locate_icons(
             icons[name] = _Icon(name, hit, score)
         else:
             problems[name] = f"reference icon {name} not found (best match {score:.2f})"
+    if design == "icon_pair" and not problems:
+        # The full icon column shows these two icons as well, with a row between them: this is
+        # the pair only when the second icon sits right under the first.
+        skull, person = icons["icon_skull"].hit, icons["icon_person"].hit
+        if person.y - skull.y > PAIR_MAX_ROWS_APART * skull.h:
+            problems["hud_anchor"] = "a row sits between the two icons, as in the full icon column"
     if design == "counter_row" and not problems:
         ordered = [icons[name].hit for name in ROW_ICON_NAMES]
         if not in_row_order(ordered):
@@ -282,7 +295,7 @@ def _find_design(frame: np.ndarray, design: HudDesign) -> Detection:
         if icon is None:
             missing[element] = problems[name]
             continue
-        if design == "icon_column":
+        if design in COLUMN_DESIGNS:
             rect, detail = _counter(frame, icon)
         else:
             following = [other.hit.x for other in ordered if other.hit.x > icon.hit.x]
